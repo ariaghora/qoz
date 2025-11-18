@@ -2378,10 +2378,17 @@ check_node_with_context :: proc(ctx: ^Semantic_Context, node: ^Node, expected_ty
             expected_field_types[field.name] = field.type
         }
         
-        // Then check each field initialization with expected type
+        // Check each provided field initialization with expected type
         field_types := make(map[string]Type_Info, context.temp_allocator)
         for field_init in struct_lit.field_inits {
+            // Check if field name is valid
             expected_type, has_expected := expected_field_types[field_init.name]
+            if !has_expected {
+                add_error(ctx, node.span, "Unknown field '%s' in struct literal", field_init.name)
+                continue
+            }
+            
+            // Type-check the field value
             value_type: Type_Info
             if has_expected {
                 value_type = check_node(ctx, field_init.value, expected_type)
@@ -2389,42 +2396,27 @@ check_node_with_context :: proc(ctx: ^Semantic_Context, node: ^Node, expected_ty
                 value_type = check_node(ctx, field_init.value)
             }
             field_types[field_init.name] = value_type
-        }
-        
-        for field in struct_type.fields {
-            value_type, has_field := field_types[field.name]
-            if !has_field {
-                add_error(ctx, node.span, "Missing field '%s' in struct literal", field.name)
-                continue
-            }
             
             // Coerce untyped literals to field type
             coerced_type := value_type
-            if is_untyped_int(value_type) && is_typed_int(field.type) {
-                coerced_type = field.type
+            if is_untyped_int(value_type) && is_typed_int(expected_type) {
+                coerced_type = expected_type
                 // Update the field value's inferred type
-                for field_init in struct_lit.field_inits {
-                    if field_init.name == field.name {
-                        field_init.value.inferred_type = field.type
-                        break
-                    }
-                }
-            } else if is_untyped_float(value_type) && is_typed_float(field.type) {
-                coerced_type = field.type
+                field_init.value.inferred_type = expected_type
+            } else if is_untyped_float(value_type) && is_typed_float(expected_type) {
+                coerced_type = expected_type
                 // Update the field value's inferred type
-                for field_init in struct_lit.field_inits {
-                    if field_init.name == field.name {
-                        field_init.value.inferred_type = field.type
-                        break
-                    }
-                }
+                field_init.value.inferred_type = expected_type
             }
             
-            if !types_compatible(coerced_type, field.type, ctx) {
+            // Check type compatibility
+            if !types_compatible(coerced_type, expected_type, ctx) {
                 add_error(ctx, node.span, "Field '%s': expected %v, got %v", 
-                    field.name, field.type, coerced_type)
+                    field_init.name, expected_type, coerced_type)
             }
         }
+        
+        // Missing fields will be zero-initialized by C's designated initializer syntax
         
         // Normalize qualified names for codegen
         result_type_name := normalize_struct_literal_type_name(ctx, type_name, &struct_lit)
