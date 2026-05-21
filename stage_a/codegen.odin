@@ -1589,6 +1589,11 @@ infer_expr_c_type :: proc(cg: ^Codegen, e: Expr) -> string {
         }
         return "int64_t"
     }
+    if cg.tc != nil {
+        if t, ok := cg.tc.expr_types[e]; ok && !ty_is_error(t) {
+            return ty_to_c_type(cg, t)
+        }
+    }
     return "int64_t"
 }
 
@@ -1769,8 +1774,7 @@ cg_expr :: proc(cg: ^Codegen, e: Expr) {
     case ^Expr_If:
         cg_emit_if_expression(cg, v)
     case ^Expr_Match:
-        cg_error(cg, "match expressions outside of return position are not yet supported")
-        cg_emit(cg, "0")
+        cg_emit_match_as_expression(cg, v)
     case ^Expr_Defer:
         cg_error(cg, "`defer` is only allowed as a statement, not in expression position")
         cg_emit(cg, "/*defer*/0")
@@ -2692,6 +2696,85 @@ cg_match_arm_statement :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm
 
     cg.indent_lvl -= 1
     cg_emit_indent(cg); cg_emit(cg, "}\n")
+}
+
+cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
+    enum_name := enum_of_scrutinee(cg, m.scrutinee)
+    if enum_name == "" {
+        cg_error(cg, "match scrutinee must resolve to an ADT in Stage A")
+        cg_emit(cg, "0")
+        return
+    }
+    result_c := "int64_t"
+    if cg.tc != nil {
+        if t, has := cg.tc.expr_types[m]; has && !ty_is_error(t) {
+            result_c = ty_to_c_type(cg, t)
+        }
+    }
+    tmp_res := fmt.tprintf("_qoz_mv_%d", next_tmp_id(cg))
+    tmp_scrut := fmt.tprintf("_qoz_ms_%d", next_tmp_id(cg))
+    scrut_c := infer_expr_c_type(cg, m.scrutinee)
+
+    cg_emit(cg, "({ ")
+    cg_emitf(cg, "%s %s = ", scrut_c, tmp_scrut)
+    cg_expr(cg, m.scrutinee)
+    cg_emit(cg, "; ")
+    cg_emitf(cg, "%s %s; ", result_c, tmp_res)
+
+    synth := new(Expr_Ident, context.temp_allocator)
+    synth.name = tmp_scrut
+    synth.span = expr_span(m.scrutinee)
+    if cg.tc != nil {
+        if t, ok := cg.tc.expr_types[m.scrutinee]; ok {
+            cg.tc.expr_types[synth] = t
+        }
+    }
+    cg.locals[tmp_scrut] = scrut_c
+
+    cg_emit(cg, "switch (")
+    cg_match_scrutinee_tag(cg, synth)
+    cg_emit(cg, ") ")
+    cg_emit(cg, "{ ")
+    for arm in m.arms {
+        cg_match_arm_expression(cg, synth, enum_name, arm, tmp_res)
+    }
+    cg_emit(cg, "} ")
+    cg_emitf(cg, "%s; ", tmp_res)
+    cg_emit(cg, "})")
+}
+
+cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: Match_Arm, result_tmp: string) {
+    pat, ok := arm.pat.(^Pat_Variant)
+    if !ok {
+        cg_error(cg, "Stage A supports only variant patterns in match arms")
+        return
+    }
+    variant_name := pat.path.segs[len(pat.path.segs)-1]
+    prefix := fmt.tprintf("qoz_%s", enum_name)
+    if cg.tc != nil {
+        if t, has := cg.tc.expr_types[scrut]; has {
+            if p := adt_prefix_from_ty(cg, t); p != "" do prefix = p
+        }
+    }
+    cg_emitf(cg, "case %s_%s: ", prefix, variant_name)
+    cg_emit(cg, "{ ")
+
+    variant_decl: ^Variant_Decl
+    if enum_decl, ok2 := cg.enums[enum_name]; ok2 {
+        variant_decl = find_variant(enum_decl, variant_name)
+    }
+    saved_locals := make(map[string]string, context.temp_allocator)
+    for k, val in cg.locals do saved_locals[k] = val
+    if variant_decl != nil {
+        cg_emit_variant_bindings(cg, scrut, enum_name, variant_decl, pat)
+    }
+
+    cg_emitf(cg, "%s = ", result_tmp)
+    cg_expr(cg, arm.body)
+    cg_emit(cg, "; break; } ")
+
+    clear(&cg.locals)
+    for k, val in saved_locals do cg.locals[k] = val
 }
 
 cg_match_as_return :: proc(cg: ^Codegen, m: ^Expr_Match) {

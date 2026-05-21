@@ -1,0 +1,31 @@
+import std/fmt
+import std/vec
+
+type Shape =
+    | Circle(f64)
+    | Square(f64)
+    | Origin
+
+let area_of(s: Shape): f64 = {
+    let v = match s {
+    | Circle(r)  -> r * r * 3.14
+    | Square(s2) -> s2 * s2
+    | Origin     -> 0.0
+    }
+    v
+}
+
+let main() = {
+    fmt.println("circle 2:", area_of(Circle(2.0)))
+    fmt.println("square 3:", area_of(Square(3.0)))
+    fmt.println("origin :", area_of(Origin))
+
+    let labels: Vec<string> = ["a", "b", "c"]
+    var s: i64 = 0
+    let total = match Origin {
+    | Circle(_) -> 1
+    | Square(_) -> 2
+    | Origin    -> 3
+    }
+    fmt.println("total:", total)
+}
