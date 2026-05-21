@@ -31,6 +31,7 @@ type Emitter = {
     locals:            Map<string, TypeExpr>, // variable name -> TypeExpr for current fn body
     externs:           Map<string, string>,    // (possibly package-prefixed) name -> link symbol
     fn_returns:        Map<string, TypeExpr>,  // qualified fn/extern name -> return TypeExpr
+    match_counter:     i64,                    // monotonic counter for match temp variables
 }
 
 let make_emitter(): Emitter = Emitter {
@@ -51,6 +52,7 @@ let make_emitter(): Emitter = Emitter {
     locals:           map.make(),
     externs:          map.make(),
     fn_returns:       map.make(),
+    match_counter:    0,
 }
 
 let register_generics(e: *Emitter, file: File) = {
@@ -1302,18 +1304,56 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
 // the first arm's body. Falls back to int64_t when nothing more specific
 // can be derived.
 let match_result_ctype(e: *Emitter, enum_name: string, arms: Vec<MatchArm>): string = {
-    var fallback = "int64_t"
-    var saw_int = false
     var all_void = true
     for arm in arms {
         bind_arm_locals(e, enum_name, arm.pat)
-        let ct = infer_expr_ctype(e, arm.body)
+        let ct = arm_body_ctype(e, enum_name, arm.body)
         if !strings.eq_raw(ct, "void") { all_void = false }
         if !strings.eq_raw(ct, "int64_t") && !strings.eq_raw(ct, "void") { return ct }
-        if strings.eq_raw(ct, "int64_t") { saw_int = true }
     }
     if all_void { return "void" }
     "int64_t"
+}
+
+// Infer the arm body's C type with the surrounding match's enum_name in
+// scope. If the body is a variant constructor of that same enum, prefer
+// the mangled C type so the result variable matches the case-label type.
+let arm_body_ctype(e: *Emitter, enum_name: string, body: Expr): string = {
+    match body {
+    | EIdent(_, name) -> {
+        match map.get(&e.variant_of, name) {
+        | Some(en) -> {
+            if same_enum_base(e, en, enum_name) {
+                return strings.cat(strings.cat("qoz_", enum_name), "*")
+            }
+            strings.cat(strings.cat("qoz_", en), "*")
+        }
+        | None -> infer_expr_ctype(e, body)
+        }
+    }
+    | ECall(_, callee, _, _) -> {
+        match callee {
+        | EIdent(_, name) -> {
+            match map.get(&e.variant_of, name) {
+            | Some(en) -> {
+                if same_enum_base(e, en, enum_name) {
+                    return strings.cat(strings.cat("qoz_", enum_name), "*")
+                }
+                strings.cat(strings.cat("qoz_", en), "*")
+            }
+            | None -> infer_expr_ctype(e, body)
+            }
+        }
+        | _ -> infer_expr_ctype(e, body)
+        }
+    }
+    | _ -> infer_expr_ctype(e, body)
+    }
+}
+
+let same_enum_base(e: *Emitter, bare: string, maybe_mangled: string): bool = {
+    if strings.eq_raw(bare, maybe_mangled) { return true }
+    strings.eq_raw(strip_mangled(maybe_mangled), bare)
 }
 
 let bind_arm_locals(e: *Emitter, enum_name: string, pat: Pattern) = {
@@ -2728,8 +2768,9 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
         return
     }
     let enum_name: string = enum_lookup_name(e, scrut, bare_enum)
-    let scrut_tmp = fmt.format("_qoz_ms_{}", span.line)
-    let res_tmp   = fmt.format("_qoz_mv_{}", span.line)
+    e.match_counter = e.match_counter + 1
+    let scrut_tmp = fmt.format("_qoz_ms_{}", e.match_counter)
+    let res_tmp   = fmt.format("_qoz_mv_{}", e.match_counter)
     let res_ctype = match_result_ctype(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
     push(e, "({ qoz_")
@@ -2983,16 +3024,24 @@ let unmangle_primitive(s: string): string = {
 // result variable and emits the function's return directly so the
 // surrounding statement-expression can elide the assignment.
 let emit_arm_body(e: *Emitter, res_tmp: string, body: Expr) = {
+    emit_arm_body_with_hint(e, res_tmp, body, TEUnit(Span { file: "", line: 0, col: 0 }))
+}
+
+let emit_arm_body_with_hint(e: *Emitter, res_tmp: string, body: Expr, hint: TypeExpr) = {
     match body {
     | EReturn(_, v) -> {
-        push(e, "return ")
-        emit_expr(e, v)
-        push(e, "; ")
+        if is_nil_expr(v) {
+            push(e, "return; ")
+        } else {
+            push(e, "return ")
+            emit_expr(e, v)
+            push(e, "; ")
+        }
     }
     | _ -> {
         push(e, res_tmp)
         push(e, " = (")
-        emit_expr(e, body)
+        emit_value_with_hint(e, body, hint)
         push(e, "); ")
     }
     }
