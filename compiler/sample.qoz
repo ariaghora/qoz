@@ -1,15 +1,10 @@
-import std/fmt
-import std/vec
+type Vec<T> = { data: *T, len: i64, cap: i64 }
+type Pair<A, B> = { fst: A, snd: B }
+type Box<T> = { value: T }
 
-let main() = {
-    var nums: Vec<i64> = vec.make()
-    vec.push(&nums, 10)
-    vec.push(&nums, 20)
-    vec.push(&nums, 30)
-
-    var sum: i64 = 0
-    for n in nums {
-        sum = sum + n
-    }
-    fmt.println("sum:", sum)
+let main(): i64 = {
+    let v: Vec<i32> = Vec { data: nil, len: 0, cap: 0 }
+    let p: Pair<i64, string> = Pair { fst: 7, snd: "hi" }
+    let b: Box<Pair<i32, i32>> = Box { value: Pair { fst: 1, snd: 2 } }
+    v.len + p.fst + b.value.fst
 }

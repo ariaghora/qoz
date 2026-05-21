@@ -13,16 +13,313 @@ import std/vec
 import std/map
 import compiler/ast
 
+type Instantiation = {
+    name:    string,         // base type name, e.g. "Vec"
+    args:    Vec<TypeExpr>,  // concrete type arguments
+    mangled: string,         // generated C name, e.g. "Vec__int32_t"
+}
+
 type Emitter = {
-    out:        Vec<string>,
-    variant_of: Map<string, string>,  // bare variant name -> enum name (unique only)
-    is_enum:    Map<string, bool>,    // names that refer to declared ADTs
+    out:           Vec<string>,
+    variant_of:    Map<string, string>,  // bare variant name -> enum name (unique only)
+    is_enum:       Map<string, bool>,    // names that refer to declared ADTs
+    generic_decls: Map<string, Decl>,    // bare name -> declaration with type_params
+    record_insts:  Vec<Instantiation>,
+    record_seen:   Map<string, bool>,    // mangled -> seen
+    enum_insts:    Vec<Instantiation>,
+    enum_seen:     Map<string, bool>,
 }
 
 let make_emitter(): Emitter = Emitter {
-    out:        vec.make(),
-    variant_of: map.make(),
-    is_enum:    map.make(),
+    out:           vec.make(),
+    variant_of:    map.make(),
+    is_enum:       map.make(),
+    generic_decls: map.make(),
+    record_insts:  vec.make(),
+    record_seen:   map.make(),
+    enum_insts:    vec.make(),
+    enum_seen:     map.make(),
+}
+
+let register_generics(e: *Emitter, file: File) = {
+    for d in file.decls {
+        match d {
+        | DStruct(_, name, params, _) -> {
+            if len(params) > 0 {
+                e.generic_decls[name] = d
+            }
+        }
+        | DEnum(_, name, params, _) -> {
+            if len(params) > 0 {
+                e.generic_decls[name] = d
+            }
+        }
+        | _ -> { }
+        }
+    }
+}
+
+let collect_type_instantiations(e: *Emitter, file: File) = {
+    for d in file.decls {
+        walk_decl_for_types(e, d)
+    }
+    // Generic structs may have generic-typed fields; iterate until stable.
+    var stable = false
+    var iters: i64 = 0
+    while !stable {
+        if iters > 32 { stable = true }
+        iters = iters + 1
+        let before_r = len(e.record_insts)
+        let before_e = len(e.enum_insts)
+        // Walk every collected instantiation and discover deps.
+        var i: i64 = 0
+        while i < len(e.record_insts) {
+            let inst = e.record_insts[i]
+            match map.get(&e.generic_decls, inst.name) {
+            | Some(decl) -> walk_struct_fields_with_subst(e, decl, inst.args)
+            | None       -> { }
+            }
+            i = i + 1
+        }
+        var j: i64 = 0
+        while j < len(e.enum_insts) {
+            let inst = e.enum_insts[j]
+            match map.get(&e.generic_decls, inst.name) {
+            | Some(decl) -> walk_enum_variants_with_subst(e, decl, inst.args)
+            | None       -> { }
+            }
+            j = j + 1
+        }
+        if len(e.record_insts) == before_r && len(e.enum_insts) == before_e {
+            stable = true
+        }
+    }
+}
+
+let walk_struct_fields_with_subst(e: *Emitter, d: Decl, args: Vec<TypeExpr>) = {
+    match d {
+    | DStruct(_, _, params, fields) -> {
+        for f in fields {
+            let substituted = substitute_type(e, f.ty, params, args)
+            walk_typeexpr(e, substituted)
+        }
+    }
+    | _ -> { }
+    }
+}
+
+let walk_enum_variants_with_subst(e: *Emitter, d: Decl, args: Vec<TypeExpr>) = {
+    match d {
+    | DEnum(_, _, params, variants) -> {
+        for v in variants {
+            for pt in v.pos {
+                let substituted = substitute_type(e, pt, params, args)
+                walk_typeexpr(e, substituted)
+            }
+            for nf in v.named {
+                let substituted = substitute_type(e, nf.ty, params, args)
+                walk_typeexpr(e, substituted)
+            }
+        }
+    }
+    | _ -> { }
+    }
+}
+
+let walk_decl_for_types(e: *Emitter, d: Decl) = {
+    match d {
+    | DStruct(_, _, params, fields) -> {
+        if len(params) == 0 {
+            for f in fields {
+                walk_typeexpr(e, f.ty)
+            }
+        }
+    }
+    | DEnum(_, _, params, variants) -> {
+        if len(params) == 0 {
+            for v in variants {
+                for pt in v.pos {
+                    walk_typeexpr(e, pt)
+                }
+                for nf in v.named {
+                    walk_typeexpr(e, nf.ty)
+                }
+            }
+        }
+    }
+    | DFn(_, _, params, fn_params, ret, body, _) -> {
+        if len(params) == 0 {
+            for fp in fn_params {
+                walk_typeexpr(e, fp.ty)
+            }
+            walk_typeexpr(e, ret)
+            walk_expr_for_types(e, body)
+        }
+    }
+    | DExternal(_, _, _, fn_params, ret) -> {
+        for fp in fn_params {
+            walk_typeexpr(e, fp.ty)
+        }
+        walk_typeexpr(e, ret)
+    }
+    | DConst(_, _, ty, value) -> {
+        walk_typeexpr(e, ty)
+        walk_expr_for_types(e, value)
+    }
+    | _ -> { }
+    }
+}
+
+let walk_typeexpr(e: *Emitter, te: TypeExpr) = {
+    match te {
+    | TEUnit(_) -> { }
+    | TEPtr(_, inner) -> walk_typeexpr(e, inner)
+    | TETuple(_, elems) -> {
+        for el in elems { walk_typeexpr(e, el) }
+    }
+    | TENamed(_, path, args) -> {
+        if len(path) == 1 && len(args) > 0 {
+            let name = path[0]
+            if map.contains(&e.generic_decls, name) {
+                for a in args { walk_typeexpr(e, a) }
+                register_instance(e, name, args)
+            }
+        }
+        for a in args { walk_typeexpr(e, a) }
+    }
+    }
+}
+
+let walk_expr_for_types(e: *Emitter, ex: Expr) = {
+    match ex {
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts {
+            match s {
+            | SLet(_, _, ty, val) -> { walk_typeexpr(e, ty); walk_expr_for_types(e, val) }
+            | SVar(_, _, ty, val) -> { walk_typeexpr(e, ty); walk_expr_for_types(e, val) }
+            | SExpr(_, ex2) -> walk_expr_for_types(e, ex2)
+            }
+        }
+        walk_expr_for_types(e, tail)
+    }
+    | ERecord(_, te, fields) -> {
+        walk_typeexpr(e, te)
+        for f in fields { walk_expr_for_types(e, f.value) }
+    }
+    | ECast(_, val, te) -> { walk_typeexpr(e, te); walk_expr_for_types(e, val) }
+    | ESizeOf(_, te) -> walk_typeexpr(e, te)
+    | EBinary(_, _, l, r) -> { walk_expr_for_types(e, l); walk_expr_for_types(e, r) }
+    | EUnary(_, _, rhs) -> walk_expr_for_types(e, rhs)
+    | EAssign(_, _, l, r) -> { walk_expr_for_types(e, l); walk_expr_for_types(e, r) }
+    | ECall(_, callee, args) -> { walk_expr_for_types(e, callee); for a in args { walk_expr_for_types(e, a) } }
+    | EField(_, base, _) -> walk_expr_for_types(e, base)
+    | EIndex(_, base, idx) -> { walk_expr_for_types(e, base); walk_expr_for_types(e, idx) }
+    | ETry(_, val) -> walk_expr_for_types(e, val)
+    | EIf(_, c, t, f) -> { walk_expr_for_types(e, c); walk_expr_for_types(e, t); walk_expr_for_types(e, f) }
+    | EMatch(_, scrut, arms) -> {
+        walk_expr_for_types(e, scrut)
+        for arm in arms { walk_expr_for_types(e, arm.body) }
+    }
+    | EWhile(_, c, b) -> { walk_expr_for_types(e, c); walk_expr_for_types(e, b) }
+    | EFor(_, _, _, it, b) -> { walk_expr_for_types(e, it); walk_expr_for_types(e, b) }
+    | EReturn(_, v) -> walk_expr_for_types(e, v)
+    | EDefer(_, b) -> walk_expr_for_types(e, b)
+    | ETuple(_, elems) -> { for el in elems { walk_expr_for_types(e, el) } }
+    | EArrayLit(_, elems) -> { for el in elems { walk_expr_for_types(e, el) } }
+    | EClosure(_, _, _, body) -> walk_expr_for_types(e, body)
+    | _ -> { }
+    }
+}
+
+let register_instance(e: *Emitter, name: string, args: Vec<TypeExpr>) = {
+    let mangled = mangle_inst(e, name, args)
+    if map.contains(&e.is_enum, name) {
+        if map.contains(&e.enum_seen, mangled) { return }
+        e.enum_seen[mangled] = true
+        vec.push(&e.enum_insts, Instantiation { name: name, args: args, mangled: mangled })
+    } else {
+        if map.contains(&e.record_seen, mangled) { return }
+        e.record_seen[mangled] = true
+        vec.push(&e.record_insts, Instantiation { name: name, args: args, mangled: mangled })
+    }
+}
+
+let mangle_inst(e: *Emitter, name: string, args: Vec<TypeExpr>): string = {
+    var acc = name
+    for a in args {
+        acc = strings.cat(acc, "__")
+        acc = strings.cat(acc, mangle_type(e, a))
+    }
+    acc
+}
+
+let mangle_type(e: *Emitter, t: TypeExpr): string = {
+    match t {
+    | TEUnit(_)                  -> "void"
+    | TEPtr(_, inner)            -> strings.cat(mangle_type(e, inner), "_ptr")
+    | TETuple(_, _)              -> "tuple"
+    | TENamed(_, path, args)     -> mangle_named(e, path, args)
+    }
+}
+
+let mangle_named(e: *Emitter, path: Vec<string>, args: Vec<TypeExpr>): string = {
+    if len(path) != 1 {
+        return "unknown"
+    }
+    let n = path[0]
+    let prim = primitive_c_name(n)
+    if !strings.eq_raw(prim, "") {
+        return prim
+    }
+    if len(args) > 0 {
+        return strings.cat("qoz_", mangle_inst(e, n, args))
+    }
+    strings.cat("qoz_", n)
+}
+
+let primitive_c_name(n: string): string = {
+    if strings.eq_raw(n, "i8")     { return "int8_t" }
+    if strings.eq_raw(n, "i16")    { return "int16_t" }
+    if strings.eq_raw(n, "i32")    { return "int32_t" }
+    if strings.eq_raw(n, "i64")    { return "int64_t" }
+    if strings.eq_raw(n, "u8")     { return "uint8_t" }
+    if strings.eq_raw(n, "u16")    { return "uint16_t" }
+    if strings.eq_raw(n, "u32")    { return "uint32_t" }
+    if strings.eq_raw(n, "u64")    { return "uint64_t" }
+    if strings.eq_raw(n, "f32")    { return "float" }
+    if strings.eq_raw(n, "f64")    { return "double" }
+    if strings.eq_raw(n, "bool")   { return "bool" }
+    if strings.eq_raw(n, "char")   { return "char" }
+    if strings.eq_raw(n, "string") { return "qoz_string" }
+    ""
+}
+
+let substitute_type(e: *Emitter, t: TypeExpr, params: Vec<string>, args: Vec<TypeExpr>): TypeExpr = {
+    match t {
+    | TEUnit(_) -> t
+    | TEPtr(span, inner) -> TEPtr(span, substitute_type(e, inner, params, args))
+    | TETuple(span, elems) -> {
+        var new_elems: Vec<TypeExpr> = vec.make()
+        for el in elems { vec.push(&new_elems, substitute_type(e, el, params, args)) }
+        TETuple(span, new_elems)
+    }
+    | TENamed(span, path, t_args) -> {
+        if len(path) == 1 && len(t_args) == 0 {
+            // Bare type parameter? Look it up.
+            let n = path[0]
+            var i: i64 = 0
+            for p in params {
+                if strings.eq_raw(p, n) {
+                    return args[i]
+                }
+                i = i + 1
+            }
+        }
+        var new_args: Vec<TypeExpr> = vec.make()
+        for a in t_args { vec.push(&new_args, substitute_type(e, a, params, args)) }
+        TENamed(span, path, new_args)
+    }
+    }
 }
 
 let register_variants(e: *Emitter, file: File) = {
@@ -76,36 +373,32 @@ let c_type_for(e: *Emitter, t: TypeExpr): string = {
     | TEUnit(_)                  -> "void"
     | TEPtr(_, inner)            -> strings.cat(c_type_for(e, inner), "*")
     | TETuple(_, _)              -> "void"
-    | TENamed(_, path, _)        -> c_type_for_named(e, path)
+    | TENamed(_, path, args)     -> c_type_for_named_with_args(e, path, args)
     }
 }
 
-let c_type_for_named(e: *Emitter, path: Vec<string>): string = {
+let c_type_for_named(e: *Emitter, path: Vec<string>): string = c_type_for_named_with_args(e, path, vec.make())
+
+let c_type_for_named_with_args(e: *Emitter, path: Vec<string>, args: Vec<TypeExpr>): string = {
     if len(path) != 1 {
         return "int64_t"
     }
     let n = path[0]
-    if strings.eq_raw(n, "i8")     { return "int8_t" }
-    if strings.eq_raw(n, "i16")    { return "int16_t" }
-    if strings.eq_raw(n, "i32")    { return "int32_t" }
-    if strings.eq_raw(n, "i64")    { return "int64_t" }
-    if strings.eq_raw(n, "u8")     { return "uint8_t" }
-    if strings.eq_raw(n, "u16")    { return "uint16_t" }
-    if strings.eq_raw(n, "u32")    { return "uint32_t" }
-    if strings.eq_raw(n, "u64")    { return "uint64_t" }
-    if strings.eq_raw(n, "f32")    { return "float" }
-    if strings.eq_raw(n, "f64")    { return "double" }
-    if strings.eq_raw(n, "bool")   { return "bool" }
-    if strings.eq_raw(n, "char")   { return "char" }
-    if strings.eq_raw(n, "string") { return "qoz_string" }
+    let prim = primitive_c_name(n)
+    if !strings.eq_raw(prim, "") { return prim }
     if strings.eq_raw(n, "cstring"){ return "const char *" }
     if strings.eq_raw(n, "void")   { return "void" }
     if strings.eq_raw(n, "unit")   { return "void" }
+    let base = if len(args) > 0 {
+        strings.cat("qoz_", mangle_inst(e, n, args))
+    } else {
+        strings.cat("qoz_", n)
+    }
     // ADTs are heap-allocated; their C representation is a pointer.
     if map.contains(&e.is_enum, n) {
-        return strings.cat(strings.cat("qoz_", n), "*")
+        return strings.cat(base, "*")
     }
-    strings.cat("qoz_", n)
+    base
 }
 
 let emit_expr(e: *Emitter, ex: Expr) = {
@@ -220,7 +513,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, " ")
         push(e, name)
         push(e, " = ")
-        emit_expr(e, value)
+        emit_value_with_hint(e, value, ty)
         push(e, "; ")
     }
     | SVar(_, name, ty, value) -> {
@@ -228,7 +521,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, " ")
         push(e, name)
         push(e, " = ")
-        emit_expr(e, value)
+        emit_value_with_hint(e, value, ty)
         push(e, "; ")
     }
     | SExpr(_, expr) -> {
@@ -471,7 +764,26 @@ let is_main(name: string): bool = strings.eq_raw(name, "main")
 let emit_program(f: File): string = {
     var e = make_emitter()
     register_variants(&e, f)
+    register_generics(&e, f)
+    collect_type_instantiations(&e, f)
     push(&e, "#include \"qoz_runtime.h\"\n\n")
+    // Forward declare monomorphized records and enums.
+    for inst in e.record_insts {
+        push(&e, "typedef struct qoz_")
+        push(&e, inst.mangled)
+        push(&e, " qoz_")
+        push(&e, inst.mangled)
+        push(&e, ";\n")
+    }
+    for inst in e.enum_insts {
+        push(&e, "typedef struct qoz_")
+        push(&e, inst.mangled)
+        push(&e, " qoz_")
+        push(&e, inst.mangled)
+        push(&e, ";\n")
+        e.is_enum[inst.mangled] = true
+    }
+    push(&e, "\n")
     // Forward declarations: records and enums.
     for d in f.decls {
         match d {
@@ -497,7 +809,7 @@ let emit_program(f: File): string = {
         }
     }
     push(&e, "\n")
-    // Record definitions.
+    // Record definitions (non-generic).
     for d in f.decls {
         match d {
         | DStruct(_, name, params, fields) -> {
@@ -508,7 +820,28 @@ let emit_program(f: File): string = {
         | _ -> { }
         }
     }
-    // Enum definitions.
+    // Generic record instantiations.
+    for inst in e.record_insts {
+        match map.get(&e.generic_decls, inst.name) {
+        | Some(decl) -> {
+            match decl {
+            | DStruct(_, _, params, fields) -> {
+                var subst_fields: Vec<StructField> = vec.make()
+                for f in fields {
+                    vec.push(&subst_fields, StructField {
+                        name: f.name,
+                        ty:   substitute_type(&e, f.ty, params, inst.args),
+                    })
+                }
+                emit_struct(&e, inst.mangled, subst_fields)
+            }
+            | _ -> { }
+            }
+        }
+        | None -> { }
+        }
+    }
+    // Enum definitions (non-generic).
     for d in f.decls {
         match d {
         | DEnum(_, name, params, variants) -> {
@@ -519,7 +852,35 @@ let emit_program(f: File): string = {
         | _ -> { }
         }
     }
-    // Variant constructors.
+    // Generic enum instantiations.
+    for inst in e.enum_insts {
+        match map.get(&e.generic_decls, inst.name) {
+        | Some(decl) -> {
+            match decl {
+            | DEnum(_, _, params, variants) -> {
+                var subst_variants: Vec<VariantDecl> = vec.make()
+                for v in variants {
+                    var new_pos: Vec<TypeExpr> = vec.make()
+                    for pt in v.pos { vec.push(&new_pos, substitute_type(&e, pt, params, inst.args)) }
+                    var new_named: Vec<StructField> = vec.make()
+                    for nf in v.named { vec.push(&new_named, StructField { name: nf.name, ty: substitute_type(&e, nf.ty, params, inst.args) }) }
+                    vec.push(&subst_variants, VariantDecl {
+                        span:  v.span,
+                        name:  v.name,
+                        kind:  v.kind,
+                        pos:   new_pos,
+                        named: new_named,
+                    })
+                }
+                emit_enum(&e, inst.mangled, subst_variants)
+            }
+            | _ -> { }
+            }
+        }
+        | None -> { }
+        }
+    }
+    // Variant constructors (non-generic).
     for d in f.decls {
         match d {
         | DEnum(_, name, params, variants) -> {
@@ -725,8 +1086,22 @@ let range_cmp_op(op: BinaryOp): string =
     }
 
 let emit_record_lit(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>) = {
+    emit_record_lit_with_hint(e, te, fields, te)
+}
+
+let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
+    match value {
+    | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
+    | _                      -> emit_expr(e, value)
+    }
+}
+
+let emit_record_lit_with_hint(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>, hint: TypeExpr) = {
+    // If `te` lacks generic args but the surrounding hint provides them
+    // (typical `let v: Vec<i32> = Vec { ... }`), use the hint's args.
+    let effective = pick_type_with_args(te, hint)
     push(e, "((")
-    push(e, c_type_for(e, te))
+    push(e, c_type_for(e, effective))
     push(e, "){ ")
     var i: i64 = 0
     for f in fields {
@@ -734,10 +1109,60 @@ let emit_record_lit(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>) = {
         push(e, ".")
         push(e, f.name)
         push(e, " = ")
-        emit_expr(e, f.value)
+        let field_hint = field_type_hint(e, effective, f.name)
+        emit_value_with_hint(e, f.value, field_hint)
         i = i + 1
     }
     push(e, " })")
+}
+
+let field_type_hint(e: *Emitter, te: TypeExpr, field_name: string): TypeExpr = {
+    match te {
+    | TENamed(sp, path, args) -> {
+        if len(path) != 1 { return te }
+        let name = path[0]
+        if !map.contains(&e.generic_decls, name) { return te }
+        match map.get(&e.generic_decls, name) {
+        | Some(decl) -> {
+            match decl {
+            | DStruct(_, _, params, fields) -> {
+                for sf in fields {
+                    if strings.eq_raw(sf.name, field_name) {
+                        if len(args) == len(params) {
+                            return substitute_type(e, sf.ty, params, args)
+                        }
+                        return sf.ty
+                    }
+                }
+                te
+            }
+            | _ -> te
+            }
+        }
+        | None -> te
+        }
+    }
+    | _ -> te
+    }
+}
+
+let pick_type_with_args(te: TypeExpr, hint: TypeExpr): TypeExpr = {
+    match te {
+    | TENamed(_, te_path, te_args) -> {
+        if len(te_args) > 0 { return te }
+        match hint {
+        | TENamed(_, h_path, h_args) -> {
+            if len(h_args) == 0 { return te }
+            if len(h_path) == 1 && len(te_path) == 1 && strings.eq_raw(h_path[0], te_path[0]) {
+                return hint
+            }
+            te
+        }
+        | _ -> te
+        }
+    }
+    | _ -> te
+    }
 }
 
 let emit_for_loop_one(e: *Emitter, binding: string, binding2: string, iter: Expr, body: Expr) = {
