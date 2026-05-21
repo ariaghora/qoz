@@ -2162,8 +2162,8 @@ let emit_fn_body_block(e: *Emitter, body: Expr, ret_hint: TypeExpr) = {
             return
         }
         if is_unit_typeexpr(ret_hint) {
-            emit_expr(e, tail)
-            push(e, ";\n    return;\n")
+            emit_stmt_expr(e, tail)
+            push(e, "\n    return;\n")
             return
         }
         // The tail itself may already be a return expression (common when
