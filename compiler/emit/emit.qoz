@@ -191,9 +191,58 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, "; ")
     }
     | SExpr(_, expr) -> {
+        emit_stmt_expr(e, expr)
+    }
+    }
+}
+
+let emit_stmt_expr(e: *Emitter, expr: Expr) = {
+    match expr {
+    | EIf(_, cond, then_b, else_b) -> {
+        push(e, "if (")
+        emit_expr(e, cond)
+        push(e, ") ")
+        emit_branch_as_statement(e, then_b)
+        if !is_nil_expr(else_b) {
+            push(e, " else ")
+            emit_branch_as_statement(e, else_b)
+        }
+    }
+    | EWhile(_, cond, body) -> {
+        push(e, "while (")
+        emit_expr(e, cond)
+        push(e, ") ")
+        emit_branch_as_statement(e, body)
+    }
+    | EReturn(_, value) -> {
+        if is_nil_expr(value) {
+            push(e, "return;")
+        } else {
+            push(e, "return ")
+            emit_expr(e, value)
+            push(e, ";")
+        }
+    }
+    | _ -> {
         emit_expr(e, expr)
         push(e, "; ")
     }
+    }
+}
+
+let emit_branch_as_statement(e: *Emitter, br: Expr) = {
+    match br {
+    | EBlock(_, stmts, tail) -> {
+        push(e, "{ ")
+        for s in stmts {
+            emit_stmt(e, s)
+        }
+        if !is_nil_expr(tail) {
+            emit_stmt_expr(e, tail)
+        }
+        push(e, "} ")
+    }
+    | _ -> emit_stmt_expr(e, br)
     }
 }
 

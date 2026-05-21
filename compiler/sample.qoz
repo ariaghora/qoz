@@ -1,12 +1,15 @@
 import std/fmt
 
-type Shape =
-    | Circle(i64)
-    | Square(i64)
-    | Origin
-
 let main() = {
-    let c = Circle(5)
-    let o = Origin
-    fmt.println("made", 1)
+    var i: i64 = 0
+    var total: i64 = 0
+    while i < 5 {
+        total = total + i
+        i = i + 1
+    }
+    if total > 10 {
+        fmt.println("big", total)
+    } else {
+        fmt.println("small", total)
+    }
 }
