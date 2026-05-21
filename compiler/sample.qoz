@@ -1,3 +1,5 @@
-let add(x: i64, y: i64): i64 = x + y
+import std/fmt
 
-let square(n: i64): i64 = n * n
+let main() = {
+    fmt.println("hello from stage B", 42, true)
+}

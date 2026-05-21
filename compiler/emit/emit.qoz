@@ -157,7 +157,24 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
     }
 }
 
+let path_is(callee: Expr, a: string, b: string): bool =
+    match callee {
+    | EPath(_, segs)        -> len(segs) == 2 && strings.eq_raw(segs[0], a) && strings.eq_raw(segs[1], b)
+    | EField(_, base, name) -> strings.eq_raw(name, b) && ident_is(base, a)
+    | _                     -> false
+    }
+
+let ident_is(ex: Expr, name: string): bool =
+    match ex {
+    | EIdent(_, n) -> strings.eq_raw(n, name)
+    | _            -> false
+    }
+
 let emit_call(e: *Emitter, callee: Expr, args: Vec<Expr>) = {
+    if path_is(callee, "fmt", "println") {
+        emit_println(e, args)
+        return
+    }
     emit_expr(e, callee)
     push(e, "(")
     var i: i64 = 0
@@ -169,6 +186,33 @@ let emit_call(e: *Emitter, callee: Expr, args: Vec<Expr>) = {
         i = i + 1
     }
     push(e, ")")
+}
+
+let emit_println(e: *Emitter, args: Vec<Expr>) = {
+    if len(args) == 0 {
+        push(e, "qoz_print_nl()")
+        return
+    }
+    push(e, "(")
+    var i: i64 = 0
+    for a in args {
+        if i > 0 {
+            push(e, ", qoz_print_sep(), ")
+        }
+        emit_print_one(e, a)
+        i = i + 1
+    }
+    push(e, ", qoz_print_nl())")
+}
+
+let emit_print_one(e: *Emitter, a: Expr) = {
+    match a {
+    | EString(_, _) -> { push(e, "qoz_print_str("); emit_expr(e, a); push(e, ")") }
+    | EInt(_, _)    -> { push(e, "qoz_print_i64("); emit_expr(e, a); push(e, ")") }
+    | EFloat(_, _)  -> { push(e, "qoz_print_f64("); emit_expr(e, a); push(e, ")") }
+    | EBool(_, _)   -> { push(e, "qoz_print_bool("); emit_expr(e, a); push(e, ")") }
+    | _             -> { push(e, "qoz_print_i64("); emit_expr(e, a); push(e, ")") }
+    }
 }
 
 let binary_c_op(op: BinaryOp): string = {
@@ -256,20 +300,48 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
     push(e, "}\n\n")
 }
 
+let is_main(name: string): bool = strings.eq_raw(name, "main")
+
 let emit_program(f: File): string = {
     var e = make_emitter()
     push(&e, "#include \"qoz_runtime.h\"\n\n")
     for d in f.decls {
         match d {
-        | DFn(_, name, _, params, ret, body, _) -> emit_fn(&e, name, params, ret, body)
-        | DImport(_, _, _)                      -> { }
-        | DStruct(_, _, _, _)                   -> { }
-        | DEnum(_, _, _, _)                     -> { }
-        | DTypeAlias(_, _, _, _)                -> { }
-        | DConst(_, _, _, _)                    -> { }
-        | DExternal(_, _, _, _, _)              -> { }
-        | DLink(_, _, _)                        -> { }
+        | DFn(_, name, _, params, ret, body, _) -> {
+            if is_main(name) {
+                emit_main(&e, body)
+            } else {
+                emit_fn(&e, name, params, ret, body)
+            }
+        }
+        | _ -> { }
         }
     }
     render(&e)
+}
+
+let emit_main(e: *Emitter, body: Expr) = {
+    push(e, "int main(int argc, char **argv) {\n")
+    push(e, "    qoz_set_argv(argc, argv);\n")
+    push(e, "    int qoz_stack_anchor;\n")
+    push(e, "    qoz_init(&qoz_stack_anchor);\n    ")
+    match body {
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts {
+            emit_stmt(e, s)
+        }
+        if !is_nil_expr(tail) {
+            emit_expr(e, tail)
+            push(e, ";")
+        }
+        push(e, "\n")
+    }
+    | _ -> {
+        emit_expr(e, body)
+        push(e, ";\n")
+    }
+    }
+    push(e, "    qoz_shutdown();\n")
+    push(e, "    return 0;\n")
+    push(e, "}\n")
 }
