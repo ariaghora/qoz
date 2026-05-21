@@ -1,0 +1,52 @@
+// compiler/ty: Stage B type representation.
+
+import std/vec
+
+type IntInfo = {
+    width:   i64,
+    signed:  bool,
+    untyped: bool,
+}
+
+type FloatInfo = {
+    width:   i64,
+    untyped: bool,
+}
+
+type Ty =
+    | TyInt(IntInfo)
+    | TyFloat(FloatInfo)
+    | TyBool
+    | TyChar
+    | TyString
+    | TyCstring
+    | TyUnit
+    | TyNil
+    | TyError
+    | TyPtr(Ty)
+    | TyAdt(string, Vec<Ty>)
+    | TyRecord(string, Vec<Ty>)
+    | TyFn(Vec<Ty>, Ty)
+    | TyVar(i64, string)
+
+let ty_int_(width: i64, signed: bool): Ty = TyInt(IntInfo { width: width, signed: signed, untyped: false })
+
+let ty_int_untyped(): Ty = TyInt(IntInfo { width: 0, signed: true, untyped: true })
+
+let ty_float_(width: i64): Ty = TyFloat(FloatInfo { width: width, untyped: false })
+
+let ty_float_untyped(): Ty = TyFloat(FloatInfo { width: 0, untyped: true })
+
+let ty_bool_(): Ty   = TyBool
+let ty_char_(): Ty   = TyChar
+let ty_string_(): Ty = TyString
+let ty_cstring_(): Ty = TyCstring
+let ty_unit_(): Ty   = TyUnit
+let ty_nil_(): Ty    = TyNil
+let ty_error_(): Ty  = TyError
+
+let ty_ptr_(inner: Ty): Ty = TyPtr(inner)
+
+let ty_adt_(name: string, args: Vec<Ty>): Ty = TyAdt(name, args)
+let ty_record_(name: string, args: Vec<Ty>): Ty = TyRecord(name, args)
+let ty_fn_(params: Vec<Ty>, ret: Ty): Ty = TyFn(params, ret)
