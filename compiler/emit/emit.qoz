@@ -41,6 +41,17 @@ let render(e: *Emitter): string = {
     acc
 }
 
+let c_type_for_local(t: TypeExpr): string = {
+    // Locals declared without an annotation arrive here as TEUnit. Default
+    // to int64_t for now until Stage B has real type inference. This is
+    // accurate for the common integer case and harmless for the rest as
+    // long as the value initialiser matches.
+    match t {
+    | TEUnit(_) -> "int64_t"
+    | _         -> c_type_for(t)
+    }
+}
+
 let c_type_for(t: TypeExpr): string = {
     match t {
     | TEUnit(_)                  -> "void"
@@ -135,7 +146,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
 let emit_stmt(e: *Emitter, s: Stmt) = {
     match s {
     | SLet(_, name, ty, value) -> {
-        push(e, c_type_for(ty))
+        push(e, c_type_for_local(ty))
         push(e, " ")
         push(e, name)
         push(e, " = ")
@@ -143,7 +154,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, "; ")
     }
     | SVar(_, name, ty, value) -> {
-        push(e, c_type_for(ty))
+        push(e, c_type_for_local(ty))
         push(e, " ")
         push(e, name)
         push(e, " = ")
@@ -305,6 +316,49 @@ let is_main(name: string): bool = strings.eq_raw(name, "main")
 let emit_program(f: File): string = {
     var e = make_emitter()
     push(&e, "#include \"qoz_runtime.h\"\n\n")
+    // Record forward declarations.
+    for d in f.decls {
+        match d {
+        | DStruct(_, name, params, _) -> {
+            if len(params) == 0 {
+                push(&e, "typedef struct qoz_")
+                push(&e, name)
+                push(&e, " qoz_")
+                push(&e, name)
+                push(&e, ";\n")
+            }
+        }
+        | _ -> { }
+        }
+    }
+    push(&e, "\n")
+    // Record definitions.
+    for d in f.decls {
+        match d {
+        | DStruct(_, name, params, fields) -> {
+            if len(params) == 0 {
+                emit_struct(&e, name, fields)
+            }
+        }
+        | _ -> { }
+        }
+    }
+    // Function prototypes.
+    for d in f.decls {
+        match d {
+        | DFn(_, name, _, params, ret, _, _) -> {
+            if !is_main(name) {
+                emit_fn_proto(&e, name, params, ret)
+            }
+        }
+        | DExternal(_, _, symbol, params, ret) -> {
+            emit_extern_proto(&e, symbol, params, ret)
+        }
+        | _ -> { }
+        }
+    }
+    push(&e, "\n")
+    // Function bodies.
     for d in f.decls {
         match d {
         | DFn(_, name, _, params, ret, body, _) -> {
@@ -318,6 +372,51 @@ let emit_program(f: File): string = {
         }
     }
     render(&e)
+}
+
+let emit_struct(e: *Emitter, name: string, fields: Vec<StructField>) = {
+    push(e, "struct qoz_")
+    push(e, name)
+    push(e, " {\n")
+    for f in fields {
+        push(e, "    ")
+        push(e, c_type_for(f.ty))
+        push(e, " ")
+        push(e, f.name)
+        push(e, ";\n")
+    }
+    push(e, "};\n\n")
+}
+
+let emit_fn_proto(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr) = {
+    push(e, c_type_for(ret))
+    push(e, " ")
+    push(e, name)
+    push(e, "(")
+    var i: i64 = 0
+    for p in params {
+        if i > 0 { push(e, ", ") }
+        push(e, c_type_for(p.ty))
+        push(e, " ")
+        push(e, p.name)
+        i = i + 1
+    }
+    push(e, ");\n")
+}
+
+let emit_extern_proto(e: *Emitter, symbol: string, params: Vec<FnParam>, ret: TypeExpr) = {
+    push(e, "extern ")
+    push(e, c_type_for(ret))
+    push(e, " ")
+    push(e, symbol)
+    push(e, "(")
+    var i: i64 = 0
+    for p in params {
+        if i > 0 { push(e, ", ") }
+        push(e, c_type_for(p.ty))
+        i = i + 1
+    }
+    push(e, ");\n")
 }
 
 let emit_main(e: *Emitter, body: Expr) = {

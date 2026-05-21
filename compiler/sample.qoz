@@ -1,5 +1,10 @@
 import std/fmt
 
+type Point = { x: i64, y: i64 }
+
+let add_x(a: i64, b: i64): i64 = a + b
+
 let main() = {
-    fmt.println("hello from stage B", 42, true)
+    let total = add_x(3, 4)
+    fmt.println("total", total)
 }
