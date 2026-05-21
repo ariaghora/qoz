@@ -1,9 +1,16 @@
-// compiler/parse: minimal Stage B parser.
+// compiler/parse: Stage B parser.
 //
-// This first cut handles a tight subset of Qoz: `import a/b/c` and
-// `let name = <integer-or-ident>` at the top level. Enough to prove the
-// tokenize -> parse -> print pipeline end-to-end. Future commits extend
-// the expression grammar, type declarations, and function definitions.
+// Recursive descent. Consumes a Vec<Token> from compiler/tokenize and
+// produces an ast.File. The parser collects errors in a side-channel and
+// always returns SOME AST so downstream passes can still see structure.
+//
+// Coverage so far:
+//   - import a/b/c [as alias]
+//   - type Name = { f: T, g: T }
+//   - let name = expr
+//   - let name(p: T, ...) [: R] = expr
+//   - expressions: literals (int, string, bool, nil, ident, path), parens,
+//     function calls, indexing, binary ops with precedence, unary `-` and `!`.
 
 import std/strings
 import std/vec
@@ -23,184 +30,530 @@ let make_parser(tokens: Vec<Token>, file: string): Parser =
 
 let at_eof(p: *Parser): bool = p.pos >= len(p.tokens)
 
-let peek(p: *Parser): Token = p.tokens[p.pos]
+let peek(p: *Parser): Token = {
+    if p.pos >= len(p.tokens) {
+        return Token { kind: TokEOF, text: "", line: 0, col: 0 }
+    }
+    p.tokens[p.pos]
+}
 
 let advance(p: *Parser) = {
     p.pos = p.pos + 1
 }
 
-let is_kw(t: *Token, kw: string): bool = {
-    var r = false
-    match t.kind {
-    | TokKeyword -> r = strings.eq_raw(t.text, kw)
-    | TokIdent   -> r = false
-    | TokInt     -> r = false
-    | TokString  -> r = false
-    | TokPunct   -> r = false
-    | TokEOF     -> r = false
-    }
-    r
-}
+// --- Token predicates ---
 
-let is_punct(t: *Token, sym: string): bool = {
-    var r = false
+let is_kw(t: Token, kw: string): bool =
     match t.kind {
-    | TokPunct   -> r = strings.eq_raw(t.text, sym)
-    | TokIdent   -> r = false
-    | TokInt     -> r = false
-    | TokString  -> r = false
-    | TokKeyword -> r = false
-    | TokEOF     -> r = false
+    | TokKeyword -> strings.eq_raw(t.text, kw)
+    | TokIdent   -> false
+    | TokInt     -> false
+    | TokString  -> false
+    | TokPunct   -> false
+    | TokEOF     -> false
     }
-    r
-}
 
-let is_ident(t: *Token): bool = {
-    var r = false
+let is_punct(t: Token, sym: string): bool =
     match t.kind {
-    | TokIdent   -> r = true
-    | TokInt     -> r = false
-    | TokString  -> r = false
-    | TokPunct   -> r = false
-    | TokKeyword -> r = false
-    | TokEOF     -> r = false
+    | TokPunct   -> strings.eq_raw(t.text, sym)
+    | TokIdent   -> false
+    | TokInt     -> false
+    | TokString  -> false
+    | TokKeyword -> false
+    | TokEOF     -> false
     }
-    r
-}
 
-let is_int(t: *Token): bool = {
-    var r = false
+let is_ident(t: Token): bool =
     match t.kind {
-    | TokInt     -> r = true
-    | TokIdent   -> r = false
-    | TokString  -> r = false
-    | TokPunct   -> r = false
-    | TokKeyword -> r = false
-    | TokEOF     -> r = false
+    | TokIdent   -> true
+    | TokInt     -> false
+    | TokString  -> false
+    | TokPunct   -> false
+    | TokKeyword -> false
+    | TokEOF     -> false
     }
-    r
-}
 
-let span_of(p: *Parser, t: *Token): Span = ast.make_span(p.file, t.line, t.col)
+let is_int_lit(t: Token): bool =
+    match t.kind {
+    | TokInt     -> true
+    | TokIdent   -> false
+    | TokString  -> false
+    | TokPunct   -> false
+    | TokKeyword -> false
+    | TokEOF     -> false
+    }
+
+let is_str_lit(t: Token): bool =
+    match t.kind {
+    | TokString  -> true
+    | TokIdent   -> false
+    | TokInt     -> false
+    | TokPunct   -> false
+    | TokKeyword -> false
+    | TokEOF     -> false
+    }
+
+let span_of(p: *Parser, t: Token): Span = ast.make_span(p.file, t.line, t.col)
+
+// --- Error recording ---
 
 let record_error(p: *Parser, msg: string) = {
     vec.push(&p.errors, msg)
 }
 
+let err_unexpected(p: *Parser, want: string, t: Token) = {
+    record_error(p, fmt.format("expected {} at line {} (got `{}`)", want, t.line, t.text))
+}
+
 let expect_punct(p: *Parser, sym: string) = {
     let t = peek(p)
-    if is_punct(&t, sym) {
+    if is_punct(t, sym) {
         advance(p)
     } else {
-        record_error(p, fmt.format("expected `{}` at line {}", sym, t.line))
+        err_unexpected(p, fmt.format("`{}`", sym), t)
     }
 }
+
+let expect_ident(p: *Parser): string = {
+    let t = peek(p)
+    if is_ident(t) {
+        advance(p)
+        return t.text
+    }
+    err_unexpected(p, "identifier", t)
+    "<err>"
+}
+
+// --- Type expressions ---
+
+let parse_type(p: *Parser): TypeExpr = {
+    let t = peek(p)
+    let span = span_of(p, t)
+    if is_punct(t, "*") {
+        advance(p)
+        let inner = parse_type(p)
+        return TEPtr(span, inner)
+    }
+    if is_punct(t, "(") {
+        advance(p)
+        if is_punct(peek(p), ")") {
+            advance(p)
+            return TEUnit(span)
+        }
+        var elems: Vec<TypeExpr> = vec.make()
+        vec.push(&elems, parse_type(p))
+        while is_punct(peek(p), ",") {
+            advance(p)
+            vec.push(&elems, parse_type(p))
+        }
+        expect_punct(p, ")")
+        if len(elems) == 1 {
+            return elems[0]
+        }
+        return TETuple(span, elems)
+    }
+    if is_ident(t) {
+        var path: Vec<string> = vec.make()
+        vec.push(&path, t.text)
+        advance(p)
+        while is_punct(peek(p), ".") {
+            advance(p)
+            let next_tok = peek(p)
+            if is_ident(next_tok) {
+                vec.push(&path, next_tok.text)
+                advance(p)
+            }
+        }
+        var args: Vec<TypeExpr> = vec.make()
+        if is_punct(peek(p), "<") {
+            advance(p)
+            vec.push(&args, parse_type(p))
+            while is_punct(peek(p), ",") {
+                advance(p)
+                vec.push(&args, parse_type(p))
+            }
+            expect_punct(p, ">")
+        }
+        return TENamed(span, path, args)
+    }
+    err_unexpected(p, "type expression", t)
+    TEUnit(span)
+}
+
+// --- Expressions ---
+
+let parse_expr(p: *Parser): Expr = parse_logical_or(p)
+
+let parse_logical_or(p: *Parser): Expr = {
+    var lhs = parse_logical_and(p)
+    while is_punct(peek(p), "||") {
+        let span = span_of(p, peek(p))
+        advance(p)
+        let rhs = parse_logical_and(p)
+        lhs = EBinary(span, BOpOr, lhs, rhs)
+    }
+    lhs
+}
+
+let parse_logical_and(p: *Parser): Expr = {
+    var lhs = parse_compare(p)
+    while is_punct(peek(p), "&&") {
+        let span = span_of(p, peek(p))
+        advance(p)
+        let rhs = parse_compare(p)
+        lhs = EBinary(span, BOpAnd, lhs, rhs)
+    }
+    lhs
+}
+
+let bin_op_for(sym: string): BinaryOp = {
+    if strings.eq_raw(sym, "==") { return BOpEq }
+    if strings.eq_raw(sym, "!=") { return BOpNe }
+    if strings.eq_raw(sym, "<=") { return BOpLe }
+    if strings.eq_raw(sym, ">=") { return BOpGe }
+    if strings.eq_raw(sym, "<")  { return BOpLt }
+    if strings.eq_raw(sym, ">")  { return BOpGt }
+    if strings.eq_raw(sym, "+")  { return BOpAdd }
+    if strings.eq_raw(sym, "-")  { return BOpSub }
+    if strings.eq_raw(sym, "*")  { return BOpMul }
+    if strings.eq_raw(sym, "/")  { return BOpDiv }
+    BOpMod
+}
+
+let is_cmp_punct(t: Token): bool =
+    is_punct(t, "==") || is_punct(t, "!=") || is_punct(t, "<") ||
+    is_punct(t, ">") || is_punct(t, "<=") || is_punct(t, ">=")
+
+let parse_compare(p: *Parser): Expr = {
+    var lhs = parse_addsub(p)
+    while is_cmp_punct(peek(p)) {
+        let tok = peek(p)
+        let op = bin_op_for(tok.text)
+        let span = span_of(p, tok)
+        advance(p)
+        let rhs = parse_addsub(p)
+        lhs = EBinary(span, op, lhs, rhs)
+    }
+    lhs
+}
+
+let parse_addsub(p: *Parser): Expr = {
+    var lhs = parse_muldiv(p)
+    while is_punct(peek(p), "+") || is_punct(peek(p), "-") {
+        let tok = peek(p)
+        let op = bin_op_for(tok.text)
+        let span = span_of(p, tok)
+        advance(p)
+        let rhs = parse_muldiv(p)
+        lhs = EBinary(span, op, lhs, rhs)
+    }
+    lhs
+}
+
+let parse_muldiv(p: *Parser): Expr = {
+    var lhs = parse_unary(p)
+    while is_punct(peek(p), "*") || is_punct(peek(p), "/") || is_punct(peek(p), "%") {
+        let tok = peek(p)
+        let op = bin_op_for(tok.text)
+        let span = span_of(p, tok)
+        advance(p)
+        let rhs = parse_unary(p)
+        lhs = EBinary(span, op, lhs, rhs)
+    }
+    lhs
+}
+
+let parse_unary(p: *Parser): Expr = {
+    let tok = peek(p)
+    let span = span_of(p, tok)
+    if is_punct(tok, "-") {
+        advance(p)
+        let rhs = parse_unary(p)
+        return EUnary(span, UOpNeg, rhs)
+    }
+    if is_punct(tok, "!") {
+        advance(p)
+        let rhs = parse_unary(p)
+        return EUnary(span, UOpNot, rhs)
+    }
+    parse_postfix(p)
+}
+
+let parse_postfix(p: *Parser): Expr = {
+    var e = parse_atom(p)
+    var more = true
+    while more {
+        let tok = peek(p)
+        let span = span_of(p, tok)
+        if is_punct(tok, "(") {
+            advance(p)
+            var args: Vec<Expr> = vec.make()
+            if !is_punct(peek(p), ")") {
+                vec.push(&args, parse_expr(p))
+                while is_punct(peek(p), ",") {
+                    advance(p)
+                    vec.push(&args, parse_expr(p))
+                }
+            }
+            expect_punct(p, ")")
+            e = ECall(span, e, args)
+        } else if is_punct(tok, "[") {
+            advance(p)
+            let idx = parse_expr(p)
+            expect_punct(p, "]")
+            e = EIndex(span, e, idx)
+        } else if is_punct(tok, ".") {
+            advance(p)
+            let name_tok = peek(p)
+            if is_ident(name_tok) {
+                advance(p)
+                e = EField(span, e, name_tok.text)
+            } else {
+                err_unexpected(p, "field name after `.`", name_tok)
+                more = false
+            }
+        } else {
+            more = false
+        }
+    }
+    e
+}
+
+let parse_atom(p: *Parser): Expr = {
+    let t = peek(p)
+    let span = span_of(p, t)
+    if is_int_lit(t) {
+        advance(p)
+        return EInt(span, t.text)
+    }
+    if is_str_lit(t) {
+        advance(p)
+        return EString(span, t.text)
+    }
+    if is_kw(t, "true") {
+        advance(p)
+        return EBool(span, true)
+    }
+    if is_kw(t, "false") {
+        advance(p)
+        return EBool(span, false)
+    }
+    if is_kw(t, "nil") {
+        advance(p)
+        return ENil(span)
+    }
+    if is_ident(t) {
+        advance(p)
+        return EIdent(span, t.text)
+    }
+    if is_punct(t, "(") {
+        advance(p)
+        let inner = parse_expr(p)
+        expect_punct(p, ")")
+        return inner
+    }
+    if is_punct(t, "{") {
+        return parse_block(p)
+    }
+    err_unexpected(p, "expression", t)
+    advance(p)
+    return ENil(span)
+}
+
+let parse_block(p: *Parser): Expr = {
+    let open = peek(p)
+    let span = span_of(p, open)
+    expect_punct(p, "{")
+    var stmts: Vec<Stmt> = vec.make()
+    var tail: Expr = ENil(span)
+    var have_tail = false
+    while !is_punct(peek(p), "}") && !at_eof(p) {
+        let t = peek(p)
+        let stmt_span = span_of(p, t)
+        if is_kw(t, "let") {
+            advance(p)
+            let name = expect_ident(p)
+            var ann: TypeExpr = TEUnit(stmt_span)
+            if is_punct(peek(p), ":") {
+                advance(p)
+                ann = parse_type(p)
+            }
+            expect_punct(p, "=")
+            let value = parse_expr(p)
+            vec.push(&stmts, SLet(stmt_span, name, ann, value))
+        } else if is_kw(t, "var") {
+            advance(p)
+            let name = expect_ident(p)
+            var ann: TypeExpr = TEUnit(stmt_span)
+            if is_punct(peek(p), ":") {
+                advance(p)
+                ann = parse_type(p)
+            }
+            expect_punct(p, "=")
+            let value = parse_expr(p)
+            vec.push(&stmts, SVar(stmt_span, name, ann, value))
+        } else {
+            let e = parse_expr(p)
+            if is_punct(peek(p), "}") {
+                tail = e
+                have_tail = true
+            } else {
+                vec.push(&stmts, SExpr(stmt_span, e))
+            }
+        }
+    }
+    expect_punct(p, "}")
+    var final_tail: Expr = ENil(span)
+    if have_tail {
+        final_tail = tail
+    }
+    EBlock(span, stmts, final_tail)
+}
+
+// --- Declarations ---
 
 let parse_path_segs(p: *Parser): Vec<string> = {
     var segs: Vec<string> = vec.make()
     let first = peek(p)
-    if is_ident(&first) {
+    if is_ident(first) {
         vec.push(&segs, first.text)
         advance(p)
-        var more = true
-        while more {
-            let nxt = peek(p)
-            if is_punct(&nxt, "/") {
+        while is_punct(peek(p), "/") {
+            advance(p)
+            let part = peek(p)
+            if is_ident(part) {
+                vec.push(&segs, part.text)
                 advance(p)
-                let part = peek(p)
-                if is_ident(&part) {
-                    vec.push(&segs, part.text)
-                    advance(p)
-                } else {
-                    record_error(p, fmt.format("expected path segment at line {}", part.line))
-                    more = false
-                }
             } else {
-                more = false
+                err_unexpected(p, "path segment", part)
             }
         }
     } else {
-        record_error(p, fmt.format("expected path segment, got `{}` at line {}", first.text, first.line))
+        err_unexpected(p, "path segment", first)
     }
     segs
 }
 
 let parse_import(p: *Parser): Decl = {
     let kw_tok = peek(p)
-    let span = span_of(p, &kw_tok)
+    let span = span_of(p, kw_tok)
     advance(p)
     let path = parse_path_segs(p)
     var alias = ""
-    let nxt = peek(p)
-    if is_kw(&nxt, "as") {
+    if is_kw(peek(p), "as") {
         advance(p)
-        let a = peek(p)
-        if is_ident(&a) {
-            alias = a.text
-            advance(p)
-        } else {
-            record_error(p, fmt.format("expected alias name at line {}", a.line))
-        }
+        alias = expect_ident(p)
     }
     DImport(span, path, alias)
 }
 
-let parse_atom(p: *Parser): Expr = {
-    let t = peek(p)
-    let span = span_of(p, &t)
-    if is_int(&t) {
+let parse_type_params(p: *Parser): Vec<string> = {
+    var params: Vec<string> = vec.make()
+    if is_punct(peek(p), "<") {
         advance(p)
-        return EInt(span, t.text)
+        vec.push(&params, expect_ident(p))
+        while is_punct(peek(p), ",") {
+            advance(p)
+            vec.push(&params, expect_ident(p))
+        }
+        expect_punct(p, ">")
     }
-    if is_ident(&t) {
-        advance(p)
-        return EIdent(span, t.text)
+    params
+}
+
+let parse_struct_fields(p: *Parser): Vec<StructField> = {
+    var fields: Vec<StructField> = vec.make()
+    expect_punct(p, "{")
+    while !is_punct(peek(p), "}") && !at_eof(p) {
+        let name = expect_ident(p)
+        expect_punct(p, ":")
+        let ty = parse_type(p)
+        vec.push(&fields, StructField { name: name, ty: ty })
+        if is_punct(peek(p), ",") {
+            advance(p)
+        }
     }
-    if is_punct(&t, "(") {
-        advance(p)
-        let inner = parse_atom(p)
-        expect_punct(p, ")")
-        return inner
-    }
-    record_error(p, fmt.format("expected expression at line {}", t.line))
+    expect_punct(p, "}")
+    fields
+}
+
+let parse_top_type(p: *Parser): Decl = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
     advance(p)
-    return ENil(span)
+    let name = expect_ident(p)
+    let type_params = parse_type_params(p)
+    expect_punct(p, "=")
+    if is_punct(peek(p), "{") {
+        let fields = parse_struct_fields(p)
+        return DStruct(span, name, type_params, fields)
+    }
+    let target = parse_type(p)
+    DTypeAlias(span, name, type_params, target)
+}
+
+let parse_fn_params(p: *Parser): Vec<FnParam> = {
+    var params: Vec<FnParam> = vec.make()
+    expect_punct(p, "(")
+    while !is_punct(peek(p), ")") && !at_eof(p) {
+        let name = expect_ident(p)
+        expect_punct(p, ":")
+        let ty = parse_type(p)
+        vec.push(&params, FnParam { name: name, ty: ty })
+        if is_punct(peek(p), ",") {
+            advance(p)
+        }
+    }
+    expect_punct(p, ")")
+    params
 }
 
 let parse_top_let(p: *Parser): Decl = {
     let kw_tok = peek(p)
-    let span = span_of(p, &kw_tok)
+    let span = span_of(p, kw_tok)
     advance(p)
-    let name_tok = peek(p)
-    var name = ""
-    if is_ident(&name_tok) {
-        name = name_tok.text
+    let name = expect_ident(p)
+    let type_params = parse_type_params(p)
+
+    // Function declaration: name(...) [: T] = body
+    if is_punct(peek(p), "(") {
+        let params = parse_fn_params(p)
+        var ret_ty: TypeExpr = TEUnit(span)
+        if is_punct(peek(p), ":") {
+            advance(p)
+            ret_ty = parse_type(p)
+        }
+        expect_punct(p, "=")
+        let body = parse_expr(p)
+        return DFn(span, name, type_params, params, ret_ty, body, "")
+    }
+
+    // Const declaration: name [: T] = expr
+    var ann_ty: TypeExpr = TEUnit(span)
+    if is_punct(peek(p), ":") {
         advance(p)
-    } else {
-        record_error(p, fmt.format("expected identifier after `let` at line {}", name_tok.line))
+        ann_ty = parse_type(p)
     }
     expect_punct(p, "=")
-    let value = parse_atom(p)
-    let unit_ty: TypeExpr = TEUnit(span)
-    let empty_params: Vec<string> = vec.make()
-    let empty_fields: Vec<FnParam> = vec.make()
-    DConst(span, name, unit_ty, value)
+    let value = parse_expr(p)
+    DConst(span, name, ann_ty, value)
 }
 
 let parse_decl(p: *Parser): Decl = {
     let t = peek(p)
-    if is_kw(&t, "import") {
+    if is_kw(t, "import") {
         return parse_import(p)
     }
-    if is_kw(&t, "let") {
+    if is_kw(t, "type") {
+        return parse_top_type(p)
+    }
+    if is_kw(t, "let") {
         return parse_top_let(p)
     }
-    record_error(p, fmt.format("expected top-level declaration at line {}", t.line))
+    err_unexpected(p, "top-level declaration", t)
     advance(p)
-    let span = span_of(p, &t)
-    let unit_ty: TypeExpr = TEUnit(span)
-    let no_params: Vec<string> = vec.make()
-    DConst(span, "<error>", unit_ty, ENil(span))
+    let span = span_of(p, t)
+    DConst(span, "<error>", TEUnit(span), ENil(span))
 }
 
 let run(tokens: Vec<Token>, file: string): File = {
