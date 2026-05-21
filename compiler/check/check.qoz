@@ -188,7 +188,7 @@ let synth(tc: *TyContext, env: *Env, e: Expr): Ty = {
     | EUnary(_, _, rhs)      -> synth(tc, env, rhs)
     | EBinary(_, op, l, r)   -> synth_binary(tc, env, op, l, r)
     | EAssign(_, _, _, v)    -> { let _ = synth(tc, env, v); ty.ty_unit_() }
-    | ECall(_, _, args)      -> synth_call(tc, env, args)
+    | ECall(_, _, _, args)   -> synth_call(tc, env, args)
     | EField(_, base, _)     -> { let _ = synth(tc, env, base); ty.ty_error_() }
     | EIndex(_, base, idx)   -> { let _ = synth(tc, env, base); let _ = synth(tc, env, idx); ty.ty_error_() }
     | ECast(_, _, te)        -> resolve_type(tc, te)
@@ -299,12 +299,14 @@ let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty
 let check_fn_bodies(tc: *TyContext, f: File) = {
     for d in f.decls {
         match d {
-        | DFn(_, _, _, params, _, body, _) -> {
+        | DFn(_, _, tparams, params, _, body, _) -> {
+            set_type_params(tc, tparams)
             var env = env_make()
             for pp in params {
                 env_define(&env, pp.name, resolve_type(tc, pp.ty))
             }
             let _ = synth(tc, &env, body)
+            clear_type_params(tc)
         }
         | DImport(_, _, _) -> { }
         | DStruct(_, _, _, _) -> { }

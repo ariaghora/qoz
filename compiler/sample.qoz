@@ -1,10 +1,12 @@
 type Vec<T> = { data: *T, len: i64, cap: i64 }
 type Pair<A, B> = { fst: A, snd: B }
-type Box<T> = { value: T }
+
+let pair_fst<A, B>(p: Pair<A, B>): A = p.fst
+let pair_snd<A, B>(p: Pair<A, B>): B = p.snd
+let identity<T>(x: T): T = x
 
 let main(): i64 = {
-    let v: Vec<i32> = Vec { data: nil, len: 0, cap: 0 }
-    let p: Pair<i64, string> = Pair { fst: 7, snd: "hi" }
-    let b: Box<Pair<i32, i32>> = Box { value: Pair { fst: 1, snd: 2 } }
-    v.len + p.fst + b.value.fst
+    let p: Pair<i64, i32> = Pair { fst: 7, snd: 3 }
+    let q: Pair<i32, i64> = Pair { fst: 1, snd: 9 }
+    pair_fst<i64, i32>(p) + pair_snd<i32, i64>(q) + identity<i64>(2)
 }

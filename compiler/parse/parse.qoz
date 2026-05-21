@@ -306,6 +306,41 @@ let peek_at(p: *Parser, offset: i64): Token = {
     p.tokens[p.pos + offset]
 }
 
+// Decide whether `<` at this position begins a generic call's type-args
+// list (as in `name<i32, i64>(a, b)`) or a less-than operator. The rule:
+// scan forward from `<` tracking nested `<>`, allow only identifiers,
+// commas, dots, `*`, `&`, `<`, `>`, then require the closing `>` to be
+// immediately followed by `(`. Anything else means this is comparison.
+let looks_like_call_type_args(p: *Parser): bool = {
+    if !is_punct(peek_at(p, 0), "<") { return false }
+    var depth: i64 = 1
+    var off: i64 = 1
+    while depth > 0 {
+        let t = peek_at(p, off)
+        if is_token_eof(t) { return false }
+        if is_punct(t, "<") {
+            depth = depth + 1
+            off = off + 1
+        } else if is_punct(t, ">") {
+            depth = depth - 1
+            off = off + 1
+        } else if is_punct(t, ",") || is_punct(t, ".") || is_punct(t, "*") || is_punct(t, "&") || is_punct(t, "::") {
+            off = off + 1
+        } else if is_ident(t) {
+            off = off + 1
+        } else {
+            return false
+        }
+    }
+    is_punct(peek_at(p, off), "(")
+}
+
+let is_token_eof(t: Token): bool =
+    match t.kind {
+    | TokEOF -> true
+    | _      -> false
+    }
+
 let looks_like_record_literal(p: *Parser): bool = {
     if !is_punct(peek_at(p, 0), "{") { return false }
     let a = peek_at(p, 1)
@@ -354,6 +389,26 @@ let parse_postfix(p: *Parser): Expr = {
             | _ -> { }
             }
             if !handled { more = false }
+        } else if is_punct(tok, "<") && looks_like_call_type_args(p) {
+            advance(p)
+            var type_args: Vec<TypeExpr> = vec.make()
+            vec.push(&type_args, parse_type(p))
+            while is_punct(peek(p), ",") {
+                advance(p)
+                vec.push(&type_args, parse_type(p))
+            }
+            expect_punct(p, ">")
+            expect_punct(p, "(")
+            var args: Vec<Expr> = vec.make()
+            if !is_punct(peek(p), ")") {
+                vec.push(&args, parse_expr(p))
+                while is_punct(peek(p), ",") {
+                    advance(p)
+                    vec.push(&args, parse_expr(p))
+                }
+            }
+            expect_punct(p, ")")
+            e = ECall(span, e, type_args, args)
         } else if is_punct(tok, "(") {
             advance(p)
             var args: Vec<Expr> = vec.make()
@@ -365,7 +420,7 @@ let parse_postfix(p: *Parser): Expr = {
                 }
             }
             expect_punct(p, ")")
-            e = ECall(span, e, args)
+            e = ECall(span, e, vec.make(), args)
         } else if is_punct(tok, "[") {
             advance(p)
             let idx = parse_expr(p)
