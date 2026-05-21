@@ -1,0 +1,5 @@
+import std/fmt
+import std/strings as s
+
+let answer = 42
+let name = hello

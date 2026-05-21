@@ -1,0 +1,161 @@
+// compiler/ast: Stage B AST.
+//
+// In Stage A, the AST was a struct-per-node-kind with a top-level union of
+// pointer types. In Stage B every AST category is a single algebraic data
+// type. Each variant carries the source span as its first positional field
+// so error reporting always has location information.
+
+import std/vec
+
+type Span = {
+    file: string,
+    line: i64,
+    col:  i64,
+}
+
+let make_span(file: string, line: i64, col: i64): Span = Span { file: file, line: line, col: col }
+
+type UnaryOp =
+    | UOpNeg
+    | UOpNot
+    | UOpDeref
+    | UOpAddr
+
+type BinaryOp =
+    | BOpAdd
+    | BOpSub
+    | BOpMul
+    | BOpDiv
+    | BOpMod
+    | BOpEq
+    | BOpNe
+    | BOpLt
+    | BOpGt
+    | BOpLe
+    | BOpGe
+    | BOpAnd
+    | BOpOr
+    | BOpRange
+    | BOpRangeInclusive
+
+type AssignOp =
+    | AOpSet
+    | AOpAddSet
+    | AOpSubSet
+    | AOpMulSet
+    | AOpDivSet
+    | AOpModSet
+
+type TypeExpr =
+    | TENamed(Span, Vec<string>, Vec<TypeExpr>)
+    | TEPtr(Span, TypeExpr)
+    | TETuple(Span, Vec<TypeExpr>)
+    | TEUnit(Span)
+
+type Pattern =
+    | PatWild(Span)
+    | PatBind(Span, string)
+    | PatLitInt(Span, string)
+    | PatLitString(Span, string)
+    | PatLitBool(Span, bool)
+    | PatVariant(Span, Vec<string>, Vec<Pattern>)
+    | PatTuple(Span, Vec<Pattern>)
+
+type ClosureParam = {
+    name: string,
+    ty:   TypeExpr,
+}
+
+type RecordFieldLit = {
+    name:  string,
+    value: Expr,
+}
+
+type MatchArm = {
+    pat:  Pattern,
+    body: Expr,
+}
+
+type Expr =
+    | EInt(Span, string)
+    | EFloat(Span, string)
+    | EString(Span, string)
+    | EChar(Span, string)
+    | EBool(Span, bool)
+    | ENil(Span)
+    | EIdent(Span, string)
+    | EPath(Span, Vec<string>)
+    | EUnary(Span, UnaryOp, Expr)
+    | EBinary(Span, BinaryOp, Expr, Expr)
+    | EAssign(Span, AssignOp, Expr, Expr)
+    | ECall(Span, Expr, Vec<Expr>)
+    | EField(Span, Expr, string)
+    | EIndex(Span, Expr, Expr)
+    | ECast(Span, Expr, TypeExpr)
+    | ETry(Span, Expr)
+    | ETuple(Span, Vec<Expr>)
+    | ERecord(Span, TypeExpr, Vec<RecordFieldLit>)
+    | EClosure(Span, Vec<ClosureParam>, TypeExpr, Expr)
+    | EBlock(Span, Vec<Stmt>, Expr)
+    | EIf(Span, Expr, Expr, Expr)
+    | EMatch(Span, Expr, Vec<MatchArm>)
+    | EWhile(Span, Expr, Expr)
+    | EFor(Span, string, Expr, Expr)
+    | EReturn(Span, Expr)
+    | EDefer(Span, Expr)
+    | ESizeOf(Span, TypeExpr)
+    | EArrayLit(Span, Vec<Expr>)
+
+type Stmt =
+    | SLet(Span, string, TypeExpr, Expr)
+    | SVar(Span, string, TypeExpr, Expr)
+    | SExpr(Span, Expr)
+
+type FnParam = {
+    name: string,
+    ty:   TypeExpr,
+}
+
+type StructField = {
+    name: string,
+    ty:   TypeExpr,
+}
+
+type VariantPayloadKind =
+    | VPKNone
+    | VPKPositional
+    | VPKNamed
+
+type VariantDecl = {
+    span:  Span,
+    name:  string,
+    kind:  VariantPayloadKind,
+    pos:   Vec<TypeExpr>,
+    named: Vec<StructField>,
+}
+
+type LinkKind =
+    | LinkLibrary
+    | LinkFramework
+
+type Attribute = {
+    span:       Span,
+    name:       string,
+    string_arg: string,
+    has_arg:    bool,
+}
+
+type Decl =
+    | DImport(Span, Vec<string>, string)
+    | DFn(Span, string, Vec<string>, Vec<FnParam>, TypeExpr, Expr, string)
+    | DStruct(Span, string, Vec<string>, Vec<StructField>)
+    | DEnum(Span, string, Vec<string>, Vec<VariantDecl>)
+    | DTypeAlias(Span, string, Vec<string>, TypeExpr)
+    | DConst(Span, string, TypeExpr, Expr)
+    | DExternal(Span, string, string, Vec<FnParam>, TypeExpr)
+    | DLink(Span, LinkKind, string)
+
+type File = {
+    path:  string,
+    decls: Vec<Decl>,
+}

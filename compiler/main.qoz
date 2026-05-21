@@ -1,0 +1,60 @@
+// compiler/main: Stage B driver.
+//
+// Reads a Qoz source file, tokenizes via compiler/tokenize, parses via
+// compiler/parse, and prints a summary of the resulting AST. As Stage B
+// grows, this driver will gain type checking, lowering, and codegen.
+
+import std/fmt
+import std/fs
+import std/os
+import std/vec
+import compiler/tokenize
+import compiler/ast
+import compiler/parse
+
+let decl_kind_name(d: Decl): string = {
+    match d {
+    | DImport(_, _, _)                 -> "import"
+    | DFn(_, _, _, _, _, _, _)         -> "fn"
+    | DStruct(_, _, _, _)              -> "struct"
+    | DEnum(_, _, _, _)                -> "enum"
+    | DTypeAlias(_, _, _, _)          -> "type_alias"
+    | DConst(_, _, _, _)               -> "const"
+    | DExternal(_, _, _, _, _)         -> "external"
+    | DLink(_, _, _)                   -> "link"
+    }
+}
+
+let decl_name(d: Decl): string = {
+    match d {
+    | DImport(_, _, _)                  -> "<import>"
+    | DFn(_, n, _, _, _, _, _)          -> n
+    | DStruct(_, n, _, _)               -> n
+    | DEnum(_, n, _, _)                 -> n
+    | DTypeAlias(_, n, _, _)           -> n
+    | DConst(_, n, _, _)                -> n
+    | DExternal(_, n, _, _, _)          -> n
+    | DLink(_, _, n)                    -> n
+    }
+}
+
+let main() = {
+    let args = os.args()
+    if len(args) < 2 {
+        fmt.println("usage: compiler <path>")
+        os.exit(1)
+    }
+    let path = args[1]
+    let src = fs.read_file(path)
+    if len(src) < 0 {
+        fmt.println(fmt.format("could not read {}", path))
+        os.exit(1)
+    }
+    let tokens = tokenize.run(src)
+    fmt.println(fmt.format("{} tokens", len(tokens)))
+    let file = parse.run(tokens, path)
+    fmt.println(fmt.format("{} decls", len(file.decls)))
+    for d in file.decls {
+        fmt.println(fmt.format("  {}  {}", decl_kind_name(d), decl_name(d)))
+    }
+}

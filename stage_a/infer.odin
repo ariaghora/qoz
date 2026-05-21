@@ -37,6 +37,7 @@ type_check_file :: proc(f: File, allocator := context.allocator) -> ^Ty_Context 
     register_builtin_decls(tc)
     register_decls(tc, f)
     build_variant_index(tc)
+    resolve_type_decl_payloads(tc)
     register_operator_decls(tc)
     check_decls(tc, f)
     return tc
@@ -174,6 +175,25 @@ resolve_pkg_short :: proc(tc: ^Ty_Context, name: string) -> (string, bool) {
     if _, ok := tc.fns[qualified]; ok do return qualified, true
     if _, ok := tc.externs[qualified]; ok do return qualified, true
     return "", false
+}
+
+resolve_type_decl_payloads :: proc(tc: ^Ty_Context) {
+    for _, enum_decl in tc.enums {
+        params_env := make(map[string]Ty, context.temp_allocator)
+        for tp in enum_decl.type_params do params_env[tp] = fresh_ty_var(tc, tp)
+        for variant in enum_decl.variants {
+            if variant.kind == .Positional {
+                for pt in variant.pos do resolve_type(tc, pt, &params_env)
+            } else if variant.kind == .Named {
+                for fld in variant.named do resolve_type(tc, fld.type, &params_env)
+            }
+        }
+    }
+    for _, struct_decl in tc.structs {
+        params_env := make(map[string]Ty, context.temp_allocator)
+        for tp in struct_decl.type_params do params_env[tp] = fresh_ty_var(tc, tp)
+        for fld in struct_decl.fields do resolve_type(tc, fld.type, &params_env)
+    }
 }
 
 is_reserved_builtin_name :: proc(name: string) -> bool {

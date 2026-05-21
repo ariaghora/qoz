@@ -1,0 +1,217 @@
+// compiler/parse: minimal Stage B parser.
+//
+// This first cut handles a tight subset of Qoz: `import a/b/c` and
+// `let name = <integer-or-ident>` at the top level. Enough to prove the
+// tokenize -> parse -> print pipeline end-to-end. Future commits extend
+// the expression grammar, type declarations, and function definitions.
+
+import std/strings
+import std/vec
+import std/fmt
+import compiler/tokenize
+import compiler/ast
+
+type Parser = {
+    tokens: Vec<Token>,
+    pos:    i64,
+    file:   string,
+    errors: Vec<string>,
+}
+
+let make_parser(tokens: Vec<Token>, file: string): Parser =
+    Parser { tokens: tokens, pos: 0, file: file, errors: vec.make() }
+
+let at_eof(p: *Parser): bool = p.pos >= len(p.tokens)
+
+let peek(p: *Parser): Token = p.tokens[p.pos]
+
+let advance(p: *Parser) = {
+    p.pos = p.pos + 1
+}
+
+let is_kw(t: *Token, kw: string): bool = {
+    var r = false
+    match t.kind {
+    | TokKeyword -> r = strings.eq_raw(t.text, kw)
+    | TokIdent   -> r = false
+    | TokInt     -> r = false
+    | TokString  -> r = false
+    | TokPunct   -> r = false
+    | TokEOF     -> r = false
+    }
+    r
+}
+
+let is_punct(t: *Token, sym: string): bool = {
+    var r = false
+    match t.kind {
+    | TokPunct   -> r = strings.eq_raw(t.text, sym)
+    | TokIdent   -> r = false
+    | TokInt     -> r = false
+    | TokString  -> r = false
+    | TokKeyword -> r = false
+    | TokEOF     -> r = false
+    }
+    r
+}
+
+let is_ident(t: *Token): bool = {
+    var r = false
+    match t.kind {
+    | TokIdent   -> r = true
+    | TokInt     -> r = false
+    | TokString  -> r = false
+    | TokPunct   -> r = false
+    | TokKeyword -> r = false
+    | TokEOF     -> r = false
+    }
+    r
+}
+
+let is_int(t: *Token): bool = {
+    var r = false
+    match t.kind {
+    | TokInt     -> r = true
+    | TokIdent   -> r = false
+    | TokString  -> r = false
+    | TokPunct   -> r = false
+    | TokKeyword -> r = false
+    | TokEOF     -> r = false
+    }
+    r
+}
+
+let span_of(p: *Parser, t: *Token): Span = ast.make_span(p.file, t.line, t.col)
+
+let record_error(p: *Parser, msg: string) = {
+    vec.push(&p.errors, msg)
+}
+
+let expect_punct(p: *Parser, sym: string) = {
+    let t = peek(p)
+    if is_punct(&t, sym) {
+        advance(p)
+    } else {
+        record_error(p, fmt.format("expected `{}` at line {}", sym, t.line))
+    }
+}
+
+let parse_path_segs(p: *Parser): Vec<string> = {
+    var segs: Vec<string> = vec.make()
+    let first = peek(p)
+    if is_ident(&first) {
+        vec.push(&segs, first.text)
+        advance(p)
+        var more = true
+        while more {
+            let nxt = peek(p)
+            if is_punct(&nxt, "/") {
+                advance(p)
+                let part = peek(p)
+                if is_ident(&part) {
+                    vec.push(&segs, part.text)
+                    advance(p)
+                } else {
+                    record_error(p, fmt.format("expected path segment at line {}", part.line))
+                    more = false
+                }
+            } else {
+                more = false
+            }
+        }
+    } else {
+        record_error(p, fmt.format("expected path segment, got `{}` at line {}", first.text, first.line))
+    }
+    segs
+}
+
+let parse_import(p: *Parser): Decl = {
+    let kw_tok = peek(p)
+    let span = span_of(p, &kw_tok)
+    advance(p)
+    let path = parse_path_segs(p)
+    var alias = ""
+    let nxt = peek(p)
+    if is_kw(&nxt, "as") {
+        advance(p)
+        let a = peek(p)
+        if is_ident(&a) {
+            alias = a.text
+            advance(p)
+        } else {
+            record_error(p, fmt.format("expected alias name at line {}", a.line))
+        }
+    }
+    DImport(span, path, alias)
+}
+
+let parse_atom(p: *Parser): Expr = {
+    let t = peek(p)
+    let span = span_of(p, &t)
+    if is_int(&t) {
+        advance(p)
+        return EInt(span, t.text)
+    }
+    if is_ident(&t) {
+        advance(p)
+        return EIdent(span, t.text)
+    }
+    if is_punct(&t, "(") {
+        advance(p)
+        let inner = parse_atom(p)
+        expect_punct(p, ")")
+        return inner
+    }
+    record_error(p, fmt.format("expected expression at line {}", t.line))
+    advance(p)
+    return ENil(span)
+}
+
+let parse_top_let(p: *Parser): Decl = {
+    let kw_tok = peek(p)
+    let span = span_of(p, &kw_tok)
+    advance(p)
+    let name_tok = peek(p)
+    var name = ""
+    if is_ident(&name_tok) {
+        name = name_tok.text
+        advance(p)
+    } else {
+        record_error(p, fmt.format("expected identifier after `let` at line {}", name_tok.line))
+    }
+    expect_punct(p, "=")
+    let value = parse_atom(p)
+    let unit_ty: TypeExpr = TEUnit(span)
+    let empty_params: Vec<string> = vec.make()
+    let empty_fields: Vec<FnParam> = vec.make()
+    DConst(span, name, unit_ty, value)
+}
+
+let parse_decl(p: *Parser): Decl = {
+    let t = peek(p)
+    if is_kw(&t, "import") {
+        return parse_import(p)
+    }
+    if is_kw(&t, "let") {
+        return parse_top_let(p)
+    }
+    record_error(p, fmt.format("expected top-level declaration at line {}", t.line))
+    advance(p)
+    let span = span_of(p, &t)
+    let unit_ty: TypeExpr = TEUnit(span)
+    let no_params: Vec<string> = vec.make()
+    DConst(span, "<error>", unit_ty, ENil(span))
+}
+
+let run(tokens: Vec<Token>, file: string): File = {
+    var p = make_parser(tokens, file)
+    var decls: Vec<Decl> = vec.make()
+    while !at_eof(&p) {
+        vec.push(&decls, parse_decl(&p))
+    }
+    let f = File { path: file, decls: decls }
+    for e in p.errors {
+        fmt.println(e)
+    }
+    f
+}

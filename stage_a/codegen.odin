@@ -133,15 +133,10 @@ codegen_file :: proc(f: File, tc: ^Ty_Context, allocator := context.allocator) -
     }
     cg_emit(&cg, "\n")
 
+    cg_emit_all_records_topo(&cg)
+
     for _, e in cg.enums {
         cg_emit_enum_defs(&cg, e)
-    }
-
-    for r in topo_sort_records(&cg) {
-        if len(r.type_params) == 0 do cg_emit_record_defs(&cg, r)
-    }
-    for _, r in cg.records {
-        if len(r.type_params) > 0 do cg_emit_record_defs(&cg, r)
     }
 
     for _, e in cg.enums {
@@ -863,6 +858,91 @@ cg_emit_enum_def_for_base :: proc(cg: ^Codegen, e: ^Decl_Enum, base: string, sub
     cg_emit(cg, "};\n\n")
 }
 
+cg_emit_all_records_topo :: proc(cg: ^Codegen) {
+    visited := make(map[string]bool, context.temp_allocator)
+    // Visit all non-generic records, recursing into deps (including generic instantiations).
+    for _, d in cg.records {
+        if len(d.type_params) == 0 {
+            topo_emit_record_unit(cg, d, nil, d.name, &visited)
+        }
+    }
+    // Emit any remaining generic instantiations that weren't pulled in transitively.
+    if cg.tc != nil {
+        for _, d in cg.records {
+            if len(d.type_params) == 0 do continue
+            if insts, ok := cg.tc.record_instances[d.name]; ok {
+                for _, args in insts {
+                    mangled := adt_mangled_base(cg, d.name, args)
+                    topo_emit_record_unit(cg, d, args, mangled, &visited)
+                }
+            }
+        }
+    }
+}
+
+topo_emit_record_unit :: proc(cg: ^Codegen, d: ^Decl_Struct, type_args: []Ty, mangled: string, visited: ^map[string]bool) {
+    if visited[mangled] do return
+    visited[mangled] = true
+    // Build the type-parameter substitution for this unit.
+    params_env := make(map[string]Ty, context.temp_allocator)
+    if len(d.type_params) > 0 {
+        for tp, i in d.type_params {
+            if i < len(type_args) do params_env[tp] = type_args[i]
+        }
+    }
+    // Walk fields and visit value-typed dependencies first.
+    for fld in d.fields {
+        topo_visit_field_value_deps(cg, fld.type, &params_env, visited)
+    }
+    // Emit this unit.
+    if len(d.type_params) == 0 {
+        cg_emit_record_def_for_base(cg, d, d.name, nil)
+    } else {
+        subst := build_type_param_subst(cg, d.type_params, type_args)
+        cg_emit_record_def_for_base(cg, d, mangled, subst)
+    }
+}
+
+topo_visit_field_value_deps :: proc(cg: ^Codegen, t: ^Type_Expr, params_env: ^map[string]Ty, visited: ^map[string]bool) {
+    if t == nil do return
+    named, is_named := t^.(^Type_Named)
+    if !is_named do return
+    if len(named.path) != 1 do return
+    name := named.path[0]
+    // Resolve a bare type-param to its instantiation.
+    if params_env != nil {
+        if subst_ty, in_params := params_env[name]; in_params {
+            // Substitute type-parameter usage with the actual type.
+            if rec, is_rec := subst_ty.(^Ty_Record); is_rec {
+                visit_rec(cg, rec.name, rec.args, visited)
+            }
+            return
+        }
+    }
+    // Direct record reference. Resolve args first.
+    args := make([]Ty, len(named.args))
+    for a, i in named.args do args[i] = resolve_type(cg.tc, a, params_env)
+    if dep, has := cg.records[name]; has {
+        if len(dep.type_params) == 0 {
+            topo_emit_record_unit(cg, dep, nil, dep.name, visited)
+        } else {
+            mangled := adt_mangled_base(cg, name, args)
+            topo_emit_record_unit(cg, dep, args, mangled, visited)
+        }
+    }
+}
+
+visit_rec :: proc(cg: ^Codegen, name: string, args: []Ty, visited: ^map[string]bool) {
+    if dep, has := cg.records[name]; has {
+        if len(dep.type_params) == 0 {
+            topo_emit_record_unit(cg, dep, nil, dep.name, visited)
+        } else {
+            mangled := adt_mangled_base(cg, name, args)
+            topo_emit_record_unit(cg, dep, args, mangled, visited)
+        }
+    }
+}
+
 topo_sort_records :: proc(cg: ^Codegen) -> []^Decl_Struct {
     visited := make(map[string]bool, context.temp_allocator)
     out := make([dynamic]^Decl_Struct, context.temp_allocator)
@@ -892,7 +972,6 @@ record_field_value_dep :: proc(t: ^Type_Expr) -> (string, bool) {
     named, is_named := t^.(^Type_Named)
     if !is_named do return "", false
     if len(named.path) != 1 do return "", false
-    if len(named.args) > 0 do return "", false
     return named.path[0], true
 }
 

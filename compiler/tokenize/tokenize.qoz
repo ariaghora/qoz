@@ -1,28 +1,19 @@
-// compiler/tokenize.qoz: Stage B tokenizer for Qoz source.
-//
-// This is the first piece of the self-hosted compiler. It reads a Qoz source
-// string and produces a Vec<Token>. The lexical surface implemented here
-// covers the subset of Qoz needed to tokenize the compiler's own source:
-// identifiers, keywords, integer and string literals, punctuation, line and
-// block comments.
+// compiler/tokenize: Stage B tokenizer for Qoz source.
 
-import std/fmt
-import std/fs
-import std/os
 import std/strings
 import std/vec
 import std/map
 
-type Token_Kind =
-    | Tok_Ident
-    | Tok_Int
-    | Tok_String
-    | Tok_Punct
-    | Tok_Keyword
-    | Tok_EOF
+type TokenKind =
+    | TokIdent
+    | TokInt
+    | TokString
+    | TokPunct
+    | TokKeyword
+    | TokEOF
 
 type Token = {
-    kind: Token_Kind,
+    kind: TokenKind,
     text: string,
     line: i64,
     col:  i64,
@@ -125,7 +116,7 @@ let build_keywords(): Map<string, bool> = {
 let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
     skip_whitespace_and_comments(l)
     if l.pos >= len(l.src) {
-        return Token { kind: Tok_EOF, text: "", line: l.line, col: l.col }
+        return Token { kind: TokEOF, text: "", line: l.line, col: l.col }
     }
     let start_pos = l.pos
     let start_line = l.line
@@ -136,7 +127,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
         while l.pos < len(l.src) && is_digit(lex_at(l)) {
             lex_advance(l)
         }
-        return Token { kind: Tok_Int, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     if is_alpha(c) {
@@ -144,9 +135,9 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
             lex_advance(l)
         }
         let word = strings.slice(l.src, start_pos, l.pos)
-        var k: Token_Kind = Tok_Ident
+        var k: TokenKind = TokIdent
         if is_keyword(kw, word) {
-            k = Tok_Keyword
+            k = TokKeyword
         }
         return Token { kind: k, text: word, line: start_line, col: start_col }
     }
@@ -162,7 +153,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
         if l.pos < len(l.src) {
             lex_advance(l)
         }
-        return Token { kind: Tok_String, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     if is_punct(c) {
@@ -187,14 +178,14 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
                 }
             }
         }
-        return Token { kind: Tok_Punct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     lex_advance(l)
-    return Token { kind: Tok_Punct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+    return Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
 }
 
-let tokenize(src: string): Vec<Token> = {
+let run(src: string): Vec<Token> = {
     var out: Vec<Token> = vec.make()
     var l = make_lexer(src)
     let kw = build_keywords()
@@ -202,43 +193,13 @@ let tokenize(src: string): Vec<Token> = {
     while running {
         let t = lex_one(&l, &kw)
         match t.kind {
-        | Tok_EOF     -> running = false
-        | Tok_Ident   -> vec.push(&out, t)
-        | Tok_Int     -> vec.push(&out, t)
-        | Tok_String  -> vec.push(&out, t)
-        | Tok_Punct   -> vec.push(&out, t)
-        | Tok_Keyword -> vec.push(&out, t)
+        | TokEOF     -> running = false
+        | TokIdent   -> vec.push(&out, t)
+        | TokInt     -> vec.push(&out, t)
+        | TokString  -> vec.push(&out, t)
+        | TokPunct   -> vec.push(&out, t)
+        | TokKeyword -> vec.push(&out, t)
         }
     }
     out
-}
-
-let kind_name(k: Token_Kind): string = {
-    match k {
-    | Tok_Ident   -> "ident"
-    | Tok_Int     -> "int"
-    | Tok_String  -> "string"
-    | Tok_Punct   -> "punct"
-    | Tok_Keyword -> "keyword"
-    | Tok_EOF     -> "eof"
-    }
-}
-
-let main() = {
-    let args = os.args()
-    if len(args) < 2 {
-        fmt.println("usage: tokenize <path>")
-        os.exit(1)
-    }
-    let path = args[1]
-    let src = fs.read_file(path)
-    if len(src) < 0 {
-        fmt.println(fmt.format("could not read {}", path))
-        os.exit(1)
-    }
-    let tokens = tokenize(src)
-    fmt.println(fmt.format("{} tokens", len(tokens)))
-    for t in tokens {
-        fmt.println(fmt.format("{}:{}  {}  {}", t.line, t.col, kind_name(t.kind), t.text))
-    }
 }
