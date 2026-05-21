@@ -1,0 +1,23 @@
+// std/os: process and environment.
+
+import std/vec
+
+@link_name("qoz_os_argc")
+external let argc_raw(): i64
+
+@link_name("qoz_os_arg")
+external let arg_raw(i: i64): string
+
+@link_name("qoz_os_exit")
+external let exit(code: i64)
+
+let args(): Vec<string> = {
+    var v: Vec<string> = vec.make()
+    let n = argc_raw()
+    var i: i64 = 0
+    while i < n {
+        vec.push(&v, arg_raw(i))
+        i = i + 1
+    }
+    v
+}

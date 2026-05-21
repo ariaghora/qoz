@@ -42,11 +42,17 @@ Expr :: union {
     ^Expr_Return,
     ^Expr_Defer,
     ^Expr_Size_Of,
+    ^Expr_Array_Lit,
 }
 
 Expr_Size_Of :: struct {
     span:   Span,
     target: ^Type_Expr,
+}
+
+Expr_Array_Lit :: struct {
+    span:  Span,
+    elems: []Expr,
 }
 
 Expr_Int_Lit    :: struct { span: Span, text: string }

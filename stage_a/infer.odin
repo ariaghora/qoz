@@ -443,6 +443,12 @@ check :: proc(tc: ^Ty_Context, env: ^Ty_Env, e: Expr, expected: Ty) -> Ty {
             tc.expr_types[e] = t
             return t
         }
+    case ^Expr_Array_Lit:
+        if rec, is_rec := expected.(^Ty_Record); is_rec && rec.name == "Vec" && len(rec.args) == 1 {
+            t := synth_array_lit(tc, env, v, rec.args[0])
+            tc.expr_types[e] = t
+            return t
+        }
     }
     actual := synth(tc, env, e)
     if !ty_assignable(actual, expected) {
@@ -773,6 +779,8 @@ synth_impl :: proc(tc: ^Ty_Context, env: ^Ty_Env, e: Expr) -> Ty {
     case ^Expr_Size_Of:
         resolve_type(tc, v.target)
         return ty_int(64, true)
+    case ^Expr_Array_Lit:
+        return synth_array_lit(tc, env, v, nil)
     case ^Expr_Tuple:
         elems := make([dynamic]Ty)
         for el in v.elems do append(&elems, synth(tc, env, el))
@@ -792,9 +800,13 @@ synth_impl :: proc(tc: ^Ty_Context, env: ^Ty_Env, e: Expr) -> Ty {
         check_block(tc, env, v.body, ty_unit())
         return ty_unit()
     case ^Expr_For:
-        synth(tc, env, v.iter)
+        iter_ty := synth(tc, env, v.iter)
+        binding_ty: Ty = ty_int(64, true)
+        if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Vec" && len(rec.args) == 1 {
+            binding_ty = rec.args[0]
+        }
         inner := env_make(env)
-        env_define(inner, v.binding, ty_int(64, true))
+        env_define(inner, v.binding, binding_ty)
         check_block(tc, inner, v.body, ty_unit())
         return ty_unit()
     case ^Expr_Return:
@@ -814,6 +826,31 @@ synth_impl :: proc(tc: ^Ty_Context, env: ^Ty_Env, e: Expr) -> Ty {
 }
 
 // --- Specific synth helpers ---
+
+synth_array_lit :: proc(tc: ^Ty_Context, env: ^Ty_Env, v: ^Expr_Array_Lit, expected_elem: Ty) -> Ty {
+    if _, has := tc.structs["Vec"]; !has {
+        emit_error(tc, v.span, "array literal requires `import std/vec`")
+        return ty_error()
+    }
+    elem_ty: Ty = expected_elem
+    if elem_ty == nil {
+        if len(v.elems) == 0 {
+            emit_error(tc, v.span, "cannot infer element type of empty array literal; add a type annotation")
+            return ty_error()
+        }
+        elem_ty = synth(tc, env, v.elems[0])
+        elem_ty = finalise_untyped(elem_ty)
+        for i in 1..<len(v.elems) {
+            check(tc, env, v.elems[i], elem_ty)
+        }
+    } else {
+        for el in v.elems do check(tc, env, el, elem_ty)
+    }
+    args := make([]Ty, 1)
+    args[0] = elem_ty
+    intern_record(tc, "Vec", args)
+    return ty_record("Vec", args)
+}
 
 synth_ident :: proc(tc: ^Ty_Context, env: ^Ty_Env, v: ^Expr_Ident) -> Ty {
     if t, ok := env_lookup(env, v.name); ok do return t
@@ -1208,6 +1245,17 @@ synth_call :: proc(tc: ^Ty_Context, env: ^Ty_Env, v: ^Expr_Call) -> Ty {
         if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "println" {
             for a in v.args do synth(tc, env, a)
             return ty_unit()
+        }
+        if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "format" {
+            if len(v.args) < 1 {
+                emit_error(tc, v.span, "fmt.format requires a template string")
+                return ty_string()
+            }
+            if _, is_lit := v.args[0].(^Expr_String_Lit); !is_lit {
+                emit_error(tc, v.span, "fmt.format template must be a string literal")
+            }
+            for a in v.args do synth(tc, env, a)
+            return ty_string()
         }
         if len(path.segs) == 2 {
             if enum_decl, ok := tc.enums[path.segs[0]]; ok {

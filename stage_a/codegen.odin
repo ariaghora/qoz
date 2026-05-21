@@ -553,6 +553,15 @@ discover_in_expr :: proc(cg: ^Codegen, e: Expr, ty_subst: map[int]Ty) {
     case ^Expr_Tuple:
         for el in v.elems do discover_in_expr(cg, el, ty_subst)
     case ^Expr_Size_Of:
+    case ^Expr_Array_Lit:
+        for el in v.elems do discover_in_expr(cg, el, ty_subst)
+        if t, has := cg.tc.expr_types[v]; has {
+            t2 := ty_substitute(t, ty_subst)
+            if rec, ok := t2.(^Ty_Record); ok && rec.name == "Vec" && len(rec.args) == 1 {
+                register_fn_instantiation(cg, "vec_make", rec.args)
+                register_fn_instantiation(cg, "vec_push", rec.args)
+            }
+        }
     case ^Expr_Int_Lit, ^Expr_Float_Lit, ^Expr_String_Lit, ^Expr_Char_Lit,
          ^Expr_Bool_Lit, ^Expr_Nil_Lit, ^Expr_Ident:
     }
@@ -1041,7 +1050,7 @@ cg_fn :: proc(cg: ^Codegen, d: ^Decl_Fn) {
 cg_main_fn :: proc(cg: ^Codegen, d: ^Decl_Fn) {
     cg_emit(cg, "int main(int argc, char **argv) {\n")
     cg.indent_lvl = 1
-    cg_emit_indent(cg); cg_emit(cg, "(void)argc; (void)argv;\n")
+    cg_emit_indent(cg); cg_emit(cg, "qoz_set_argv(argc, argv);\n")
     cg_emit_indent(cg); cg_emit(cg, "int qoz_stack_anchor;\n")
     cg_emit_indent(cg); cg_emit(cg, "qoz_init(&qoz_stack_anchor);\n")
 
@@ -1066,15 +1075,44 @@ cg_block_body :: proc(cg: ^Codegen, b: ^Expr_Block) {
 }
 
 cg_block_inline :: proc(cg: ^Codegen, b: ^Expr_Block) {
+    defers := make([dynamic]Expr, context.temp_allocator)
     for s in b.stmts {
+        if se, is_se := s.(^Stmt_Expr); is_se {
+            if d, is_def := se.expr.(^Expr_Defer); is_def {
+                append(&defers, d.body)
+                continue
+            }
+        }
         cg_stmt(cg, s)
     }
+
+    flush_defers :: proc(cg: ^Codegen, defers: [dynamic]Expr) {
+        for j := len(defers) - 1; j >= 0; j -= 1 {
+            cg_emit_indent(cg)
+            cg_expr(cg, defers[j])
+            cg_emit(cg, ";\n")
+        }
+    }
+
     if b.tail != nil {
-        if cg.in_return_ctx {
+        if cg.in_return_ctx && len(defers) > 0 {
+            t := infer_expr_c_type(cg, b.tail)
+            tmp := fmt.tprintf("_qoz_ret_%d", next_tmp_id(cg))
+            cg_emit_indent(cg)
+            cg_emitf(cg, "%s %s = ", t, tmp)
+            cg_expr(cg, b.tail)
+            cg_emit(cg, ";\n")
+            flush_defers(cg, defers)
+            cg_emit_indent(cg)
+            cg_emitf(cg, "return %s;\n", tmp)
+        } else if cg.in_return_ctx {
             cg_tail_expr(cg, b.tail)
         } else {
             cg_emit_tail_as_statement(cg, b.tail)
+            flush_defers(cg, defers)
         }
+    } else {
+        flush_defers(cg, defers)
     }
 }
 
@@ -1101,6 +1139,12 @@ cg_stmt :: proc(cg: ^Codegen, s: Stmt) {
         }
         if ie, is_if := v.expr.(^Expr_If); is_if {
             cg_if_stmt(cg, ie)
+            return
+        }
+        if blk, is_blk := v.expr.(^Expr_Block); is_blk {
+            cg_emit_indent(cg)
+            cg_block_body(cg, blk)
+            cg_emit(cg, "\n")
             return
         }
         cg_emit_indent(cg)
@@ -1158,6 +1202,12 @@ cg_emit_block_as_statement :: proc(cg: ^Codegen, b: ^Expr_Block) {
 }
 
 cg_emit_tail_as_statement :: proc(cg: ^Codegen, e: Expr) {
+    if blk, is_blk := e.(^Expr_Block); is_blk {
+        cg_emit_indent(cg)
+        cg_block_body(cg, blk)
+        cg_emit(cg, "\n")
+        return
+    }
     if ie, is_if := e.(^Expr_If); is_if {
         cg_if_stmt(cg, ie)
         return
@@ -1211,7 +1261,35 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         cg_emit(cg, "\n")
         return
     }
-    cg_error(cg, "for-in over non-range iterators is not yet supported in codegen")
+    iter_ty := concrete_ty_of(cg, fr.iter)
+    if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Vec" && len(rec.args) == 1 {
+        elem_c := ty_to_c_type(cg, rec.args[0])
+        vec_c  := ty_to_c_type(cg, iter_ty)
+        idx := fmt.tprintf("_qoz_fi_%d", next_tmp_id(cg))
+        col := fmt.tprintf("_qoz_fc_%d", next_tmp_id(cg))
+        cg_emit_indent(cg)
+        cg_emit(cg, "{\n")
+        cg.indent_lvl += 1
+        cg_emit_indent(cg)
+        cg_emitf(cg, "%s %s = ", vec_c, col)
+        cg_expr(cg, fr.iter)
+        cg_emit(cg, ";\n")
+        cg_emit_indent(cg)
+        cg_emitf(cg, "for (int64_t %s = 0; %s < %s.len; %s++) ", idx, idx, col, idx)
+        cg_emit(cg, "{\n")
+        cg.indent_lvl += 1
+        cg_emit_indent(cg)
+        cg_emitf(cg, "%s %s = %s.data[%s];\n", elem_c, fr.binding, col, idx)
+        cg.locals[fr.binding] = elem_c
+        for s in fr.body.stmts do cg_stmt(cg, s)
+        if fr.body.tail != nil do cg_emit_tail_as_statement(cg, fr.body.tail)
+        cg.indent_lvl -= 1
+        cg_emit_indent(cg); cg_emit(cg, "}\n")
+        cg.indent_lvl -= 1
+        cg_emit_indent(cg); cg_emit(cg, "}\n")
+        return
+    }
+    cg_error(cg, "for-in over non-range, non-Vec iterators is not yet supported in codegen")
 }
 
 cg_let_else_stmt :: proc(cg: ^Codegen, s: ^Stmt_Let_Else) {
@@ -1309,6 +1387,12 @@ cg_tail_expr :: proc(cg: ^Codegen, e: Expr) {
     if cg.in_return_ctx {
         if m, is_match := e.(^Expr_Match); is_match {
             cg_match_as_return(cg, m)
+            return
+        }
+        if _, is_return := e.(^Expr_Return); is_return {
+            cg_emit_indent(cg)
+            cg_expr(cg, e)
+            cg_emit(cg, ";\n")
             return
         }
         cg_emit_indent(cg)
@@ -1601,13 +1685,18 @@ cg_expr :: proc(cg: ^Codegen, e: Expr) {
     case ^Expr_Size_Of:
         c_type := c_type_of_type_expr(cg, v.target)
         cg_emitf(cg, "(int64_t)sizeof(%s)", c_type)
+    case ^Expr_Array_Lit:
+        cg_emit_array_lit(cg, v)
     case ^Expr_If:
         cg_emit_if_expression(cg, v)
     case ^Expr_Match:
         cg_error(cg, "match expressions outside of return position are not yet supported")
         cg_emit(cg, "0")
+    case ^Expr_Defer:
+        cg_error(cg, "`defer` is only allowed as a statement, not in expression position")
+        cg_emit(cg, "/*defer*/0")
     case ^Expr_Tuple,
-         ^Expr_Block, ^Expr_While, ^Expr_For, ^Expr_Defer:
+         ^Expr_Block, ^Expr_While, ^Expr_For:
         cg_error(cg, fmt.tprintf("expression kind will be added in a later milestone"))
         cg_emit(cg, "/*unsupported*/0")
     }
@@ -2102,6 +2191,37 @@ auto_emit_hash_call :: proc(cg: ^Codegen, arg: Expr, t: Ty) -> bool {
     return false
 }
 
+cg_emit_array_lit :: proc(cg: ^Codegen, v: ^Expr_Array_Lit) {
+    t, ok := cg.tc.expr_types[v]
+    if !ok {
+        cg_error(cg, "array literal: cannot resolve type")
+        cg_emit(cg, "/* err */0")
+        return
+    }
+    if len(cg.ty_subst) > 0 do t = ty_substitute(t, cg.ty_subst)
+    rec, is_rec := t.(^Ty_Record)
+    if !is_rec || rec.name != "Vec" || len(rec.args) != 1 {
+        cg_error(cg, "array literal: not a Vec<T>")
+        cg_emit(cg, "/* err */0")
+        return
+    }
+    elem_args := rec.args
+    register_fn_instantiation(cg, "vec_make", elem_args)
+    register_fn_instantiation(cg, "vec_push", elem_args)
+    vec_c := ty_to_c_type(cg, t)
+    make_mangled := mangle_generic("vec_make", elem_args, cg)
+    push_mangled := mangle_generic("vec_push", elem_args, cg)
+    tmp := fmt.tprintf("_qoz_arr_%d", next_tmp_id(cg))
+    cg_emit(cg, "({ ")
+    cg_emitf(cg, "%s %s = %s(); ", vec_c, tmp, make_mangled)
+    for el in v.elems {
+        cg_emitf(cg, "%s(&%s, ", push_mangled, tmp)
+        cg_expr(cg, el)
+        cg_emit(cg, "); ")
+    }
+    cg_emitf(cg, "%s; })", tmp)
+}
+
 cg_emit_size_of :: proc(cg: ^Codegen, arg: Expr) {
     name := ""
     if id, ok := arg.(^Expr_Ident); ok do name = id.name
@@ -2288,6 +2408,10 @@ cg_call :: proc(cg: ^Codegen, call: ^Expr_Call) {
     if path, is_path := call.callee.(^Expr_Path); is_path {
         if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "println" {
             cg_fmt_println(cg, call.args)
+            return
+        }
+        if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "format" {
+            cg_fmt_format(cg, call.args)
             return
         }
         if len(path.segs) == 2 {
@@ -2509,7 +2633,7 @@ cg_match_as_return :: proc(cg: ^Codegen, m: ^Expr_Match) {
     }
     cg.indent_lvl -= 1
     cg_emit_indent(cg); cg_emit(cg, "}\n")
-    cg_emit_indent(cg); cg_emit(cg, "return 0;\n")
+    cg_emit_indent(cg); cg_emit(cg, "__builtin_unreachable();\n")
 }
 
 cg_match_scrutinee_tag :: proc(cg: ^Codegen, scrut: Expr) {
@@ -2678,6 +2802,95 @@ find_variant :: proc(e: ^Decl_Enum, name: string) -> ^Variant_Decl {
 }
 
 // --- Println lowering ---
+
+cg_fmt_format :: proc(cg: ^Codegen, args: []Expr) {
+    if len(args) < 1 {
+        cg_emit(cg, "QOZ_STR_LIT(\"\")")
+        return
+    }
+    lit, is_lit := args[0].(^Expr_String_Lit)
+    if !is_lit {
+        cg_error(cg, "fmt.format template must be a string literal")
+        cg_emit(cg, "QOZ_STR_LIT(\"\")")
+        return
+    }
+    raw := lit.text
+    if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+        cg_error(cg, "fmt.format: malformed template literal")
+        cg_emit(cg, "QOZ_STR_LIT(\"\")")
+        return
+    }
+    body := raw[1:len(raw)-1]
+    segments := make([dynamic]string, context.temp_allocator)
+    start := 0
+    i := 0
+    for i < len(body) {
+        if i + 1 < len(body) && body[i] == '{' && body[i+1] == '}' {
+            append(&segments, body[start:i])
+            start = i + 2
+            i += 2
+        } else {
+            i += 1
+        }
+    }
+    append(&segments, body[start:])
+
+    arg_count := len(args) - 1
+    expected := len(segments) - 1
+    if arg_count != expected {
+        cg_error(cg, fmt.tprintf("fmt.format: template has %d placeholders but %d args were given", expected, arg_count))
+    }
+
+    sb := fmt.tprintf("_qoz_sb_%d", next_tmp_id(cg))
+    cg_emit(cg, "({ ")
+    cg_emitf(cg, "qoz_strbuf %s; qoz_strbuf_init(&%s); ", sb, sb)
+    for seg, idx in segments {
+        if len(seg) > 0 {
+            cg_emitf(cg, "qoz_strbuf_append_str(&%s, QOZ_STR_LIT(\"%s\")); ", sb, seg)
+        }
+        if idx < arg_count {
+            cg_fmt_append_arg(cg, sb, args[idx+1])
+        }
+    }
+    cg_emitf(cg, "qoz_strbuf_finish(&%s); })", sb)
+}
+
+cg_fmt_append_arg :: proc(cg: ^Codegen, sb: string, e: Expr) {
+    t := infer_expr_c_type(cg, e)
+    switch t {
+    case "qoz_string":
+        cg_emitf(cg, "qoz_strbuf_append_str(&%s, ", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, "); ")
+    case "int8_t", "int16_t", "int32_t":
+        cg_emitf(cg, "qoz_strbuf_append_i64(&%s, (int64_t)(", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, ")); ")
+    case "int64_t":
+        cg_emitf(cg, "qoz_strbuf_append_i64(&%s, ", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, "); ")
+    case "uint8_t", "uint16_t", "uint32_t", "uint64_t":
+        cg_emitf(cg, "qoz_strbuf_append_i64(&%s, (int64_t)(", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, ")); ")
+    case "float", "double":
+        cg_emitf(cg, "qoz_strbuf_append_f64(&%s, (double)(", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, ")); ")
+    case "bool":
+        cg_emitf(cg, "qoz_strbuf_append_bool(&%s, ", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, "); ")
+    case "const char *":
+        cg_emitf(cg, "qoz_strbuf_append_cstr(&%s, ", sb)
+        cg_expr(cg, e)
+        cg_emit(cg, "); ")
+    case:
+        cg_error(cg, fmt.tprintf("fmt.format: cannot format argument of C type `%s`", t))
+        cg_emitf(cg, "qoz_strbuf_append_str(&%s, QOZ_STR_LIT(\"<?>\")); ", sb)
+    }
+}
 
 cg_fmt_println :: proc(cg: ^Codegen, args: []Expr) {
     if len(args) == 0 {
@@ -2860,6 +3073,8 @@ walk_expr_collect :: proc(cg: ^Codegen, scope: ^map[string]string, e: Expr) {
         walk_expr_collect(cg, scope, v.body)
     case ^Expr_Tuple:
         for el in v.elems do walk_expr_collect(cg, scope, el)
+    case ^Expr_Array_Lit:
+        for el in v.elems do walk_expr_collect(cg, scope, el)
     case ^Expr_Size_Of:
     case ^Expr_Record:
         for fld in v.fields do walk_expr_collect(cg, scope, fld.value)
@@ -2992,6 +3207,8 @@ collect_free_vars :: proc(e: Expr, bound: ^map[string]bool, free: ^map[string]bo
     case ^Expr_Defer:
         collect_free_vars(v.body, bound, free)
     case ^Expr_Tuple:
+        for el in v.elems do collect_free_vars(el, bound, free)
+    case ^Expr_Array_Lit:
         for el in v.elems do collect_free_vars(el, bound, free)
     case ^Expr_Size_Of:
     case ^Expr_Record:

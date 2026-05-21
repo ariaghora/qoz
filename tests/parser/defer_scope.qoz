@@ -1,0 +1,14 @@
+import std/fmt
+
+let main() = {
+    fmt.println("start")
+    defer fmt.println("outer A")
+    {
+        fmt.println("enter inner")
+        defer fmt.println("inner cleanup")
+        fmt.println("middle inner")
+    }
+    fmt.println("after inner")
+    defer fmt.println("outer B")
+    fmt.println("end")
+}

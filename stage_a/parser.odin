@@ -989,9 +989,6 @@ parse_paren_or_tuple :: proc(p: ^Parser) -> (Expr, bool) {
 }
 
 parse_array_literal :: proc(p: ^Parser) -> (Expr, bool) {
-    // Surface as a call to a builtin "array literal" later; for now represent
-    // as a tuple-like aggregate using Expr_Call on a synthetic head. Stage A
-    // can lower this; for now this is a placeholder so the SPEC examples parse.
     span := current_span(p)
     if !eat(p, .Left_Bracket, "`[`") do return nil, false
     elems := make([dynamic]Expr)
@@ -1001,9 +998,8 @@ parse_array_literal :: proc(p: ^Parser) -> (Expr, bool) {
         if !accept(p, .Comma) do break
     }
     if !eat(p, .Right_Bracket, "`]`") do return nil, false
-    head := new(Expr_Ident); head.span = span; head.name = "@array"
-    c := new(Expr_Call); c.span = span; c.callee = head; c.args = elems[:]
-    return c, true
+    out := new(Expr_Array_Lit); out.span = span; out.elems = elems[:]
+    return out, true
 }
 
 // `() -> body`                       no params
@@ -1322,6 +1318,7 @@ expr_span :: proc(e: Expr) -> Span {
     case ^Expr_Return:     return v.span
     case ^Expr_Defer:      return v.span
     case ^Expr_Size_Of:    return v.span
+    case ^Expr_Array_Lit:  return v.span
     }
     return Span{}
 }

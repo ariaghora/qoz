@@ -81,6 +81,7 @@ main :: proc() {
         for e in result.errors {
             fmt.eprintfln("codegen: %s", e)
         }
+        if len(result.errors) > 0 do os.exit(1)
         out_name := output_name_for(path)
         ok := compile_and_link(result.c_source, out_name)
         if !ok do os.exit(1)
@@ -518,6 +519,9 @@ print_expr :: proc(e: Expr, depth: int) {
         fmt.print("SizeOf ")
         print_type(v.target)
         fmt.println()
+    case ^Expr_Array_Lit:
+        fmt.printfln("ArrayLit (%d elems)", len(v.elems))
+        for el in v.elems do print_expr(el, depth+1)
     }
 }
 

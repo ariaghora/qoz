@@ -1,0 +1,10 @@
+// std/fs: minimal file I/O.
+//
+// Reads and writes whole files at once. A return of `""` length -1 from
+// `read_file` signals an error (the file could not be opened or read).
+
+@link_name("qoz_fs_read_file")
+external let read_file(path: string): string
+
+@link_name("qoz_fs_write_file")
+external let write_file(path: string, content: string): bool

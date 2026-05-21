@@ -1,0 +1,19 @@
+import std/fmt
+import std/vec
+
+let main() = {
+    let xs: Vec<i32> = [10, 20, 30, 40]
+    fmt.println("len =", len(xs))
+    var i: i64 = 0
+    while i < len(xs) {
+        fmt.println("xs[", i, "] =", xs[i])
+        i = i + 1
+    }
+
+    let names: Vec<string> = ["alice", "bob", "carol"]
+    var j: i64 = 0
+    while j < len(names) {
+        fmt.println(names[j])
+        j = j + 1
+    }
+}

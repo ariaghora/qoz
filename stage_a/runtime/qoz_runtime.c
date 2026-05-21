@@ -1,9 +1,152 @@
 #include "qoz_runtime.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
 
 tgc_t qoz_gc;
+
+static int qoz_argc_val = 0;
+static char **qoz_argv_val = NULL;
+
+void qoz_set_argv(int argc, char **argv) {
+    qoz_argc_val = argc;
+    qoz_argv_val = argv;
+}
+
+int64_t qoz_os_argc(void) { return (int64_t)qoz_argc_val; }
+
+qoz_string qoz_os_arg(int64_t i) {
+    if (i < 0 || i >= (int64_t)qoz_argc_val) return (qoz_string){ NULL, 0 };
+    const char *s = qoz_argv_val[i];
+    return (qoz_string){ s, (int64_t)strlen(s) };
+}
+
+void qoz_os_exit(int64_t code) { exit((int)code); }
+
+static int qoz_copy_path_nul(qoz_string path, char *buf, size_t buflen) {
+    if (path.len < 0 || (size_t)path.len >= buflen) return 0;
+    memcpy(buf, path.data, (size_t)path.len);
+    buf[path.len] = 0;
+    return 1;
+}
+
+qoz_string qoz_fs_read_file(qoz_string path) {
+    char buf[4096];
+    if (!qoz_copy_path_nul(path, buf, sizeof(buf))) return (qoz_string){ NULL, -1 };
+    FILE *f = fopen(buf, "rb");
+    if (!f) return (qoz_string){ NULL, -1 };
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return (qoz_string){ NULL, -1 }; }
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return (qoz_string){ NULL, -1 }; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return (qoz_string){ NULL, -1 }; }
+    char *data = (char *)qoz_alloc((int64_t)n);
+    size_t got = fread(data, 1, (size_t)n, f);
+    fclose(f);
+    return (qoz_string){ data, (int64_t)got };
+}
+
+bool qoz_fs_write_file(qoz_string path, qoz_string content) {
+    char buf[4096];
+    if (!qoz_copy_path_nul(path, buf, sizeof(buf))) return false;
+    FILE *f = fopen(buf, "wb");
+    if (!f) return false;
+    size_t wrote = 0;
+    if (content.len > 0) wrote = fwrite(content.data, 1, (size_t)content.len, f);
+    fclose(f);
+    return wrote == (size_t)content.len;
+}
+
+bool qoz_string_has_prefix(qoz_string s, qoz_string p) {
+    if (p.len > s.len) return false;
+    return memcmp(s.data, p.data, (size_t)p.len) == 0;
+}
+
+bool qoz_string_has_suffix(qoz_string s, qoz_string suf) {
+    if (suf.len > s.len) return false;
+    return memcmp(s.data + s.len - suf.len, suf.data, (size_t)suf.len) == 0;
+}
+
+int64_t qoz_string_byte_at(qoz_string s, int64_t i) {
+    if (i < 0 || i >= s.len) return -1;
+    return (int64_t)(unsigned char)s.data[i];
+}
+
+int64_t qoz_string_index_byte(qoz_string s, int64_t byte) {
+    for (int64_t i = 0; i < s.len; i++) {
+        if ((unsigned char)s.data[i] == (unsigned char)byte) return i;
+    }
+    return -1;
+}
+
+qoz_string qoz_string_slice(qoz_string s, int64_t from, int64_t to) {
+    if (from < 0) from = 0;
+    if (to > s.len) to = s.len;
+    if (from > to) from = to;
+    return (qoz_string){ s.data + from, to - from };
+}
+
+void qoz_strbuf_init(qoz_strbuf *b) {
+    b->buf = NULL;
+    b->len = 0;
+    b->cap = 0;
+}
+
+static void qoz_strbuf_grow(qoz_strbuf *b, int64_t needed) {
+    int64_t new_cap = b->cap == 0 ? 64 : b->cap;
+    while (new_cap < b->len + needed) new_cap *= 2;
+    b->buf = (char *)qoz_realloc(b->buf, new_cap);
+    b->cap = new_cap;
+}
+
+void qoz_strbuf_append_str(qoz_strbuf *b, qoz_string s) {
+    if (s.len <= 0) return;
+    if (b->len + s.len > b->cap) qoz_strbuf_grow(b, s.len);
+    memcpy(b->buf + b->len, s.data, (size_t)s.len);
+    b->len += s.len;
+}
+
+void qoz_strbuf_append_cstr(qoz_strbuf *b, const char *s) {
+    qoz_string ss = { s, (int64_t)strlen(s) };
+    qoz_strbuf_append_str(b, ss);
+}
+
+void qoz_strbuf_append_i64(qoz_strbuf *b, int64_t v) {
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%" PRId64, v);
+    if (n > 0) {
+        if (b->len + n > b->cap) qoz_strbuf_grow(b, n);
+        memcpy(b->buf + b->len, tmp, (size_t)n);
+        b->len += n;
+    }
+}
+
+void qoz_strbuf_append_f64(qoz_strbuf *b, double v) {
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%g", v);
+    if (n > 0) {
+        if (b->len + n > b->cap) qoz_strbuf_grow(b, n);
+        memcpy(b->buf + b->len, tmp, (size_t)n);
+        b->len += n;
+    }
+}
+
+void qoz_strbuf_append_bool(qoz_strbuf *b, bool v) {
+    qoz_string s = v ? (qoz_string){ "true", 4 } : (qoz_string){ "false", 5 };
+    qoz_strbuf_append_str(b, s);
+}
+
+qoz_string qoz_strbuf_finish(qoz_strbuf *b) {
+    return (qoz_string){ b->buf, b->len };
+}
+
+int64_t qoz_string_parse_int(qoz_string s) {
+    char buf[64];
+    if (s.len < 0 || (size_t)s.len >= sizeof(buf)) return 0;
+    memcpy(buf, s.data, (size_t)s.len);
+    buf[s.len] = 0;
+    return (int64_t)strtoll(buf, NULL, 10);
+}
 
 void qoz_init(int *stack_anchor) {
     tgc_start(&qoz_gc, stack_anchor);

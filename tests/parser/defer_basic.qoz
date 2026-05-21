@@ -1,0 +1,23 @@
+import std/fmt
+
+let with_cleanup() = {
+    fmt.println("enter")
+    defer fmt.println("cleanup 1")
+    defer fmt.println("cleanup 2")
+    fmt.println("middle")
+    defer fmt.println("cleanup 3")
+    fmt.println("leave")
+}
+
+let value_with_cleanup(): i64 = {
+    defer fmt.println("releasing resource")
+    let x = 42
+    x
+}
+
+let main() = {
+    with_cleanup()
+    fmt.println("---")
+    let v = value_with_cleanup()
+    fmt.println("got", v)
+}

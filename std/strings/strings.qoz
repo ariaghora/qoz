@@ -1,13 +1,49 @@
 // std/strings: helpers over the built-in `string` type.
 
+import std/vec
+
 @link_name("qoz_string_eq")
 external let eq_raw(a: string, b: string): bool
 
 @link_name("qoz_string_hash")
 external let hash_raw(s: string): u64
 
+@link_name("qoz_string_has_prefix")
+external let has_prefix(s: string, prefix: string): bool
+
+@link_name("qoz_string_has_suffix")
+external let has_suffix(s: string, suffix: string): bool
+
+@link_name("qoz_string_byte_at")
+external let byte_at(s: string, i: i64): i64
+
+@link_name("qoz_string_index_byte")
+external let index_byte(s: string, b: i64): i64
+
+@link_name("qoz_string_slice")
+external let slice(s: string, from: i64, to: i64): string
+
+@link_name("qoz_string_parse_int")
+external let parse_int(s: string): i64
+
 @operator("==")
 let eq(a: *string, b: *string): bool = eq_raw(*a, *b)
 
 @operator("hash")
 let hash(s: *string): u64 = hash_raw(*s)
+
+let split(s: string, sep: i64): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    let total = len(s)
+    var start: i64 = 0
+    var i: i64 = 0
+    while i < total {
+        if byte_at(s, i) == sep {
+            vec.push(&out, slice(s, start, i))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    vec.push(&out, slice(s, start, total))
+    out
+}

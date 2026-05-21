@@ -1,0 +1,9 @@
+import std/fmt
+
+/* outer
+   /* nested */
+   still in comment */
+let main() = {
+    /* one /* two /* three */ two */ one */
+    fmt.println("comments survived")
+}

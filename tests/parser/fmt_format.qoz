@@ -1,0 +1,21 @@
+import std/fmt
+
+let main() = {
+    let s1 = fmt.format("hello, {}!", "world")
+    fmt.println(s1)
+
+    let s2 = fmt.format("{} + {} = {}", 2, 3, 5)
+    fmt.println(s2)
+
+    let s3 = fmt.format("pi is approximately {}", 3.14)
+    fmt.println(s3)
+
+    let s4 = fmt.format("ready={}", true)
+    fmt.println(s4)
+
+    let s5 = fmt.format("no substitutions here")
+    fmt.println(s5)
+
+    let s6 = fmt.format("{}", "just one")
+    fmt.println(s6)
+}
