@@ -822,11 +822,19 @@ synth_impl :: proc(tc: ^Ty_Context, env: ^Ty_Env, e: Expr) -> Ty {
     case ^Expr_For:
         iter_ty := synth(tc, env, v.iter)
         binding_ty: Ty = ty_int(64, true)
+        binding2_ty: Ty
         if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Vec" && len(rec.args) == 1 {
             binding_ty = rec.args[0]
         }
+        if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Map" && len(rec.args) == 2 {
+            binding_ty = rec.args[0]
+            binding2_ty = rec.args[1]
+        }
         inner := env_make(env)
         env_define(inner, v.binding, binding_ty)
+        if v.binding2 != "" && binding2_ty != nil {
+            env_define(inner, v.binding2, binding2_ty)
+        }
         check_block(tc, inner, v.body, ty_unit())
         return ty_unit()
     case ^Expr_Return:

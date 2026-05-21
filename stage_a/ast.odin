@@ -137,10 +137,11 @@ Expr_Match :: struct {
 
 Expr_While :: struct { span: Span, cond: Expr, body: ^Expr_Block }
 Expr_For :: struct {
-    span:    Span,
-    binding: string,
-    iter:    Expr,
-    body:    ^Expr_Block,
+    span:     Span,
+    binding:  string,
+    binding2: string,                                              // optional second binding for Map iter; "" if absent
+    iter:     Expr,
+    body:     ^Expr_Block,
 }
 Expr_Return :: struct { span: Span, value: Expr }                 // value may be nil
 Expr_Defer  :: struct { span: Span, body: Expr }

@@ -1344,6 +1344,44 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         return
     }
     iter_ty := concrete_ty_of(cg, fr.iter)
+    if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Map" && len(rec.args) == 2 {
+        key_c   := ty_to_c_type(cg, rec.args[0])
+        val_c   := ty_to_c_type(cg, rec.args[1])
+        map_c   := ty_to_c_type(cg, iter_ty)
+        idx := fmt.tprintf("_qoz_mi_%d", next_tmp_id(cg))
+        col := fmt.tprintf("_qoz_mc_%d", next_tmp_id(cg))
+        cg_emit_indent(cg)
+        cg_emit(cg, "{\n")
+        cg.indent_lvl += 1
+        cg_emit_indent(cg)
+        cg_emitf(cg, "%s %s = ", map_c, col)
+        cg_expr(cg, fr.iter)
+        cg_emit(cg, ";\n")
+        cg_emit_indent(cg)
+        cg_emitf(cg, "for (int64_t %s = 0; %s < %s.cap; %s++) ", idx, idx, col, idx)
+        cg_emit(cg, "{\n")
+        cg.indent_lvl += 1
+        cg_emit_indent(cg)
+        cg_emitf(cg, "if (!%s.slots[%s].occupied || %s.slots[%s].deleted) continue;\n", col, idx, col, idx)
+        cg_emit_indent(cg)
+        cg_emitf(cg, "%s %s = %s.slots[%s].key;\n", key_c, fr.binding, col, idx)
+        cg.locals[fr.binding] = key_c
+        if fr.binding2 != "" {
+            cg_emit_indent(cg)
+            cg_emitf(cg, "%s %s = %s.slots[%s].value;\n", val_c, fr.binding2, col, idx)
+            cg.locals[fr.binding2] = val_c
+        }
+        saved := cg.in_return_ctx
+        cg.in_return_ctx = false
+        for s in fr.body.stmts do cg_stmt(cg, s)
+        if fr.body.tail != nil do cg_emit_tail_as_statement(cg, fr.body.tail)
+        cg.in_return_ctx = saved
+        cg.indent_lvl -= 1
+        cg_emit_indent(cg); cg_emit(cg, "}\n")
+        cg.indent_lvl -= 1
+        cg_emit_indent(cg); cg_emit(cg, "}\n")
+        return
+    }
     if rec, is_rec := iter_ty.(^Ty_Record); is_rec && rec.name == "Vec" && len(rec.args) == 1 {
         elem_c := ty_to_c_type(cg, rec.args[0])
         vec_c  := ty_to_c_type(cg, iter_ty)

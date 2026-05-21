@@ -1147,10 +1147,15 @@ parse_for :: proc(p: ^Parser) -> (Expr, bool) {
     span := current_span(p)
     if !eat(p, .KW_For, "`for`") do return nil, false
     n, ok := expect(p, .Ident, "binding name"); if !ok do return nil, false
+    binding2 := ""
+    if accept(p, .Comma) {
+        n2, ok2 := expect(p, .Ident, "second binding name"); if !ok2 do return nil, false
+        binding2 = n2.source
+    }
     if !eat(p, .KW_In, "`in`") do return nil, false
     iter, iok := parse_expr(p); if !iok do return nil, false
     body, bok := parse_block(p); if !bok do return nil, false
-    out := new(Expr_For); out.span = span; out.binding = n.source; out.iter = iter; out.body = body
+    out := new(Expr_For); out.span = span; out.binding = n.source; out.binding2 = binding2; out.iter = iter; out.body = body
     return out, true
 }
 
