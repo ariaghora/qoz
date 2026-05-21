@@ -1,0 +1,17 @@
+import std/fmt
+
+type Option =
+    | None
+    | Some(i64)
+
+let unwrap_or_zero(opt: Option): i64 = {
+    let Option.Some(v) = opt else {
+        return 0
+    }
+    v
+}
+
+let main() = {
+    fmt.println("Some(7) =>", unwrap_or_zero(Option.Some(7)))
+    fmt.println("None    =>", unwrap_or_zero(Option.None))
+}

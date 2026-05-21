@@ -1,0 +1,6 @@
+let identity<T>(x: T): T = x
+
+let main() = {
+    let a = identity(42)
+    let b = identity("hello")
+}

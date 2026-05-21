@@ -1,0 +1,8 @@
+import std/fmt
+
+let add(x: i32, y: i32): i32 = x + y
+
+let main() = {
+    let r = add(1)
+    fmt.println(r)
+}

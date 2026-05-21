@@ -1,0 +1,29 @@
+import std/fmt
+import std/map
+
+type Point = { x: i64, y: i64 }
+type Rect  = { origin: Point, size: Point }
+
+let main() = {
+    var m: Map<Rect, i64> = map.make()
+
+    let r1 = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 10, y: 20 } }
+    let r2 = Rect { origin: Point { x: 5, y: 5 }, size: Point { x: 30, y: 40 } }
+
+    m[r1] = 100
+    m[r2] = 200
+
+    fmt.println("len =", len(m))
+
+    let r1_again = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 10, y: 20 } }
+    match map.get(&m, r1_again) {
+    | Some(v) -> fmt.println("r1_again =", v)
+    | None    -> fmt.println("r1_again missing")
+    }
+
+    let r3 = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 11, y: 20 } }
+    match map.get(&m, r3) {
+    | Some(v) -> fmt.println("r3 =", v)
+    | None    -> fmt.println("r3 not in map")
+    }
+}

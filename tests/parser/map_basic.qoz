@@ -1,0 +1,40 @@
+import std/fmt
+import std/map
+
+let main() = {
+    var m: Map<string, i64> = map.make()
+
+    map.insert(&m, "one",   1)
+    map.insert(&m, "two",   2)
+    map.insert(&m, "three", 3)
+    map.insert(&m, "four",  4)
+
+    fmt.println("len =", map.len(&m))
+
+    match map.get(&m, "two") {
+    | Some(v) -> fmt.println("two =", v)
+    | None    -> fmt.println("two missing")
+    }
+    match map.get(&m, "three") {
+    | Some(v) -> fmt.println("three =", v)
+    | None    -> fmt.println("three missing")
+    }
+    match map.get(&m, "missing") {
+    | Some(v) -> fmt.println("missing =", v)
+    | None    -> fmt.println("missing not found")
+    }
+
+    if map.contains(&m, "one") {
+        fmt.println("contains one")
+    }
+    if !map.contains(&m, "five") {
+        fmt.println("not contains five")
+    }
+
+    map.insert(&m, "two", 22)
+    match map.get(&m, "two") {
+    | Some(v) -> fmt.println("two after overwrite =", v)
+    | None    -> fmt.println("two missing after overwrite")
+    }
+    fmt.println("len after overwrite =", map.len(&m))
+}

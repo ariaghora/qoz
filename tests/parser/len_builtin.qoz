@@ -1,0 +1,21 @@
+import std/fmt
+import std/vec
+import std/map
+import std/strings
+
+let main() = {
+    var v: Vec<i32> = vec.make()
+    vec.push(&v, 10)
+    vec.push(&v, 20)
+    vec.push(&v, 30)
+
+    var m: Map<string, i64> = map.make()
+    m["a"] = 1
+    m["b"] = 2
+
+    let s = "hello"
+
+    fmt.println("len(v) =", len(v))
+    fmt.println("len(m) =", len(m))
+    fmt.println("len(s) =", len(s))
+}

@@ -1,0 +1,18 @@
+import std/fmt
+import std/vec
+
+let main() = {
+    var v: Vec<i32> = vec.make()
+    vec.push(&v, 100)
+    vec.push(&v, 200)
+    vec.push(&v, 300)
+    vec.push(&v, 400)
+    vec.push(&v, 500)
+
+    var i: i64 = 0
+    while i < vec.len(&v) {
+        fmt.println("v[", i, "] =", vec.get(&v, i))
+        i = i + 1
+    }
+    fmt.println("len =", vec.len(&v), "cap =", v.cap)
+}

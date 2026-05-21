@@ -1,0 +1,5 @@
+// std/fmt: console output and string formatting.
+//
+// `println(args...)` is a compiler builtin and works without an import. This
+// module will host formatting helpers as the language grows variadic
+// generics.

@@ -1,0 +1,5 @@
+import std/fmt
+
+let main() = {
+    fmt.println(no_such_name)
+}

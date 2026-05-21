@@ -1,0 +1,16 @@
+import std/fmt
+
+type Option =
+    | None
+    | Some(i64)
+
+let bad(opt: Option): i64 = {
+    let Option.Some(v) = opt else {
+        fmt.println("oops")
+    }
+    v
+}
+
+let main() = {
+    fmt.println(bad(Option.None))
+}

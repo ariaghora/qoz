@@ -1,0 +1,26 @@
+import std/fmt
+
+let div(a: i64, b: i64): Result<i64, i64> = {
+    if b == 0 { Err(b) } else { Ok(a / b) }
+}
+
+let three_step(a: i64, b: i64, c: i64): Result<i64, i64> = {
+    let x = div(a, b)?
+    let y = div(x, c)?
+    Ok(y + 1)
+}
+
+let main() = {
+    match three_step(100, 5, 4) {
+    | Ok(v)  -> fmt.println("ok:", v)
+    | Err(e) -> fmt.println("err:", e)
+    }
+    match three_step(100, 0, 4) {
+    | Ok(v)  -> fmt.println("ok:", v)
+    | Err(e) -> fmt.println("err:", e)
+    }
+    match three_step(100, 5, 0) {
+    | Ok(v)  -> fmt.println("ok:", v)
+    | Err(e) -> fmt.println("err:", e)
+    }
+}

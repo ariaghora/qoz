@@ -1,0 +1,15 @@
+import std/fmt
+
+type Shape =
+    | Circle(f64)
+    | Square(f64)
+    | Triangle(f64, f64, f64)
+
+let describe(s: Shape): string =
+    match s {
+    | Shape.Circle(r) -> "circle"
+    }
+
+let main() = {
+    fmt.println(describe(Shape.Square(2.0)))
+}

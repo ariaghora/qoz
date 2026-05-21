@@ -1,0 +1,7 @@
+import std/fmt
+
+let main() = {
+    let x: i32 = 42
+    let msg = "Hello, world."
+    fmt.println(msg, x)
+}

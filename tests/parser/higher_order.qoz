@@ -1,0 +1,10 @@
+import std/fmt
+import std/collections as col
+
+let main() = {
+    let v = col.Vec.from([1, 2, 3, 4, 5])
+    let doubled = col.Vec.map(fun x -> x * 2, v)
+    let evens = col.Vec.filter(fun x -> x % 2 == 0, doubled)
+    let sum = col.Vec.fold(fun (acc, x) -> acc + x, 0, evens)
+    fmt.println("sum:", sum)
+}

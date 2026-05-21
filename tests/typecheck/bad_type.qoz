@@ -1,0 +1,6 @@
+import std/fmt
+
+let main() = {
+    let s: string = 42
+    fmt.println(s)
+}

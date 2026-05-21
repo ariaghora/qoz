@@ -1,0 +1,10 @@
+import std/fmt
+
+let identity<T>(x: T): T = x
+
+let main() = {
+    fmt.println("int:", identity(42))
+    fmt.println("str:", identity("hello"))
+    let a = identity(7)
+    fmt.println("a:", a)
+}

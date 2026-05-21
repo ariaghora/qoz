@@ -1,0 +1,107 @@
+// std/map: open-addressed hash table.
+//
+// Linear probing. The table grows by doubling when load reaches half capacity.
+// Slots are zero-initialised through mem.calloc, so `occupied` starts false
+// across every slot without an explicit init loop.
+
+import std/mem
+import std/strings
+
+type Slot<K, V> = {
+    key:      K,
+    value:    V,
+    occupied: bool,
+    deleted:  bool,
+}
+
+type Map<K, V> = {
+    slots: *Slot<K, V>,
+    len:   i64,
+    cap:   i64,
+}
+
+let make<K, V>(): Map<K, V> = Map { slots: nil, len: 0, cap: 0 }
+
+let probe<K, V>(m: *Map<K, V>, key: K): i64 = {
+    let h = hash(key)
+    var idx: i64 = (h % (m.cap as u64)) as i64
+    while m.slots[idx].occupied {
+        if !m.slots[idx].deleted {
+            if m.slots[idx].key == key {
+                return idx
+            }
+        }
+        idx = idx + 1
+        if idx == m.cap { idx = 0 }
+    }
+    idx
+}
+
+let insert_raw<K, V>(m: *Map<K, V>, key: K, value: V) = {
+    let idx = probe(m, key)
+    let was_occupied = m.slots[idx].occupied
+    m.slots[idx] = Slot { key: key, value: value, occupied: true, deleted: false }
+    if !was_occupied {
+        m.len = m.len + 1
+    }
+}
+
+let grow<K, V>(m: *Map<K, V>) = {
+    let old_slots = m.slots
+    let old_cap = m.cap
+    let new_cap = if m.cap == 0 { 8 } else { m.cap * 2 }
+    let new_slots = mem.calloc(new_cap * size_of(Slot<K, V>)) as *Slot<K, V>
+
+    m.slots = new_slots
+    m.cap = new_cap
+    m.len = 0
+
+    var j: i64 = 0
+    while j < old_cap {
+        let slot = old_slots[j]
+        if slot.occupied {
+            if !slot.deleted {
+                insert_raw(m, slot.key, slot.value)
+            }
+        }
+        j = j + 1
+    }
+}
+
+let insert<K, V>(m: *Map<K, V>, key: K, value: V) = {
+    if m.cap == 0 {
+        grow(m)
+    }
+    if m.len * 2 >= m.cap {
+        grow(m)
+    }
+    insert_raw(m, key, value)
+}
+
+@operator("[]=")
+let set<K, V>(m: *Map<K, V>, key: K, value: V) = insert(m, key, value)
+
+let get<K, V>(m: *Map<K, V>, key: K): Option<V> = {
+    if m.cap == 0 { return None }
+    let idx = probe(m, key)
+    if m.slots[idx].occupied {
+        if !m.slots[idx].deleted {
+            return Some(m.slots[idx].value)
+        }
+    }
+    None
+}
+
+let contains<K, V>(m: *Map<K, V>, key: K): bool = {
+    if m.cap == 0 { return false }
+    let idx = probe(m, key)
+    if m.slots[idx].occupied {
+        if !m.slots[idx].deleted {
+            return true
+        }
+    }
+    false
+}
+
+@operator("len")
+let len<K, V>(m: *Map<K, V>): i64 = m.len

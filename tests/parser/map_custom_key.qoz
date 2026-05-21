@@ -1,0 +1,51 @@
+import std/fmt
+import std/map
+import std/strings
+
+type Person = { id: i64, name: string }
+
+@operator("==")
+let person_eq(a: *Person, b: *Person): bool =
+    a.id == b.id && strings.eq_raw(a.name, b.name)
+
+@operator("hash")
+let person_hash(p: *Person): u64 =
+    (p.id as u64) + strings.hash_raw(p.name)
+
+let main() = {
+    var m: Map<Person, i64> = map.make()
+
+    let alice = Person { id: 1, name: "Alice" }
+    let bob   = Person { id: 2, name: "Bob" }
+    let carol = Person { id: 3, name: "Carol" }
+
+    m[alice] = 100
+    m[bob]   = 200
+    m[carol] = 300
+
+    fmt.println("len =", map.len(&m))
+
+    match map.get(&m, alice) {
+    | Some(v) -> fmt.println("alice =", v)
+    | None    -> fmt.println("alice missing")
+    }
+    match map.get(&m, bob) {
+    | Some(v) -> fmt.println("bob =", v)
+    | None    -> fmt.println("bob missing")
+    }
+    match map.get(&m, carol) {
+    | Some(v) -> fmt.println("carol =", v)
+    | None    -> fmt.println("carol missing")
+    }
+
+    let alice_again = Person { id: 1, name: "Alice" }
+    match map.get(&m, alice_again) {
+    | Some(v) -> fmt.println("alice_again =", v)
+    | None    -> fmt.println("alice_again missing")
+    }
+
+    let mallory = Person { id: 99, name: "Mallory" }
+    if !map.contains(&m, mallory) {
+        fmt.println("mallory not in map")
+    }
+}

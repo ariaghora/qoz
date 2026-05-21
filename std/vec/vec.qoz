@@ -1,0 +1,34 @@
+// std/vec: growable dynamic array backed by the GC.
+
+import std/mem
+
+type Vec<T> = {
+    data: *T,
+    len:  i64,
+    cap:  i64,
+}
+
+let make<T>(): Vec<T> = Vec { data: nil, len: 0, cap: 0 }
+
+let grow<T>(v: *Vec<T>) = {
+    let new_cap = if v.cap == 0 { 8 } else { v.cap * 2 }
+    let new_data = mem.realloc(v.data as *void, new_cap * size_of(T)) as *T
+    v.data = new_data
+    v.cap = new_cap
+}
+
+let push<T>(v: *Vec<T>, x: T) = {
+    if v.len == v.cap {
+        grow(v)
+    }
+    v.data[v.len] = x
+    v.len = v.len + 1
+}
+
+let get<T>(v: *Vec<T>, i: i64): T = v.data[i]
+
+@operator("[]")
+let index<T>(v: *Vec<T>, i: i64): T = v.data[i]
+
+@operator("len")
+let len<T>(v: *Vec<T>): i64 = v.len

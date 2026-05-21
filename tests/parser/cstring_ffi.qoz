@@ -1,0 +1,12 @@
+import std/fmt
+
+external let puts(s: cstring): i32
+
+@link_name("puts")
+external let say(s: cstring): i32
+
+let main() = {
+    puts("via bare name")
+    say("via @link_name alias")
+    fmt.println("done")
+}
