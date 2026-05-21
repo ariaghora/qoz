@@ -127,6 +127,12 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
         while l.pos < len(l.src) && is_digit(lex_at(l)) {
             lex_advance(l)
         }
+        if l.pos + 1 < len(l.src) && lex_at(l) == 46 && is_digit(strings.byte_at(l.src, l.pos + 1)) {
+            lex_advance(l)
+            while l.pos < len(l.src) && is_digit(lex_at(l)) {
+                lex_advance(l)
+            }
+        }
         return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 

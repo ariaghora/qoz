@@ -182,7 +182,37 @@ let parse_type(p: *Parser): TypeExpr = {
 
 // --- Expressions ---
 
-let parse_expr(p: *Parser): Expr = parse_logical_or(p)
+let parse_expr(p: *Parser): Expr = {
+    let lhs = parse_logical_or(p)
+    let t = peek(p)
+    let span = span_of(p, t)
+    if is_punct(t, "=") {
+        advance(p)
+        let rhs = parse_expr(p)
+        return EAssign(span, AOpSet, lhs, rhs)
+    }
+    if is_punct(t, "+=") {
+        advance(p)
+        let rhs = parse_expr(p)
+        return EAssign(span, AOpAddSet, lhs, rhs)
+    }
+    if is_punct(t, "-=") {
+        advance(p)
+        let rhs = parse_expr(p)
+        return EAssign(span, AOpSubSet, lhs, rhs)
+    }
+    if is_punct(t, "..<") {
+        advance(p)
+        let rhs = parse_logical_or(p)
+        return EBinary(span, BOpRange, lhs, rhs)
+    }
+    if is_punct(t, "..=") {
+        advance(p)
+        let rhs = parse_logical_or(p)
+        return EBinary(span, BOpRangeInclusive, lhs, rhs)
+    }
+    lhs
+}
 
 let parse_logical_or(p: *Parser): Expr = {
     var lhs = parse_logical_and(p)
@@ -324,6 +354,9 @@ let parse_atom(p: *Parser): Expr = {
     let span = span_of(p, t)
     if is_int_lit(t) {
         advance(p)
+        if strings.index_byte(t.text, 46) >= 0 {
+            return EFloat(span, t.text)
+        }
         return EInt(span, t.text)
     }
     if is_str_lit(t) {
@@ -355,9 +388,167 @@ let parse_atom(p: *Parser): Expr = {
     if is_punct(t, "{") {
         return parse_block(p)
     }
+    if is_kw(t, "if") {
+        return parse_if(p)
+    }
+    if is_kw(t, "while") {
+        return parse_while(p)
+    }
+    if is_kw(t, "for") {
+        return parse_for(p)
+    }
+    if is_kw(t, "match") {
+        return parse_match(p)
+    }
+    if is_kw(t, "return") {
+        return parse_return(p)
+    }
+    if is_kw(t, "defer") {
+        return parse_defer(p)
+    }
     err_unexpected(p, "expression", t)
     advance(p)
     return ENil(span)
+}
+
+let parse_if(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    let cond = parse_expr(p)
+    let then_b = parse_block(p)
+    var else_b: Expr = ENil(span)
+    if is_kw(peek(p), "else") {
+        advance(p)
+        if is_kw(peek(p), "if") {
+            else_b = parse_if(p)
+        } else {
+            else_b = parse_block(p)
+        }
+    }
+    EIf(span, cond, then_b, else_b)
+}
+
+let parse_while(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    let cond = parse_expr(p)
+    let body = parse_block(p)
+    EWhile(span, cond, body)
+}
+
+let parse_for(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    let binding = expect_ident(p)
+    if !is_kw(peek(p), "in") {
+        err_unexpected(p, "`in`", peek(p))
+    } else {
+        advance(p)
+    }
+    let iter = parse_expr(p)
+    let body = parse_block(p)
+    EFor(span, binding, iter, body)
+}
+
+let parse_match(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    let scrutinee = parse_expr(p)
+    expect_punct(p, "{")
+    var arms: Vec<MatchArm> = vec.make()
+    while is_punct(peek(p), "|") {
+        advance(p)
+        let pat = parse_pattern(p)
+        if !is_punct(peek(p), "->") {
+            err_unexpected(p, "`->` after pattern", peek(p))
+        } else {
+            advance(p)
+        }
+        let body = parse_expr(p)
+        vec.push(&arms, MatchArm { pat: pat, body: body })
+    }
+    expect_punct(p, "}")
+    EMatch(span, scrutinee, arms)
+}
+
+let parse_return(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    var value: Expr = ENil(span)
+    if !is_punct(peek(p), "}") && !is_punct(peek(p), ";") && !at_eof(p) {
+        value = parse_expr(p)
+    }
+    EReturn(span, value)
+}
+
+let parse_defer(p: *Parser): Expr = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    let body = parse_expr(p)
+    EDefer(span, body)
+}
+
+let parse_pattern(p: *Parser): Pattern = {
+    let t = peek(p)
+    let span = span_of(p, t)
+    if is_int_lit(t) {
+        advance(p)
+        return PatLitInt(span, t.text)
+    }
+    if is_str_lit(t) {
+        advance(p)
+        return PatLitString(span, t.text)
+    }
+    if is_kw(t, "true") {
+        advance(p)
+        return PatLitBool(span, true)
+    }
+    if is_kw(t, "false") {
+        advance(p)
+        return PatLitBool(span, false)
+    }
+    if is_ident(t) {
+        if strings.eq_raw(t.text, "_") {
+            advance(p)
+            return PatWild(span)
+        }
+        var path: Vec<string> = vec.make()
+        vec.push(&path, t.text)
+        advance(p)
+        while is_punct(peek(p), ".") {
+            advance(p)
+            let part = peek(p)
+            if is_ident(part) {
+                vec.push(&path, part.text)
+                advance(p)
+            }
+        }
+        var pos: Vec<Pattern> = vec.make()
+        if is_punct(peek(p), "(") {
+            advance(p)
+            if !is_punct(peek(p), ")") {
+                vec.push(&pos, parse_pattern(p))
+                while is_punct(peek(p), ",") {
+                    advance(p)
+                    vec.push(&pos, parse_pattern(p))
+                }
+            }
+            expect_punct(p, ")")
+        }
+        if len(path) == 1 && len(pos) == 0 {
+            return PatBind(span, path[0])
+        }
+        return PatVariant(span, path, pos)
+    }
+    err_unexpected(p, "pattern", t)
+    advance(p)
+    PatWild(span)
 }
 
 let parse_block(p: *Parser): Expr = {

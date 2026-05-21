@@ -3,11 +3,28 @@ import std/fmt
 type Shape =
     | Circle(f64)
     | Square(f64)
-    | Rect { width: f64, height: f64 }
-    | Origin
 
-type Option<T> =
-    | Some(T)
-    | None
+let describe(s: Shape): string = match s {
+| Circle(r)  -> "circle"
+| Square(_)  -> "square"
+}
 
-let area = 42
+let count(n: i64): i64 = {
+    var total: i64 = 0
+    for i in 0..<n {
+        total = total + 1
+    }
+    while total < n {
+        total = total + 1
+    }
+    if total > 100 {
+        return 100
+    }
+    total
+}
+
+let main() = {
+    defer fmt.println("bye")
+    fmt.println(describe(Circle(1.0)))
+    fmt.println(count(10))
+}
