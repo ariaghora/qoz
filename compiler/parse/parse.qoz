@@ -765,6 +765,31 @@ let parse_top_let(p: *Parser): Decl = {
 }
 
 let parse_decl(p: *Parser): Decl = {
+    var attr_link_name = ""
+    var attr_operator = ""
+    while is_punct(peek(p), "@") {
+        advance(p)
+        let name = expect_ident(p)
+        var arg = ""
+        if is_punct(peek(p), "(") {
+            advance(p)
+            let a = peek(p)
+            if is_str_lit(a) {
+                advance(p)
+                arg = strip_quotes(a.text)
+            } else if is_ident(a) {
+                advance(p)
+                arg = a.text
+            }
+            expect_punct(p, ")")
+        }
+        if strings.eq_raw(name, "link_name") {
+            attr_link_name = arg
+        } else if strings.eq_raw(name, "operator") {
+            attr_operator = arg
+        }
+    }
+
     let t = peek(p)
     if is_kw(t, "import") {
         return parse_import(p)
@@ -772,13 +797,86 @@ let parse_decl(p: *Parser): Decl = {
     if is_kw(t, "type") {
         return parse_top_type(p)
     }
+    if is_kw(t, "external") {
+        return parse_external(p, attr_link_name)
+    }
     if is_kw(t, "let") {
-        return parse_top_let(p)
+        return parse_top_let_with_op(p, attr_operator)
+    }
+    if is_punct(t, "#") {
+        return parse_link_directive(p)
     }
     err_unexpected(p, "top-level declaration", t)
     advance(p)
     let span = span_of(p, t)
     DConst(span, "<error>", TEUnit(span), ENil(span))
+}
+
+let strip_quotes(s: string): string = {
+    let n = len(s)
+    if n >= 2 && strings.byte_at(s, 0) == 34 && strings.byte_at(s, n - 1) == 34 {
+        return strings.slice(s, 1, n - 1)
+    }
+    s
+}
+
+let parse_external(p: *Parser, link_name: string): Decl = {
+    let kw_tok = peek(p)
+    let span = span_of(p, kw_tok)
+    advance(p)
+    if !is_kw(peek(p), "let") {
+        err_unexpected(p, "`let` after `external`", peek(p))
+    } else {
+        advance(p)
+    }
+    let name = expect_ident(p)
+    let symbol = if strings.eq_raw(link_name, "") { name } else { link_name }
+    let params = parse_fn_params(p)
+    var ret_ty: TypeExpr = TEUnit(span)
+    if is_punct(peek(p), ":") {
+        advance(p)
+        ret_ty = parse_type(p)
+    }
+    DExternal(span, name, symbol, params, ret_ty)
+}
+
+let parse_top_let_with_op(p: *Parser, operator: string): Decl = {
+    let d = parse_top_let(p)
+    if strings.eq_raw(operator, "") {
+        return d
+    }
+    match d {
+    | DImport(_, _, _) -> d
+    | DStruct(_, _, _, _) -> d
+    | DEnum(_, _, _, _) -> d
+    | DTypeAlias(_, _, _, _) -> d
+    | DConst(_, _, _, _) -> d
+    | DExternal(_, _, _, _, _) -> d
+    | DLink(_, _, _) -> d
+    | DFn(s, n, tps, ps, ret, body, _) -> DFn(s, n, tps, ps, ret, body, operator)
+    }
+}
+
+let parse_link_directive(p: *Parser): Decl = {
+    let hash_tok = peek(p)
+    let span = span_of(p, hash_tok)
+    advance(p)
+    let name = expect_ident(p)
+    expect_punct(p, "(")
+    let arg = peek(p)
+    var lib_name = ""
+    if is_str_lit(arg) {
+        advance(p)
+        lib_name = strip_quotes(arg.text)
+    } else {
+        err_unexpected(p, "string literal", arg)
+    }
+    expect_punct(p, ")")
+    var kind: LinkKind = LinkLibrary
+    if strings.eq_raw(name, "link_framework") {
+        kind = LinkFramework
+    }
+    DLink(span, kind, lib_name)
 }
 
 let run(tokens: Vec<Token>, file: string): File = {
