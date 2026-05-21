@@ -46,6 +46,24 @@ type Pending = {
     pkg:  string,
 }
 
+let prelude_segs(path: string): Vec<string> = {
+    var v: Vec<string> = vec.make()
+    var cur = ""
+    var i: i64 = 0
+    while i < len(path) {
+        let c = strings.byte_at(path, i)
+        if c == 47 {
+            vec.push(&v, cur)
+            cur = ""
+        } else {
+            cur = strings.cat(cur, strings.slice(path, i, i + 1))
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { vec.push(&v, cur) }
+    v
+}
+
 let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
     if len(segs) < 1 { return "" }
     let last = segs[len(segs) - 1]
@@ -163,6 +181,18 @@ let load_all(entry: string, qoz_root: string): Loaded = {
     var visited: Map<string, bool> = map.make()
     var aggregated_decls: Vec<Decl> = vec.make()
     var sources: Vec<string> = vec.make()
+    // Prelude: Option and Result are automatically in scope without an
+    // import. They are loaded with an empty pkg so their decls live at
+    // top-level names (Option, Result, Some, None, Ok, Err).
+    var prelude_paths: Vec<string> = vec.make()
+    vec.push(&prelude_paths, "std/option")
+    vec.push(&prelude_paths, "std/result")
+    for pp in prelude_paths {
+        let resolved = resolve_import_path(prelude_segs(pp), qoz_root)
+        if !strings.eq_raw(resolved, "") && !map.contains(&visited, resolved) {
+            vec.push(&queue, Pending { path: resolved, pkg: "" })
+        }
+    }
     vec.push(&queue, Pending { path: entry, pkg: "" })
     var qi: i64 = 0
     while qi < len(queue) {

@@ -14,6 +14,8 @@ typedef struct {
 
 void qoz_init(int *stack_anchor);
 void qoz_shutdown(void);
+void qoz_gc_pause(void);
+void qoz_gc_resume(void);
 
 /* Allocation */
 void *qoz_alloc(int64_t size);

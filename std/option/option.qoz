@@ -1,0 +1,9 @@
+// std/option: optional values.
+//
+// Option<T> is automatically registered as a prelude type by the
+// compiler, so user code does not need to import it. The definition is
+// provided here as the canonical source.
+
+type Option<T> =
+    | Some(T)
+    | None

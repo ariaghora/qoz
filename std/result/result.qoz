@@ -1,0 +1,8 @@
+// std/result: success/error values.
+//
+// Result<T, E> is automatically registered as a prelude type by the
+// compiler.
+
+type Result<T, E> =
+    | Ok(T)
+    | Err(E)

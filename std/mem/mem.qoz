@@ -11,3 +11,9 @@ external let calloc(size: i64): *void
 
 @link_name("qoz_realloc")
 external let realloc(ptr: *void, size: i64): *void
+
+@link_name("qoz_gc_pause")
+external let gc_pause()
+
+@link_name("qoz_gc_resume")
+external let gc_resume()

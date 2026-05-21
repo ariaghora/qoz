@@ -183,6 +183,14 @@ void qoz_shutdown(void) {
     tgc_stop(&qoz_gc);
 }
 
+void qoz_gc_pause(void) {
+    tgc_pause(&qoz_gc);
+}
+
+void qoz_gc_resume(void) {
+    tgc_resume(&qoz_gc);
+}
+
 void *qoz_alloc(int64_t size) {
     return tgc_alloc(&qoz_gc, (size_t)size);
 }

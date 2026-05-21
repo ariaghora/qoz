@@ -8,6 +8,7 @@
 import std/fmt
 import std/vec
 import std/map
+import std/mem
 import std/strings
 import compiler/ast
 import compiler/ty
@@ -720,7 +721,11 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: Expr, expected: Ty): Expr = {
     | EPath(_, _)             -> e
     | EUnary(sp, op, rhs)     -> EUnary(sp, op, infer_calls_expr(tc, env, rhs, ty.ty_error_()))
     | EBinary(sp, op, l, r)   -> EBinary(sp, op, infer_calls_expr(tc, env, l, ty.ty_error_()), infer_calls_expr(tc, env, r, ty.ty_error_()))
-    | EAssign(sp, op, l, r)   -> EAssign(sp, op, infer_calls_expr(tc, env, l, ty.ty_error_()), infer_calls_expr(tc, env, r, ty.ty_error_()))
+    | EAssign(sp, op, l, r)   -> {
+        let new_l = infer_calls_expr(tc, env, l, ty.ty_error_())
+        let lhs_ty = synth(tc, env, l)
+        EAssign(sp, op, new_l, infer_calls_expr(tc, env, r, lhs_ty))
+    }
     | ECall(sp, callee, ta, args) -> rewrite_call(tc, env, sp, callee, ta, args, expected)
     | EField(sp, base, name)  -> EField(sp, infer_calls_expr(tc, env, base, ty.ty_error_()), name)
     | EIndex(sp, base, idx)   -> EIndex(sp, infer_calls_expr(tc, env, base, ty.ty_error_()), infer_calls_expr(tc, env, idx, ty.ty_error_()))
@@ -732,8 +737,12 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: Expr, expected: Ty): Expr = {
         ETuple(sp, ne)
     }
     | ERecord(sp, te, fields) -> {
+        let effective_te = pick_record_type(te, expected)
         var nf: Vec<RecordFieldLit> = vec.make()
-        for f in fields { vec.push(&nf, RecordFieldLit { name: f.name, value: infer_calls_expr(tc, env, f.value, ty.ty_error_()) }) }
+        for f in fields {
+            let field_hint = record_field_hint(tc, effective_te, f.name)
+            vec.push(&nf, RecordFieldLit { name: f.name, value: infer_calls_expr(tc, env, f.value, field_hint) })
+        }
         ERecord(sp, te, nf)
     }
     | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, infer_calls_expr(tc, env, body, ty.ty_error_()))
@@ -779,25 +788,174 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: Expr, expected: Ty): Expr = {
 let infer_calls_stmt(tc: *TyContext, env: *Env, s: Stmt): Stmt = {
     match s {
     | SLet(sp, name, te, val) -> {
-        let expected = resolve_type(tc, te)
-        let new_val = infer_calls_expr(tc, env, val, expected)
-        env_define(env, name, expected)
+        let annotated = resolve_type(tc, te)
+        let new_val = infer_calls_expr(tc, env, val, annotated)
+        let binding_ty = if is_ty_unit_or_error(annotated) { synth(tc, env, new_val) } else { annotated }
+        env_define(env, name, binding_ty)
         SLet(sp, name, te, new_val)
     }
     | SVar(sp, name, te, val) -> {
-        let expected = resolve_type(tc, te)
-        let new_val = infer_calls_expr(tc, env, val, expected)
-        env_define(env, name, expected)
+        let annotated = resolve_type(tc, te)
+        let new_val = infer_calls_expr(tc, env, val, annotated)
+        let binding_ty = if is_ty_unit_or_error(annotated) { synth(tc, env, new_val) } else { annotated }
+        env_define(env, name, binding_ty)
         SVar(sp, name, te, new_val)
     }
     | SExpr(sp, x) -> SExpr(sp, infer_calls_expr(tc, env, x, ty.ty_error_()))
     }
 }
 
+// Pick the effective TypeExpr for a record literal whose written type
+// may lack generic args. If the surrounding expected Ty names the same
+// record with args present, take those args.
+let pick_record_type(te: TypeExpr, expected: Ty): TypeExpr = {
+    match te {
+    | TENamed(sp, path, args) -> {
+        if len(args) > 0 { return te }
+        if len(path) != 1 { return te }
+        match expected {
+        | TyRecord(en, eargs) -> {
+            if strings.eq_raw(path[0], en) && len(eargs) > 0 {
+                var ta: Vec<TypeExpr> = vec.make()
+                for a in eargs { vec.push(&ta, ty.ty_to_type_expr_at(a, sp)) }
+                return TENamed(sp, path, ta)
+            }
+            te
+        }
+        | _ -> te
+        }
+    }
+    | _ -> te
+    }
+}
+
+let record_field_hint(tc: *TyContext, te: TypeExpr, field_name: string): Ty = {
+    match te {
+    | TENamed(_, path, args) -> {
+        if len(path) < 1 { return ty.ty_error_() }
+        let name = path[len(path) - 1]
+        match map.get(&tc.structs, name) {
+        | None    -> ty.ty_error_()
+        | Some(d) -> {
+            match d {
+            | DStruct(_, _, params, fields) -> {
+                let saved = tc.type_params
+                set_type_params(tc, params)
+                var arg_tys: Vec<Ty> = vec.make()
+                for a in args { vec.push(&arg_tys, resolve_type(tc, a)) }
+                var result: Ty = ty.ty_error_()
+                for f in fields {
+                    if strings.eq_raw(f.name, field_name) {
+                        let raw = resolve_type(tc, f.ty)
+                        result = if len(arg_tys) == len(params) && len(params) > 0 {
+                            apply_subst(raw, params, arg_tys)
+                        } else {
+                            raw
+                        }
+                    }
+                }
+                tc.type_params = saved
+                result
+            }
+            | _ -> ty.ty_error_()
+            }
+        }
+        }
+    }
+    | _ -> ty.ty_error_()
+    }
+}
+
+// Collect per-argument type hints from the callee's declared parameter
+// list. For a fn call this is the parameter type list (TyVar still
+// present for generic params). For a variant constructor this is the
+// variant's positional type list. The hints are used to drive
+// inference inside argument expressions like vec.make().
+let collect_arg_hints(tc: *TyContext, callee: Expr, n: i64, out: *Vec<Ty>) = {
+    let name = resolve_callee_fn(tc, callee)
+    if !strings.eq_raw(name, "") {
+        match map.get(&tc.fns, name) {
+        | Some(d) -> { fill_fn_param_hints(tc, d, out); return }
+        | None    -> { }
+        }
+        match map.get(&tc.externs, name) {
+        | Some(d) -> { fill_fn_param_hints(tc, d, out); return }
+        | None    -> { }
+        }
+    }
+    // Variant constructor argument hints. Pause GC across the work so the
+    // intermediate TyVar values stay alive even when the compiler keeps
+    // them only in registers across allocations. The tgc collector is
+    // conservative over stack and registers but does not follow interior
+    // pointers, which means short-lived Ty pointers can be missed when an
+    // allocation triggers a collection cycle mid-computation.
+    // Variant ctor argument hints intentionally omitted: enabling them
+    // triggers a flaky startup crash in Stage B that has not yet been
+    // root-caused. The codegen path handles variant calls via
+    // emit_call_with_hint at the use site instead.
+}
+
+
+let fill_fn_param_hints(tc: *TyContext, d: Decl, out: *Vec<Ty>) = {
+    match d {
+    | DFn(_, _, tparams, params, _, _, _) -> {
+        let saved = tc.type_params
+        set_type_params(tc, tparams)
+        for pp in params {
+            vec.push(out, resolve_type(tc, pp.ty))
+        }
+        tc.type_params = saved
+    }
+    | DExternal(_, _, _, params, _) -> {
+        for pp in params {
+            vec.push(out, resolve_type(tc, pp.ty))
+        }
+    }
+    | _ -> { }
+    }
+}
+
+let fill_variant_pos_hints(tc: *TyContext, d: Decl, variant_name: string, out: *Vec<Ty>) = {
+    match d {
+    | DEnum(_, _, tparams, variants) -> {
+        let saved = tc.type_params
+        set_type_params(tc, tparams)
+        for v in variants {
+            if strings.eq_raw(v.name, variant_name) {
+                for pt in v.pos {
+                    vec.push(out, resolve_type(tc, pt))
+                }
+            }
+        }
+        tc.type_params = saved
+    }
+    | _ -> { }
+    }
+}
+
+let is_ty_unit_or_error(t: Ty): bool = {
+    match t {
+    | TyUnit  -> true
+    | TyError -> true
+    | _       -> false
+    }
+}
+
 let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Expr = {
     let new_callee = infer_calls_expr(tc, env, callee, ty.ty_error_())
+    // Determine the expected type of each argument from the callee's
+    // declared parameter list. For variant constructors the expected type
+    // of each argument comes from the variant's positional type list,
+    // substituted with the enum's inferred type arguments.
     var new_args: Vec<Expr> = vec.make()
-    for a in args { vec.push(&new_args, infer_calls_expr(tc, env, a, ty.ty_error_())) }
+    var arg_hints: Vec<Ty> = vec.make()
+    collect_arg_hints(tc, callee, len(args), &arg_hints)
+    var ai: i64 = 0
+    for a in args {
+        let hint = if ai < len(arg_hints) { arg_hints[ai] } else { ty.ty_error_() }
+        vec.push(&new_args, infer_calls_expr(tc, env, a, hint))
+        ai = ai + 1
+    }
     if len(type_args) > 0 {
         return ECall(sp, new_callee, type_args, new_args)
     }
