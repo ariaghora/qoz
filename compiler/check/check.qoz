@@ -83,3 +83,98 @@ let summary(tc: *TyContext) = {
     fmt.println(fmt.format("packages: {}", len(tc.packages)))
     fmt.println(fmt.format("errors:   {}", len(tc.errors)))
 }
+
+// --- Type resolution ---
+
+let resolve_type(tc: *TyContext, te: TypeExpr): Ty = {
+    match te {
+    | TEUnit(_)                  -> ty.ty_unit_()
+    | TEPtr(_, inner)            -> ty.ty_ptr_(resolve_type(tc, inner))
+    | TETuple(_, _)              -> ty.ty_error_()
+    | TENamed(span, path, args)  -> resolve_named(tc, span, path, args)
+    }
+}
+
+let resolve_named(tc: *TyContext, span: Span, path: Vec<string>, args: Vec<TypeExpr>): Ty = {
+    if len(path) != 1 {
+        record_error(tc, span, "qualified type paths are not yet resolved in Stage B")
+        return ty.ty_error_()
+    }
+    let name = path[0]
+    if strings.eq_raw(name, "i8")     { return ty.ty_int_(8,  true) }
+    if strings.eq_raw(name, "i16")    { return ty.ty_int_(16, true) }
+    if strings.eq_raw(name, "i32")    { return ty.ty_int_(32, true) }
+    if strings.eq_raw(name, "i64")    { return ty.ty_int_(64, true) }
+    if strings.eq_raw(name, "u8")     { return ty.ty_int_(8,  false) }
+    if strings.eq_raw(name, "u16")    { return ty.ty_int_(16, false) }
+    if strings.eq_raw(name, "u32")    { return ty.ty_int_(32, false) }
+    if strings.eq_raw(name, "u64")    { return ty.ty_int_(64, false) }
+    if strings.eq_raw(name, "f32")    { return ty.ty_float_(32) }
+    if strings.eq_raw(name, "f64")    { return ty.ty_float_(64) }
+    if strings.eq_raw(name, "bool")   { return ty.ty_bool_() }
+    if strings.eq_raw(name, "char")   { return ty.ty_char_() }
+    if strings.eq_raw(name, "string") { return ty.ty_string_() }
+    if strings.eq_raw(name, "cstring"){ return ty.ty_cstring_() }
+    if strings.eq_raw(name, "unit")   { return ty.ty_unit_() }
+    if strings.eq_raw(name, "void")   { return ty.ty_unit_() }
+    var resolved_args: Vec<Ty> = vec.make()
+    for a in args {
+        vec.push(&resolved_args, resolve_type(tc, a))
+    }
+    if map.contains(&tc.enums, name) {
+        return ty.ty_adt_(name, resolved_args)
+    }
+    if map.contains(&tc.structs, name) {
+        return ty.ty_record_(name, resolved_args)
+    }
+    if map.contains(&tc.aliases, name) {
+        // For Stage B, leave aliases as named records until we add unfolding.
+        return ty.ty_record_(name, resolved_args)
+    }
+    record_error(tc, span, fmt.format("unknown type `{}`", name))
+    ty.ty_error_()
+}
+
+// --- Symbol kind sanity check ---
+
+let validate_signatures(tc: *TyContext, f: File) = {
+    for d in f.decls {
+        match d {
+        | DFn(_, _, _, params, ret, _, _) -> {
+            for pp in params {
+                let _ = resolve_type(tc, pp.ty)
+            }
+            let _ = resolve_type(tc, ret)
+        }
+        | DExternal(_, _, _, params, ret) -> {
+            for pp in params {
+                let _ = resolve_type(tc, pp.ty)
+            }
+            let _ = resolve_type(tc, ret)
+        }
+        | DStruct(_, _, _, fields) -> {
+            for fld in fields {
+                let _ = resolve_type(tc, fld.ty)
+            }
+        }
+        | DEnum(_, _, _, variants) -> {
+            for v in variants {
+                for pp in v.pos {
+                    let _ = resolve_type(tc, pp)
+                }
+                for nf in v.named {
+                    let _ = resolve_type(tc, nf.ty)
+                }
+            }
+        }
+        | DTypeAlias(_, _, _, target) -> {
+            let _ = resolve_type(tc, target)
+        }
+        | DConst(_, _, ty, _) -> {
+            let _ = resolve_type(tc, ty)
+        }
+        | DImport(_, _, _) -> { }
+        | DLink(_, _, _) -> { }
+        }
+    }
+}
