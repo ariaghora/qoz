@@ -1,15 +1,18 @@
 import std/fmt
 
+type Shape =
+    | Circle(i64)
+    | Square(i64)
+    | Origin
+
+let area_of(s: Shape): i64 = match s {
+| Circle(r)  -> r * r
+| Square(s2) -> s2 * s2
+| Origin     -> 0
+}
+
 let main() = {
-    var i: i64 = 0
-    var total: i64 = 0
-    while i < 5 {
-        total = total + i
-        i = i + 1
-    }
-    if total > 10 {
-        fmt.println("big", total)
-    } else {
-        fmt.println("small", total)
-    }
+    fmt.println(area_of(Circle(5)))
+    fmt.println(area_of(Square(3)))
+    fmt.println(area_of(Origin))
 }
