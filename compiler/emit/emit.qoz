@@ -10,13 +10,31 @@
 import std/fmt
 import std/strings
 import std/vec
+import std/map
 import compiler/ast
 
 type Emitter = {
-    out: Vec<string>,
+    out:        Vec<string>,
+    variant_of: Map<string, string>,  // bare variant name -> enum name (unique only)
 }
 
-let make_emitter(): Emitter = Emitter { out: vec.make() }
+let make_emitter(): Emitter = Emitter {
+    out:        vec.make(),
+    variant_of: map.make(),
+}
+
+let register_variants(e: *Emitter, file: File) = {
+    for d in file.decls {
+        match d {
+        | DEnum(_, name, _, variants) -> {
+            for v in variants {
+                e.variant_of[v.name] = name
+            }
+        }
+        | _ -> { }
+        }
+    }
+}
 
 let push(e: *Emitter, s: string) = {
     vec.push(&e.out, s)
@@ -91,7 +109,18 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | EFloat(_, text)   -> push(e, text)
     | EBool(_, v)       -> push(e, if v { "true" } else { "false" })
     | ENil(_)           -> push(e, "NULL")
-    | EIdent(_, name)   -> push(e, name)
+    | EIdent(_, name)   -> {
+        match map.get(&e.variant_of, name) {
+        | Some(enum_name) -> {
+            push(e, "qoz_make_")
+            push(e, enum_name)
+            push(e, "_")
+            push(e, name)
+            push(e, "()")
+        }
+        | None -> push(e, name)
+        }
+    }
     | EString(_, text)  -> {
         push(e, "QOZ_STR_LIT(")
         push(e, text)
@@ -185,6 +214,30 @@ let emit_call(e: *Emitter, callee: Expr, args: Vec<Expr>) = {
     if path_is(callee, "fmt", "println") {
         emit_println(e, args)
         return
+    }
+    // Variant constructor call: replace ident with qoz_make_<Enum>_<Variant>
+    match callee {
+    | EIdent(_, name) -> {
+        match map.get(&e.variant_of, name) {
+        | Some(enum_name) -> {
+            push(e, "qoz_make_")
+            push(e, enum_name)
+            push(e, "_")
+            push(e, name)
+            push(e, "(")
+            var i: i64 = 0
+            for a in args {
+                if i > 0 { push(e, ", ") }
+                emit_expr(e, a)
+                i = i + 1
+            }
+            push(e, ")")
+            return
+        }
+        | None -> { }
+        }
+    }
+    | _ -> { }
     }
     emit_expr(e, callee)
     push(e, "(")
@@ -315,6 +368,7 @@ let is_main(name: string): bool = strings.eq_raw(name, "main")
 
 let emit_program(f: File): string = {
     var e = make_emitter()
+    register_variants(&e, f)
     push(&e, "#include \"qoz_runtime.h\"\n\n")
     // Forward declarations: records and enums.
     for d in f.decls {

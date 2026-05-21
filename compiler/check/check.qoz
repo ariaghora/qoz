@@ -18,23 +18,25 @@ type TypeError = {
 }
 
 type TyContext = {
-    enums:    Map<string, Decl>,
-    structs:  Map<string, Decl>,
-    aliases:  Map<string, Decl>,
-    fns:      Map<string, Decl>,
-    externs:  Map<string, Decl>,
-    packages: Map<string, bool>,
-    errors:   Vec<TypeError>,
+    enums:       Map<string, Decl>,
+    structs:     Map<string, Decl>,
+    aliases:     Map<string, Decl>,
+    fns:         Map<string, Decl>,
+    externs:     Map<string, Decl>,
+    packages:    Map<string, bool>,
+    variant_of:  Map<string, string>,
+    errors:      Vec<TypeError>,
 }
 
 let make_ctx(): TyContext = TyContext {
-    enums:    map.make(),
-    structs:  map.make(),
-    aliases:  map.make(),
-    fns:      map.make(),
-    externs:  map.make(),
-    packages: map.make(),
-    errors:   vec.make(),
+    enums:      map.make(),
+    structs:    map.make(),
+    aliases:    map.make(),
+    fns:        map.make(),
+    externs:    map.make(),
+    packages:   map.make(),
+    variant_of: map.make(),
+    errors:     vec.make(),
 }
 
 let record_error(tc: *TyContext, span: Span, msg: string) = {
@@ -52,7 +54,12 @@ let register_decl(tc: *TyContext, d: Decl) = {
         }
         tc.packages[name] = true
     }
-    | DEnum(_, name, _, _)            -> { tc.enums[name] = d }
+    | DEnum(_, name, _, variants)     -> {
+        tc.enums[name] = d
+        for v in variants {
+            tc.variant_of[v.name] = name
+        }
+    }
     | DStruct(_, name, _, _)          -> { tc.structs[name] = d }
     | DTypeAlias(_, name, _, _)       -> { tc.aliases[name] = d }
     | DFn(_, name, _, _, _, _, _)     -> { tc.fns[name] = d }
@@ -212,6 +219,12 @@ let synth_ident(tc: *TyContext, env: *Env, span: Span, name: string): Ty = {
     }
     if map.contains(&tc.externs, name) {
         return ty.ty_error_()
+    }
+    match map.get(&tc.variant_of, name) {
+    | Some(enum_name) -> {
+        return ty.ty_adt_(enum_name, vec.make())
+    }
+    | None -> { }
     }
     record_error(tc, span, fmt.format("undefined name `{}`", name))
     ty.ty_error_()
