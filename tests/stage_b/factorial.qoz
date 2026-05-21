@@ -1,6 +1,5 @@
 // expect: 120
-//
-// Iterative factorial using a while loop and a mutable accumulator.
+// Iterative factorial via while loop.
 
 let main(): i64 = {
     var n: i64 = 5

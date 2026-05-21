@@ -1,0 +1,11 @@
+// expect: 12
+// One generic fn called with i64 and i32 must emit both instantiations.
+
+let identity<T>(x: T): T = x
+
+let main(): i64 = {
+    let a: i64 = identity(5)
+    let b: i32 = identity(3)
+    let c: i64 = identity(4)
+    a + (b as i64) + c
+}

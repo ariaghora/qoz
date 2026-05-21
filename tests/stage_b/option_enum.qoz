@@ -1,8 +1,5 @@
 // expect: 5
-//
-// Generic ADT Option<T> exercises enum monomorphisation. The unwrap_or
-// helper is generic and called with no turbofish; T is inferred from the
-// argument and from the default value's type.
+// Generic ADT Option<T> with match and inferred unwrap_or.
 
 type Option<T> =
     | Some(T)

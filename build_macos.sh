@@ -1,1 +1,0 @@
-odin build . -o:speed -out:qoz.exe

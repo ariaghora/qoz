@@ -1,8 +1,4 @@
 // compiler/main: Stage B driver.
-//
-// Reads a Qoz source file, tokenizes via compiler/tokenize, parses via
-// compiler/parse, and prints a summary of the resulting AST. As Stage B
-// grows, this driver will gain type checking, lowering, and codegen.
 
 import std/fmt
 import std/fs
@@ -95,12 +91,7 @@ let rename_with_pkg(d: Decl, pkg: string, local_fns: Map<string, bool>): Decl = 
     }
 }
 
-// When a non-root file's DFn body refers to another decl of the same
-// package by its bare name (a sibling call site like `grow(v)` inside
-// push), rewrite the identifier to the package-prefixed name that the
-// loader assigned. Local variables shadow this rewrite by not appearing
-// in local_fns. Type expressions are not touched (struct/enum names are
-// not prefixed).
+// Rewrite intra-package call sites in a fn body to the prefixed C name.
 let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr = {
     match e {
     | EInt(_, _)              -> e
@@ -181,9 +172,7 @@ let load_all(entry: string, qoz_root: string): Loaded = {
     var visited: Map<string, bool> = map.make()
     var aggregated_decls: Vec<Decl> = vec.make()
     var sources: Vec<string> = vec.make()
-    // Prelude: Option and Result are automatically in scope without an
-    // import. They are loaded with an empty pkg so their decls live at
-    // top-level names (Option, Result, Some, None, Ok, Err).
+    // Prelude: Option and Result are in scope without an import.
     var prelude_paths: Vec<string> = vec.make()
     vec.push(&prelude_paths, "std/option")
     vec.push(&prelude_paths, "std/result")
@@ -215,8 +204,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     vec.push(sources, src)
     let tokens = tokenize.run(src)
     let file = parse.run(tokens, cur.path)
-    // First pass: collect the set of fn/extern names defined in this file so
-    // intra-package call sites can be rewritten to the package-prefixed name.
+    // First pass collects fn/extern names defined in this file.
     var local_fns: Map<string, bool> = map.make()
     for d in file.decls {
         match d {

@@ -1,10 +1,5 @@
 // expect: 42
-//
-// Cross-package call: cross_pkg.identity is generic, and the type
-// argument is inferred from the argument (no turbofish). The loader
-// renames the imported fn to cross_pkg_identity; the emitter dispatches
-// the EField(EIdent("cross_pkg"), "identity") call site to that name
-// and registers an int64_t instantiation.
+// Cross-package generic call with inferred T.
 
 import tests/stage_b/cross_pkg
 

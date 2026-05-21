@@ -1,8 +1,5 @@
 // expect: 7
-//
-// Generic Result<T, E> with two arms, exercises ADT monomorphisation with
-// two type parameters and pattern bindings that come from different
-// variant positions.
+// Generic Result<T, E> with two arms and pattern binding.
 
 type Result<T, E> =
     | Ok(T)

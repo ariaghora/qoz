@@ -1,9 +1,4 @@
-// compiler/check: Stage B type checker (scaffold).
-//
-// Phase one: register top-level declarations (enums, structs, fns, externs,
-// aliases) into a TyContext. The fuller bidirectional inference will be
-// layered on top in subsequent commits, following the shape of Stage A's
-// infer.odin but using `match` and `?` to keep the code tight.
+// compiler/check: Stage B type checker.
 
 import std/fmt
 import std/vec
@@ -454,10 +449,7 @@ let unify(pattern: Ty, concrete: Ty, env: *Map<string, Ty>): bool = {
     }
 }
 
-// When a type parameter is already bound to a concrete type, a later
-// argument may carry an untyped numeric literal that fits the concrete
-// type. Accept that. If the later argument is concrete and the binding
-// was untyped, refine the binding to the concrete type.
+// Untyped numeric literals refine to the bound concrete type.
 let compatible_or_refine(env: *Map<string, Ty>, name: string, prior: Ty, concrete: Ty): bool = {
     if ty.ty_eq(prior, concrete) { return true }
     match prior {
@@ -586,10 +578,6 @@ let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty
     result
 }
 
-// Bind for-loop variables in the env. For a Vec or array iter, the single
-// binding takes the element type. For Map iter (with binding2 set), the
-// first is the key, the second is the value. For a range iter, the binding
-// is i64.
 let bind_for_loop(env: *Env, b1: string, b2: string, it_ty: Ty) = {
     if strings.eq_raw(b2, "") {
         match it_ty {
@@ -675,9 +663,7 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, path: Vec<string>, sub_pats:
     }
 }
 
-// Walks the AST, runs inference at each ECall site, and returns a new File
-// where every ECall whose callee is a generic function has its type-args
-// populated. Calls to non-generic functions and externs are left untouched.
+// Returns a new File with type-args filled in at every generic call site.
 let infer_calls(tc: *TyContext, f: File): File = {
     var new_decls: Vec<Decl> = vec.make()
     for d in f.decls {
@@ -805,9 +791,6 @@ let infer_calls_stmt(tc: *TyContext, env: *Env, s: Stmt): Stmt = {
     }
 }
 
-// Pick the effective TypeExpr for a record literal whose written type
-// may lack generic args. If the surrounding expected Ty names the same
-// record with args present, take those args.
 let pick_record_type(te: TypeExpr, expected: Ty): TypeExpr = {
     match te {
     | TENamed(sp, path, args) -> {
@@ -866,11 +849,6 @@ let record_field_hint(tc: *TyContext, te: TypeExpr, field_name: string): Ty = {
     }
 }
 
-// Collect per-argument type hints from the callee's declared parameter
-// list. For a fn call this is the parameter type list (TyVar still
-// present for generic params). For a variant constructor this is the
-// variant's positional type list. The hints are used to drive
-// inference inside argument expressions like vec.make().
 let collect_arg_hints(tc: *TyContext, callee: Expr, n: i64, out: *Vec<Ty>) = {
     let name = resolve_callee_fn(tc, callee)
     if !strings.eq_raw(name, "") {
@@ -883,16 +861,7 @@ let collect_arg_hints(tc: *TyContext, callee: Expr, n: i64, out: *Vec<Ty>) = {
         | None    -> { }
         }
     }
-    // Variant constructor argument hints. Pause GC across the work so the
-    // intermediate TyVar values stay alive even when the compiler keeps
-    // them only in registers across allocations. The tgc collector is
-    // conservative over stack and registers but does not follow interior
-    // pointers, which means short-lived Ty pointers can be missed when an
-    // allocation triggers a collection cycle mid-computation.
-    // Variant ctor argument hints intentionally omitted: enabling them
-    // triggers a flaky startup crash in Stage B that has not yet been
-    // root-caused. The codegen path handles variant calls via
-    // emit_call_with_hint at the use site instead.
+    // Variant ctor argument hints are handled at emit time instead.
 }
 
 
@@ -943,10 +912,7 @@ let is_ty_unit_or_error(t: Ty): bool = {
 
 let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Expr = {
     let new_callee = infer_calls_expr(tc, env, callee, ty.ty_error_())
-    // Determine the expected type of each argument from the callee's
-    // declared parameter list. For variant constructors the expected type
-    // of each argument comes from the variant's positional type list,
-    // substituted with the enum's inferred type arguments.
+    // Argument expected types come from the callee's parameter list.
     var new_args: Vec<Expr> = vec.make()
     var arg_hints: Vec<Ty> = vec.make()
     collect_arg_hints(tc, callee, len(args), &arg_hints)

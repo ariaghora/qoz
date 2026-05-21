@@ -1,5 +1,4 @@
-// Negative test: a generic function whose type parameter is not constrained
-// by any value argument (and has no explicit turbofish) should be reported.
+// Negative: phantom type parameter cannot be inferred.
 
 type Phantom<T> = { x: i64 }
 

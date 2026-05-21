@@ -1,11 +1,4 @@
-// compiler/emit: Stage B codegen (scaffold).
-//
-// First cut produces a C-source string for a TINY subset: integer-returning
-// functions whose body is a literal or a simple arithmetic expression on
-// integer literals. The driver writes the result to disk and clang produces
-// a binary.
-//
-// The subset grows with each commit, mirroring the path Stage A took.
+// compiler/emit: Stage B codegen.
 
 import std/fmt
 import std/strings
@@ -110,9 +103,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
     for d in file.decls {
         walk_decl_for_types(e, d)
     }
-    // Generic structs may have generic-typed fields, and a generic
-    // function's substituted body may call other generic functions. Iterate
-    // until none of the three instantiation lists grows.
+    // Iterate the three instantiation lists until none grows.
     var stable = false
     var iters: i64 = 0
     while !stable {
@@ -510,8 +501,6 @@ let render(e: *Emitter): string = {
     if total == 0 {
         return ""
     }
-    // Concatenate by repeated slicing into a buffer.
-    // (Stage B will grow a proper string builder over time.)
     var acc = ""
     for s in e.out {
         acc = strings.cat(acc, s)
@@ -520,8 +509,6 @@ let render(e: *Emitter): string = {
 }
 
 let c_type_for_local(e: *Emitter, t: TypeExpr): string = {
-    // Locals declared without an annotation arrive here as TEUnit. Default
-    // to int64_t for now until Stage B has real type inference.
     match t {
     | TEUnit(_) -> "int64_t"
     | _         -> c_type_for(e, t)
@@ -896,10 +883,8 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
     }
 }
 
-// Emit a statement-position condition wrapped in a single pair of parens.
-// EBinary's own emit adds parens already, so for binary conds we emit the
-// operator pieces directly to avoid clang's -Wparentheses-equality warning
-// on `if ((a == b))`.
+// Wrap a condition in a single pair of parens, expanding EBinary inline
+// so clang does not flag `if ((a == b))` with -Wparentheses-equality.
 let emit_cond(e: *Emitter, cond: Expr) = {
     push(e, "(")
     match cond {
@@ -998,9 +983,7 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
     }
 }
 
-// When the base of a field access is a pointer (typically a function
-// parameter declared as *T over a record), C wants `->` instead of `.`.
-// Use the local-type map to detect that shape.
+// C requires `->` rather than `.` for field access on a pointer base.
 let emit_field(e: *Emitter, base: Expr, name: string) = {
     let op = field_access_op(e, base)
     emit_expr(e, base)
@@ -1036,9 +1019,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         emit_println(e, args)
         return
     }
-    // Resolve package-qualified call (`pkg.fn`) to its qualified C name. The
-    // multi-file loader prepended `pkg_` to every imported decl, so the
-    // qualified name is `pkg_method`.
+    // Resolve `pkg.fn` to the loader-renamed C name `pkg_fn`.
     let qualified = qualified_call_name(e, callee)
     if !strings.eq_raw(qualified, "") {
         if len(type_args) > 0 && map.contains(&e.generic_fn_decls, qualified) {
@@ -1054,8 +1035,6 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             push(e, ")")
             return
         }
-        // External function: dispatch to its link symbol so the runtime
-        // C name is called rather than the Qoz-level prefixed name.
         let dispatch_name = match map.get(&e.externs, qualified) {
             | Some(sym) -> sym
             | None      -> qualified
@@ -1165,9 +1144,7 @@ let emit_print_one(e: *Emitter, a: Expr) = {
     }
 }
 
-// C operator precedence numbers (higher = binds tighter). Used by
-// emit_with_prec to add parentheses only when a child binary needs to
-// override C's default precedence/associativity.
+// C operator precedence (higher binds tighter).
 let binary_prec(op: BinaryOp): i64 = {
     match op {
     | BOpMul            -> 12
@@ -1188,8 +1165,6 @@ let binary_prec(op: BinaryOp): i64 = {
     }
 }
 
-// Emit `ex` and wrap in parens if its top-level operator has lower
-// precedence than the required minimum.
 let emit_with_prec(e: *Emitter, ex: Expr, min_prec: i64) = {
     match ex {
     | EBinary(_, op, _, _) -> {
@@ -1779,8 +1754,6 @@ let hint_args_for_enum(hint: TypeExpr, enum_name: string): Vec<TypeExpr> = {
 }
 
 let emit_record_lit_with_hint(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>, hint: TypeExpr) = {
-    // If `te` lacks generic args but the surrounding hint provides them
-    // (typical `let v: Vec<i32> = Vec { ... }`), use the hint's args.
     let effective = pick_type_with_args(te, hint)
     push(e, "((")
     push(e, c_type_for(e, effective))
@@ -1885,9 +1858,7 @@ let emit_for_loop_one(e: *Emitter, binding: string, binding2: string, iter: Expr
     }
     | _ -> { }
     }
-    // Vec / Map iter: emit a slot walk. Without full type inference, default
-    // to Vec semantics (data[i] / len). If iterating a Map the user must use
-    // `for k, v in m`; we treat binding2 != "" as the Map shape.
+    // Container iter: a single binding picks the Vec shape; two pick the Map shape.
     if strings.eq_raw(binding2, "") {
         emit_vec_for(e, binding, iter, body)
     } else {

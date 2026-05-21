@@ -1,0 +1,10 @@
+// expect: 6
+// Three-deep generic instantiation chain.
+
+let identity<T>(x: T): T = x
+
+let inner<T>(x: T): T = identity(x)
+
+let outer<T>(x: T): T = inner(x)
+
+let main(): i64 = outer(6)

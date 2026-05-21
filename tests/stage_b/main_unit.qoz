@@ -1,5 +1,4 @@
 // expect: 0
-//
-// main returning unit exits with 0 and emits no qoz_main_result variable.
+// main(): unit exits with 0.
 
 let main(): unit = { }

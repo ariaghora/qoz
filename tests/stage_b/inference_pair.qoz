@@ -1,7 +1,5 @@
 // expect: 18
-//
-// Inference: generic Pair<A, B> with three calls (pair_fst, pair_snd, identity)
-// resolved without turbofish; instantiations are derived from argument types.
+// Generic record + three inferred generic calls (no turbofish).
 
 type Pair<A, B> = { fst: A, snd: B }
 

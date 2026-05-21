@@ -1,5 +1,4 @@
 // expect: 7
-//
-// main returning u8.
+// main(): u8.
 
 let main(): u8 = 7
