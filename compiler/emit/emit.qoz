@@ -32,6 +32,8 @@ type Emitter = {
     externs:           Map<string, string>,    // (possibly package-prefixed) name -> link symbol
     fn_returns:        Map<string, TypeExpr>,  // qualified fn/extern name -> return TypeExpr
     match_counter:     i64,                    // monotonic counter for match temp variables
+    current_ret_te:    TypeExpr,                // declared return type of the fn being emitted
+    match_hint:        TypeExpr,                // hint TypeExpr for the current match expression's result
 }
 
 let make_emitter(): Emitter = Emitter {
@@ -53,6 +55,8 @@ let make_emitter(): Emitter = Emitter {
     externs:          map.make(),
     fn_returns:       map.make(),
     match_counter:    0,
+    current_ret_te:   TEUnit(Span { file: "", line: 0, col: 0 }),
+    match_hint:       TEUnit(Span { file: "", line: 0, col: 0 }),
 }
 
 let register_generics(e: *Emitter, file: File) = {
@@ -598,14 +602,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
         push(e, text)
         push(e, ")")
     }
-    | EBinary(_, op, lhs, rhs) -> {
-        let p = binary_prec(op)
-        emit_with_prec(e, lhs, p)
-        push(e, " ")
-        push(e, binary_c_op(op))
-        push(e, " ")
-        emit_with_prec(e, rhs, p + 1)
-    }
+    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, lhs, rhs)
     | EUnary(_, op, rhs) -> {
         push(e, unary_c_op(op))
         emit_expr(e, rhs)
@@ -615,7 +612,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
             push(e, "return")
         } else {
             push(e, "return ")
-            emit_expr(e, value)
+            emit_value_with_hint(e, value, e.current_ret_te)
         }
     }
     | EBlock(_, stmts, tail) -> {
@@ -638,7 +635,12 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | ERecord(_, te, fields)       -> emit_record_lit(e, te, fields)
     | EClosure(_, _, _, _)         -> push(e, "0")
     | EIf(_, c, t, f)              -> { push(e, "("); emit_expr(e, c); push(e, " ? "); emit_expr(e, t); push(e, " : "); emit_expr(e, f); push(e, ")") }
-    | EMatch(span, scrut, arms)    -> emit_match_as_expr(e, span, scrut, arms)
+    | EMatch(span, scrut, arms)    -> {
+        let saved = e.match_hint
+        e.match_hint = TEUnit(Span { file: "", line: 0, col: 0 })
+        emit_match_as_expr(e, span, scrut, arms)
+        e.match_hint = saved
+    }
     | EWhile(_, _, _)              -> push(e, "0")
     | EFor(_, _, _, _, _)          -> push(e, "0")
     | EDefer(_, _)                 -> push(e, "0")
@@ -649,7 +651,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
 
 let infer_value_ctype(e: *Emitter, ty: TypeExpr, value: Expr): string = {
     match ty {
-    | TEUnit(_) -> infer_expr_ctype(e, value)
+    | TEUnit(_) -> c_type_for(e, binding_te(e, ty, value))
     | _         -> c_type_for(e, ty)
     }
 }
@@ -874,7 +876,7 @@ let infer_base_typeexpr(e: *Emitter, base: Expr): TypeExpr = {
         }
         }
     }
-    | ECall(sp, callee, ta, _) -> call_return_te(e, callee, ta, sp)
+    | ECall(sp, c, ta, va) -> call_return_te(e, c, ta, va, sp)
     | ECast(_, _, t) -> t
     | ERecord(_, t, _) -> t
     | EIndex(sp, b, _) -> {
@@ -1055,7 +1057,7 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
         }
         }
     }
-    | ECall(sp, callee, type_args, _) -> call_return_te(e, callee, type_args, sp)
+    | ECall(sp, callee, type_args, vargs) -> call_return_te(e, callee, type_args, vargs, sp)
     | EInt(sp, _)    -> single_named_te(sp, "i64")
     | EFloat(sp, _)  -> single_named_te(sp, "f64")
     | EString(sp, _) -> single_named_te(sp, "string")
@@ -1094,11 +1096,14 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
     }
     | EBlock(_, _, tail) -> infer_value_te(e, tail)
     | EIf(_, _, t, _) -> infer_value_te(e, t)
-    | EMatch(sp, _, arms) -> {
+    | EMatch(sp, scrut, arms) -> {
         if len(arms) == 0 {
             let _ = emit_die(sp, "match expression with no arms")
             return TEUnit(sp)
         }
+        let bare_enum = find_enum_from_arms(e, arms)
+        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, scrut, bare_enum) }
+        bind_arm_locals(e, enum_name, arms[0].pat)
         infer_value_te(e, arms[0].body)
     }
     | ESizeOf(sp, _) -> single_named_te(sp, "i64")
@@ -1115,7 +1120,89 @@ let single_named_te(sp: Span, name: string): TypeExpr = {
     TENamed(sp, path, vec.make())
 }
 
-let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, sp: Span): TypeExpr = {
+// Unify the variant's declared positional TypeExprs (which may contain
+// bare type-parameter names) with the actual value-argument TypeExprs.
+// Returns the resolved per-tparam Vec<TypeExpr> in the enum's declared
+// tparam order.
+let infer_variant_type_args(e: *Emitter, enum_name: string, variant: string, args: Vec<Expr>, sp: Span): Vec<TypeExpr> = {
+    var out: Vec<TypeExpr> = vec.make()
+    match map.get(&e.enum_decls, enum_name) {
+    | None -> out
+    | Some(d) -> {
+        match d {
+        | DEnum(_, _, tparams, variants) -> {
+            if len(tparams) == 0 { return out }
+            var bindings: Map<string, TypeExpr> = map.make()
+            for v in variants {
+                if strings.eq_raw(v.name, variant) {
+                    var i: i64 = 0
+                    for pos_te in v.pos {
+                        if i < len(args) {
+                            let arg_te = infer_value_te(e, args[i])
+                            unify_te(pos_te, arg_te, &bindings)
+                        }
+                        i = i + 1
+                    }
+                }
+            }
+            for tp in tparams {
+                match map.get(&bindings, tp) {
+                | Some(t) -> vec.push(&out, t)
+                | None    -> vec.push(&out, single_named_te(sp, "i64"))
+                }
+            }
+            out
+        }
+        | _ -> out
+        }
+    }
+    }
+}
+
+// Match a pattern TypeExpr against a concrete TypeExpr, accumulating
+// per-tparam bindings. Bare TENamed names with single-segment path are
+// treated as type-parameter variables.
+let unify_te(pattern: TypeExpr, concrete: TypeExpr, env: *Map<string, TypeExpr>) = {
+    match pattern {
+    | TENamed(_, path, p_args) -> {
+        if len(path) == 1 && len(p_args) == 0 {
+            let n = path[0]
+            if is_type_var_name(n) {
+                if !map.contains(env, n) { map.set(env, n, concrete) }
+                return
+            }
+        }
+        match concrete {
+        | TENamed(_, c_path, c_args) -> {
+            if len(p_args) == len(c_args) {
+                var i: i64 = 0
+                while i < len(p_args) {
+                    unify_te(p_args[i], c_args[i], env)
+                    i = i + 1
+                }
+            }
+        }
+        | _ -> { }
+        }
+    }
+    | TEPtr(_, p_inner) -> {
+        match concrete {
+        | TEPtr(_, c_inner) -> unify_te(p_inner, c_inner, env)
+        | _ -> { }
+        }
+    }
+    | _ -> { }
+    }
+}
+
+let is_type_var_name(n: string): bool = {
+    if len(n) == 0 { return false }
+    if len(n) > 2 { return false }
+    let c = strings.byte_at(n, 0)
+    c >= 65 && c <= 90
+}
+
+let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, sp: Span): TypeExpr = {
     if path_is(callee, "fmt", "format") { return single_named_te(sp, "string") }
     let name = generic_callee_name(e, callee)
     if strings.eq_raw(name, "") {
@@ -1126,12 +1213,13 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, sp: Span
     if strings.eq_raw(name, "len")     { return single_named_te(sp, "i64") }
     if strings.eq_raw(name, "size_of") { return single_named_te(sp, "i64") }
     if strings.eq_raw(name, "hash")    { return single_named_te(sp, "u64") }
-    // Variant constructor.
+    // Variant constructor; if no explicit type args, infer from value args.
     match map.get(&e.variant_of, name) {
     | Some(en) -> {
         var path: Vec<string> = vec.make()
         vec.push(&path, en)
-        return TENamed(sp, path, type_args)
+        let final_args = if len(type_args) > 0 { type_args } else { infer_variant_type_args(e, en, name, args, sp) }
+        return TENamed(sp, path, final_args)
     }
     | None -> { }
     }
@@ -1205,13 +1293,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
 let emit_cond(e: *Emitter, cond: Expr) = {
     push(e, "(")
     match cond {
-    | EBinary(_, op, lhs, rhs) -> {
-        emit_expr(e, lhs)
-        push(e, " ")
-        push(e, binary_c_op(op))
-        push(e, " ")
-        emit_expr(e, rhs)
-    }
+    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, lhs, rhs)
     | _ -> emit_expr(e, cond)
     }
     push(e, ")")
@@ -1243,7 +1325,7 @@ let emit_stmt_expr(e: *Emitter, expr: Expr) = {
             push(e, "return;")
         } else {
             push(e, "return ")
-            emit_expr(e, value)
+            emit_value_with_hint(e, value, e.current_ret_te)
             push(e, ";")
         }
     }
@@ -1303,6 +1385,11 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
 // Pick the C type for a match-as-expression result variable by inspecting
 // the first arm's body. Falls back to int64_t when nothing more specific
 // can be derived.
+let match_result_ctype_with_hint(e: *Emitter, enum_name: string, arms: Vec<MatchArm>): string = {
+    if !is_unit_typeexpr(e.match_hint) { return c_type_for(e, e.match_hint) }
+    match_result_ctype(e, enum_name, arms)
+}
+
 let match_result_ctype(e: *Emitter, enum_name: string, arms: Vec<MatchArm>): string = {
     var all_void = true
     for arm in arms {
@@ -1389,7 +1476,23 @@ let default_value_for(ctype: string): string = {
     if strings.eq_raw(ctype, "qoz_string") { return "((qoz_string){ NULL, 0 })" }
     if strings.eq_raw(ctype, "bool") { return "false" }
     if strings.has_suffix(ctype, "*") { return "NULL" }
-    "0"
+    if is_int_ctype(ctype) { return "0" }
+    if strings.eq_raw(ctype, "double") || strings.eq_raw(ctype, "float") { return "0" }
+    if strings.eq_raw(ctype, "char") { return "0" }
+    // Struct-typed result: use a compound literal zero initializer.
+    strings.cat(strings.cat("((", ctype), "){0})")
+}
+
+let is_int_ctype(ctype: string): bool = {
+    if strings.eq_raw(ctype, "int8_t") { return true }
+    if strings.eq_raw(ctype, "int16_t") { return true }
+    if strings.eq_raw(ctype, "int32_t") { return true }
+    if strings.eq_raw(ctype, "int64_t") { return true }
+    if strings.eq_raw(ctype, "uint8_t") { return true }
+    if strings.eq_raw(ctype, "uint16_t") { return true }
+    if strings.eq_raw(ctype, "uint32_t") { return true }
+    if strings.eq_raw(ctype, "uint64_t") { return true }
+    false
 }
 
 // C requires `->` rather than `.` for field access on a pointer base.
@@ -1557,7 +1660,36 @@ let emit_assign(e: *Emitter, lhs: Expr, rhs: Expr) = {
     }
     emit_expr(e, lhs)
     push(e, " = ")
-    emit_expr(e, rhs)
+    let hint = lvalue_hint(e, lhs)
+    emit_value_with_hint(e, rhs, hint)
+}
+
+let lvalue_hint(e: *Emitter, lhs: Expr): TypeExpr = {
+    let sp = Span { file: "", line: 0, col: 0 }
+    match lhs {
+    | EField(_, base, name) -> {
+        let bte = infer_base_typeexpr(e, base)
+        field_typeexpr_for_no_die(e, bte, name, sp)
+    }
+    | EIndex(_, base, _) -> {
+        let bte = infer_base_typeexpr(e, base)
+        match bte {
+        | TEPtr(_, inner) -> inner
+        | TENamed(_, path, args) -> {
+            if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
+            TEUnit(sp)
+        }
+        | _ -> TEUnit(sp)
+        }
+    }
+    | EIdent(_, name) -> {
+        match map.get(&e.locals, name) {
+        | Some(te) -> te
+        | None     -> TEUnit(sp)
+        }
+    }
+    | _ -> TEUnit(sp)
+    }
 }
 
 // EIndex on Vec[i] needs to read the .data buffer; pointer/array index uses
@@ -1585,6 +1717,16 @@ let emit_index(e: *Emitter, base: Expr, idx: Expr) = {
     push(e, "[")
     emit_expr(e, idx)
     push(e, "]")
+}
+
+// Built-in `hash(x)` dispatches by the operand's static type.
+let emit_hash_builtin(e: *Emitter, arg: Expr) = {
+    let ct = infer_expr_ctype(e, arg)
+    if strings.eq_raw(ct, "qoz_string") {
+        push(e, "qoz_string_hash("); emit_expr(e, arg); push(e, ")")
+        return
+    }
+    push(e, "(uint64_t)("); emit_expr(e, arg); push(e, ")")
 }
 
 // Built-in `len(x)` dispatch based on the operand's static type.
@@ -1773,6 +1915,10 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             emit_len_builtin(e, args[0])
             return
         }
+        if strings.eq_raw(name, "hash") && len(args) == 1 {
+            emit_hash_builtin(e, args[0])
+            return
+        }
     }
     | _ -> { }
     }
@@ -1893,6 +2039,38 @@ let emit_print_one(e: *Emitter, a: Expr) = {
     | EBool(_, _)   -> { push(e, "qoz_print_bool("); emit_expr(e, a); push(e, ")") }
     | _             -> emit_print_dispatch(e, a)
     }
+}
+
+// `s == t` on qoz_string maps to qoz_string_eq; `!=` is its negation.
+let emit_binary(e: *Emitter, op: BinaryOp, lhs: Expr, rhs: Expr) = {
+    let lct = infer_expr_ctype(e, lhs)
+    if strings.eq_raw(lct, "qoz_string") {
+        match op {
+        | BOpEq -> {
+            push(e, "qoz_string_eq(")
+            emit_expr(e, lhs)
+            push(e, ", ")
+            emit_expr(e, rhs)
+            push(e, ")")
+            return
+        }
+        | BOpNe -> {
+            push(e, "!qoz_string_eq(")
+            emit_expr(e, lhs)
+            push(e, ", ")
+            emit_expr(e, rhs)
+            push(e, ")")
+            return
+        }
+        | _ -> { }
+        }
+    }
+    let p = binary_prec(op)
+    emit_with_prec(e, lhs, p)
+    push(e, " ")
+    push(e, binary_c_op(op))
+    push(e, " ")
+    emit_with_prec(e, rhs, p + 1)
 }
 
 // C operator precedence (higher binds tighter).
@@ -2037,6 +2215,7 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
     push(e, ") {\n    ")
     e.locals = map.make()
     for p in params { e.locals[p.name] = p.ty }
+    e.current_ret_te = ret
     if is_block(body) {
         emit_fn_body_block(e, body, ret)
     } else {
@@ -2488,8 +2667,31 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
     | ECall(_, callee, ta, args) -> emit_call_with_hint(e, callee, ta, args, hint)
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
+    | EBlock(sp, stmts, tail) -> {
+        push(e, "({ ")
+        for s in stmts { emit_stmt(e, s) }
+        emit_value_with_hint(e, tail, hint)
+        push(e, "; })")
+    }
+    | EIf(sp, c, t, f) -> {
+        push(e, "(")
+        emit_cond(e, c)
+        push(e, " ? ")
+        emit_value_with_hint(e, t, hint)
+        push(e, " : ")
+        emit_value_with_hint(e, f, hint)
+        push(e, ")")
+    }
+    | EMatch(sp, scrut, arms) -> emit_match_as_expr_with_hint(e, sp, scrut, arms, hint)
     | _                      -> emit_expr(e, value)
     }
+}
+
+let emit_match_as_expr_with_hint(e: *Emitter, sp: Span, scrut: Expr, arms: Vec<MatchArm>, hint: TypeExpr) = {
+    let saved_hint = e.match_hint
+    e.match_hint = hint
+    emit_match_as_expr(e, sp, scrut, arms)
+    e.match_hint = saved_hint
 }
 
 let emit_ident_with_hint(e: *Emitter, name: string, hint: TypeExpr) = {
@@ -2771,7 +2973,7 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     e.match_counter = e.match_counter + 1
     let scrut_tmp = fmt.format("_qoz_ms_{}", e.match_counter)
     let res_tmp   = fmt.format("_qoz_mv_{}", e.match_counter)
-    let res_ctype = match_result_ctype(e, enum_name, arms)
+    let res_ctype = match_result_ctype_with_hint(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
     push(e, "({ qoz_")
     push(e, enum_name)
@@ -3034,7 +3236,7 @@ let emit_arm_body_with_hint(e: *Emitter, res_tmp: string, body: Expr, hint: Type
             push(e, "return; ")
         } else {
             push(e, "return ")
-            emit_expr(e, v)
+            emit_value_with_hint(e, v, e.current_ret_te)
             push(e, "; ")
         }
     }
@@ -3048,13 +3250,13 @@ let emit_arm_body_with_hint(e: *Emitter, res_tmp: string, body: Expr, hint: Type
 }
 
 let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: string, arm: MatchArm) = {
+    let hint = single_named_te(Span { file: "", line: 0, col: 0 }, "")  // updated below
+    let body_hint = match_body_hint(e, enum_name, arm.body)
     match arm.pat {
     | PatWild(_) -> {
         push(e, "default: { ")
-        push(e, res_tmp)
-        push(e, " = (")
-        emit_expr(e, arm.body)
-        push(e, "); break; } ")
+        emit_arm_body_with_hint(e, res_tmp, arm.body, body_hint)
+        push(e, "break; } ")
     }
     | PatBind(_, name) -> {
         match map.get(&e.variant_of, name) {
@@ -3064,17 +3266,16 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
             push(e, "_")
             push(e, name)
             push(e, ": { ")
-            emit_arm_body(e, res_tmp, arm.body)
+            emit_arm_body_with_hint(e, res_tmp, arm.body, body_hint)
             push(e, "break; } ")
         }
         | None -> {
-            // genuine bind: treat as default-binding (catch all)
             push(e, "default: { int64_t ")
             push(e, name)
             push(e, " = 0; (void)")
             push(e, name)
             push(e, "; ")
-            emit_arm_body(e, res_tmp, arm.body)
+            emit_arm_body_with_hint(e, res_tmp, arm.body, body_hint)
             push(e, "break; } ")
         }
         }
@@ -3087,9 +3288,6 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
             push(e, "_")
             push(e, vname)
             push(e, ": { ")
-            // Bind positional payload sub-patterns to locals and record
-            // their TypeExpr in the emitter env so the body sees the right
-            // C type for each binding.
             var i: i64 = 0
             for sp in sub_pats {
                 match sp {
@@ -3110,12 +3308,25 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
                 }
                 i = i + 1
             }
-            emit_arm_body(e, res_tmp, arm.body)
+            emit_arm_body_with_hint(e, res_tmp, arm.body, body_hint)
             push(e, "break; } ")
         }
     }
     | _ -> { }
     }
+}
+
+// Construct a TypeExpr hint for the match's expected result type. The
+// arm body is typically a value of the same generic enum, so use the
+// (possibly mangled) enum name with the resolved type arguments.
+let match_body_hint(e: *Emitter, enum_name: string, body: Expr): TypeExpr = {
+    if !is_unit_typeexpr(e.match_hint) { return e.match_hint }
+    let sp = Span { file: "", line: 0, col: 0 }
+    let bare = strip_mangled(enum_name)
+    let inst_args = mangled_args(e, enum_name, bare)
+    var path: Vec<string> = vec.make()
+    vec.push(&path, bare)
+    TENamed(sp, path, inst_args)
 }
 
 let emit_main(e: *Emitter, ret: TypeExpr, body: Expr) = {
