@@ -286,7 +286,10 @@ let apply_subst(t: Ty, params: Vec<string>, args: Vec<Ty>): Ty = {
     | TyVar(_, name) -> {
         var i: i64 = 0
         for p in params {
-            if strings.eq_raw(p, name) { return args[i] }
+            if strings.eq_raw(p, name) {
+                if i < len(args) { return args[i] }
+                return t
+            }
             i = i + 1
         }
         t

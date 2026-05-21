@@ -693,25 +693,53 @@ let infer_expr_ctype(e: *Emitter, ex: Expr): string = {
         | _ -> infer_expr_ctype(e, l)
         }
     }
-    | EBlock(sp, _, tail) -> infer_expr_ctype(e, tail)
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts { ingest_stmt_locals(e, s) }
+        if is_nil_expr(tail) { return "void" }
+        infer_expr_ctype(e, tail)
+    }
     | EIf(sp, _, t, _) -> infer_expr_ctype(e, t)
-    | EMatch(sp, _, arms) -> {
+    | EMatch(sp, scrut, arms) -> {
         if len(arms) == 0 {
             emit_die(sp, "match expression with no arms")
         }
+        let bare_enum = bare_enum_for_pat(e, arms[0].pat)
+        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, scrut, bare_enum) }
+        bind_arm_locals(e, enum_name, arms[0].pat)
         infer_expr_ctype(e, arms[0].body)
     }
     | ETry(_, v) -> infer_expr_ctype(e, v)
-    | EReturn(sp, _) -> emit_die(sp, "EReturn used in value position")
+    | EReturn(_, _) -> "void"
     | ETuple(sp, _) -> emit_die(sp, "tuples are not implemented in Stage B emit")
     | EClosure(sp, _, _, _) -> emit_die(sp, "closures are not implemented in Stage B emit")
     | EArrayLit(sp, _) -> emit_die(sp, "array literals are not implemented in Stage B emit")
     | EPath(sp, _) -> emit_die(sp, "EPath in value position is not supported")
-    | EAssign(sp, _, _, _) -> emit_die(sp, "EAssign has no value type in Stage B")
-    | EWhile(sp, _, _) -> emit_die(sp, "while-loop has no value type")
-    | EFor(sp, _, _, _, _) -> emit_die(sp, "for-loop has no value type")
-    | EDefer(sp, _) -> emit_die(sp, "defer has no value type")
+    | EAssign(_, _, _, _) -> "void"
+    | EWhile(_, _, _) -> "void"
+    | EFor(_, _, _, _, _) -> "void"
+    | EDefer(_, _) -> "void"
     | ESizeOf(_, _) -> "int64_t"
+    }
+}
+
+let ingest_stmt_locals(e: *Emitter, s: Stmt) = {
+    match s {
+    | SLet(_, name, te, val) -> e.locals[name] = binding_te(e, te, val)
+    | SVar(_, name, te, val) -> e.locals[name] = binding_te(e, te, val)
+    | SExpr(_, _) -> { }
+    }
+}
+
+let bare_enum_for_pat(e: *Emitter, pat: Pattern): string = {
+    match pat {
+    | PatVariant(_, path, _) -> {
+        if len(path) == 0 { return "" }
+        match map.get(&e.variant_of, path[len(path) - 1]) {
+        | Some(en) -> en
+        | None     -> ""
+        }
+    }
+    | _ -> ""
     }
 }
 
@@ -1246,11 +1274,17 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
 // the first arm's body. Falls back to int64_t when nothing more specific
 // can be derived.
 let match_result_ctype(e: *Emitter, enum_name: string, arms: Vec<MatchArm>): string = {
+    var fallback = "int64_t"
+    var saw_int = false
+    var all_void = true
     for arm in arms {
         bind_arm_locals(e, enum_name, arm.pat)
         let ct = infer_expr_ctype(e, arm.body)
-        if !strings.eq_raw(ct, "int64_t") { return ct }
+        if !strings.eq_raw(ct, "void") { all_void = false }
+        if !strings.eq_raw(ct, "int64_t") && !strings.eq_raw(ct, "void") { return ct }
+        if strings.eq_raw(ct, "int64_t") { saw_int = true }
     }
+    if all_void { return "void" }
     "int64_t"
 }
 
@@ -1613,6 +1647,27 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         }
         | _ -> { }
         }
+    }
+    // Bare-name call to an external: dispatch to the C link symbol.
+    match callee {
+    | EIdent(_, name) -> {
+        match map.get(&e.externs, name) {
+        | Some(sym) -> {
+            push(e, sym)
+            push(e, "(")
+            var i: i64 = 0
+            for a in args {
+                if i > 0 { push(e, ", ") }
+                emit_expr(e, a)
+                i = i + 1
+            }
+            push(e, ")")
+            return
+        }
+        | None -> { }
+        }
+    }
+    | _ -> { }
     }
     emit_expr(e, callee)
     push(e, "(")
@@ -2539,6 +2594,7 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     let scrut_tmp = fmt.format("_qoz_ms_{}", span.line)
     let res_tmp   = fmt.format("_qoz_mv_{}", span.line)
     let res_ctype = match_result_ctype(e, enum_name, arms)
+    let is_void = strings.eq_raw(res_ctype, "void")
     push(e, "({ qoz_")
     push(e, enum_name)
     push(e, "* ")
@@ -2546,35 +2602,104 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     push(e, " = ")
     emit_expr(e, scrut)
     push(e, "; ")
-    push(e, res_ctype)
-    push(e, " ")
-    push(e, res_tmp)
-    push(e, " = ")
-    push(e, default_value_for(res_ctype))
-    push(e, "; switch (")
+    if !is_void {
+        push(e, res_ctype)
+        push(e, " ")
+        push(e, res_tmp)
+        push(e, " = ")
+        push(e, default_value_for(res_ctype))
+        push(e, "; ")
+    }
+    push(e, "switch (")
     push(e, scrut_tmp)
     push(e, "->tag) { ")
     for arm in arms {
-        emit_match_arm(e, enum_name, scrut_tmp, res_tmp, arm)
+        emit_match_arm_with_kind(e, enum_name, scrut_tmp, res_tmp, arm, is_void)
     }
     push(e, "} ")
-    push(e, res_tmp)
-    push(e, "; })")
+    if is_void {
+        push(e, "0; })")
+    } else {
+        push(e, res_tmp)
+        push(e, "; })")
+    }
+}
+
+let emit_match_arm_with_kind(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: string, arm: MatchArm, is_void: bool) = {
+    if is_void {
+        emit_match_arm_void(e, enum_name, scrut_tmp, arm)
+    } else {
+        emit_match_arm(e, enum_name, scrut_tmp, res_tmp, arm)
+    }
+}
+
+let emit_match_arm_void(e: *Emitter, enum_name: string, scrut_tmp: string, arm: MatchArm) = {
+    match arm.pat {
+    | PatWild(_) -> {
+        push(e, "default: { ")
+        emit_stmt_expr(e, arm.body)
+        push(e, " break; } ")
+    }
+    | PatBind(_, name) -> {
+        match map.get(&e.variant_of, name) {
+        | Some(_) -> {
+            push(e, "case qoz_")
+            push(e, enum_name)
+            push(e, "_")
+            push(e, name)
+            push(e, ": { ")
+            emit_stmt_expr(e, arm.body)
+            push(e, " break; } ")
+        }
+        | None -> {
+            push(e, "default: { ")
+            emit_stmt_expr(e, arm.body)
+            push(e, " break; } ")
+        }
+        }
+    }
+    | PatVariant(_, path, sub_pats) -> {
+        if len(path) > 0 {
+            let vname = path[len(path) - 1]
+            push(e, "case qoz_")
+            push(e, enum_name)
+            push(e, "_")
+            push(e, vname)
+            push(e, ": { ")
+            var i: i64 = 0
+            for sp in sub_pats {
+                match sp {
+                | PatBind(_, bname) -> {
+                    push(e, variant_payload_ctype(e, enum_name, vname, i))
+                    push(e, " ")
+                    push(e, bname)
+                    push(e, " = ")
+                    push(e, scrut_tmp)
+                    push(e, "->payload.")
+                    push(e, vname)
+                    push(e, ".f")
+                    push(e, int_to_string(i))
+                    push(e, "; ")
+                    e.locals[bname] = variant_payload_typeexpr(e, enum_name, vname, i)
+                }
+                | _ -> { }
+                }
+                i = i + 1
+            }
+            emit_stmt_expr(e, arm.body)
+            push(e, " break; } ")
+        }
+    }
+    | _ -> { }
+    }
 }
 
 // Choose the C-side enum name (possibly the mangled instantiation) by
 // looking up the scrutinee's TypeExpr in the current locals environment.
 // Falls back to the bare enum name when the type cannot be located.
 let enum_lookup_name(e: *Emitter, scrut: Expr, bare_enum: string): string = {
-    match scrut {
-    | EIdent(_, name) -> {
-        match map.get(&e.locals, name) {
-        | Some(te) -> enum_name_from_type(e, te, bare_enum)
-        | None     -> bare_enum
-        }
-    }
-    | _ -> bare_enum
-    }
+    let te = infer_base_typeexpr(e, scrut)
+    enum_name_from_type(e, te, bare_enum)
 }
 
 let enum_name_from_type(e: *Emitter, te: TypeExpr, bare_enum: string): string = {
@@ -2717,6 +2842,25 @@ let unmangle_primitive(s: string): string = {
     s
 }
 
+// Emit the body of a value-yielding match arm. EReturn bypasses the
+// result variable and emits the function's return directly so the
+// surrounding statement-expression can elide the assignment.
+let emit_arm_body(e: *Emitter, res_tmp: string, body: Expr) = {
+    match body {
+    | EReturn(_, v) -> {
+        push(e, "return ")
+        emit_expr(e, v)
+        push(e, "; ")
+    }
+    | _ -> {
+        push(e, res_tmp)
+        push(e, " = (")
+        emit_expr(e, body)
+        push(e, "); ")
+    }
+    }
+}
+
 let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: string, arm: MatchArm) = {
     match arm.pat {
     | PatWild(_) -> {
@@ -2734,10 +2878,8 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
             push(e, "_")
             push(e, name)
             push(e, ": { ")
-            push(e, res_tmp)
-            push(e, " = (")
-            emit_expr(e, arm.body)
-            push(e, "); break; } ")
+            emit_arm_body(e, res_tmp, arm.body)
+            push(e, "break; } ")
         }
         | None -> {
             // genuine bind: treat as default-binding (catch all)
@@ -2746,10 +2888,8 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
             push(e, " = 0; (void)")
             push(e, name)
             push(e, "; ")
-            push(e, res_tmp)
-            push(e, " = (")
-            emit_expr(e, arm.body)
-            push(e, "); break; } ")
+            emit_arm_body(e, res_tmp, arm.body)
+            push(e, "break; } ")
         }
         }
     }
@@ -2784,10 +2924,8 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
                 }
                 i = i + 1
             }
-            push(e, res_tmp)
-            push(e, " = (")
-            emit_expr(e, arm.body)
-            push(e, "); break; } ")
+            emit_arm_body(e, res_tmp, arm.body)
+            push(e, "break; } ")
         }
     }
     | _ -> { }

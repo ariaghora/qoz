@@ -251,4 +251,5 @@ void qoz_print_sep(void) {
 
 void qoz_print_nl(void) {
     fputc('\n', stdout);
+    fflush(stdout);
 }
