@@ -1,6 +1,7 @@
 // compiler/emit: Stage B codegen.
 
 import std/fmt
+import std/os
 import std/strings
 import std/vec
 import std/map
@@ -528,8 +529,8 @@ let render(e: *Emitter): string = {
 
 let c_type_for_local(e: *Emitter, t: TypeExpr): string = {
     match t {
-    | TEUnit(_) -> "int64_t"
-    | _         -> c_type_for(e, t)
+    | TEUnit(sp) -> emit_die(sp, "local with no annotation and no inferable value type")
+    | _          -> c_type_for(e, t)
     }
 }
 
@@ -648,13 +649,13 @@ let infer_expr_ctype(e: *Emitter, ex: Expr): string = {
     | EString(_, _)    -> "qoz_string"
     | EBool(_, _)      -> "bool"
     | EChar(_, _)      -> "char"
-    | EIdent(_, name)  -> {
+    | EIdent(sp, name) -> {
         match map.get(&e.locals, name) {
         | Some(te) -> c_type_for(e, te)
         | None -> {
             match map.get(&e.variant_of, name) {
             | Some(en) -> strings.cat(strings.cat("qoz_", en), "*")
-            | None     -> "int64_t"
+            | None     -> emit_die(sp, fmt.format("cannot determine C type of identifier `{}` (not a local, parameter, or variant constructor)", name))
             }
         }
         }
@@ -664,14 +665,14 @@ let infer_expr_ctype(e: *Emitter, ex: Expr): string = {
     | ERecord(_, te, _) -> c_type_for(e, te)
     | EField(_, base, name) -> infer_field_ctype(e, base, name)
     | EIndex(_, base, _) -> infer_index_ctype(e, base)
-    | EUnary(_, op, rhs) -> {
+    | EUnary(sp, op, rhs) -> {
         match op {
         | UOpDeref -> {
             let inner = infer_expr_ctype(e, rhs)
             if strings.has_suffix(inner, "*") {
                 return strings.slice(inner, 0, len(inner) - 1)
             }
-            "int64_t"
+            emit_die(sp, fmt.format("dereferencing non-pointer C type `{}`", inner))
         }
         | UOpAddr -> strings.cat(infer_expr_ctype(e, rhs), "*")
         | UOpNot  -> "bool"
@@ -692,14 +693,45 @@ let infer_expr_ctype(e: *Emitter, ex: Expr): string = {
         | _ -> infer_expr_ctype(e, l)
         }
     }
-    | _ -> "int64_t"
+    | EBlock(sp, _, tail) -> infer_expr_ctype(e, tail)
+    | EIf(sp, _, t, _) -> infer_expr_ctype(e, t)
+    | EMatch(sp, _, arms) -> {
+        if len(arms) == 0 {
+            emit_die(sp, "match expression with no arms")
+        }
+        infer_expr_ctype(e, arms[0].body)
     }
+    | ETry(_, v) -> infer_expr_ctype(e, v)
+    | EReturn(sp, _) -> emit_die(sp, "EReturn used in value position")
+    | ETuple(sp, _) -> emit_die(sp, "tuples are not implemented in Stage B emit")
+    | EClosure(sp, _, _, _) -> emit_die(sp, "closures are not implemented in Stage B emit")
+    | EArrayLit(sp, _) -> emit_die(sp, "array literals are not implemented in Stage B emit")
+    | EPath(sp, _) -> emit_die(sp, "EPath in value position is not supported")
+    | EAssign(sp, _, _, _) -> emit_die(sp, "EAssign has no value type in Stage B")
+    | EWhile(sp, _, _) -> emit_die(sp, "while-loop has no value type")
+    | EFor(sp, _, _, _, _) -> emit_die(sp, "for-loop has no value type")
+    | EDefer(sp, _) -> emit_die(sp, "defer has no value type")
+    | ESizeOf(_, _) -> "int64_t"
+    }
+}
+
+// Hard fail with a span-anchored diagnostic. Used wherever the emit
+// cannot continue with a meaningful default; every silent fallback to
+// "int64_t" is a bug.
+let emit_die(sp: Span, msg: string): string = {
+    fmt.println(fmt.format("{}:{}:{}: emit error: {}", sp.file, sp.line, sp.col, msg))
+    os.exit(1)
+    ""
 }
 
 let infer_call_ctype(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>): string = {
     if path_is(callee, "fmt", "format") { return "qoz_string" }
+    if path_is(callee, "fmt", "println") { return "void" }
     match callee {
-    | EIdent(_, name) -> {
+    | EIdent(sp, name) -> {
+        if strings.eq_raw(name, "len")     { return "int64_t" }
+        if strings.eq_raw(name, "size_of") { return "int64_t" }
+        if strings.eq_raw(name, "hash")    { return "uint64_t" }
         match map.get(&e.variant_of, name) {
         | Some(en) -> {
             if len(type_args) > 0 {
@@ -707,26 +739,26 @@ let infer_call_ctype(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>): strin
             }
             strings.cat(strings.cat("qoz_", en), "*")
         }
-        | None -> infer_fn_return_ctype(e, name, type_args)
+        | None -> infer_fn_return_ctype(e, sp, name, type_args)
         }
     }
-    | EField(_, base, method) -> {
+    | EField(sp, base, method) -> {
         match base {
         | EIdent(_, pkg) -> {
             if map.contains(&e.packages, pkg) {
                 let qualified = strings.cat(strings.cat(pkg, "_"), method)
-                return infer_fn_return_ctype(e, qualified, type_args)
+                return infer_fn_return_ctype(e, sp, qualified, type_args)
             }
-            "int64_t"
+            emit_die(sp, fmt.format("call to unknown package member `{}.{}` (pkg not imported)", pkg, method))
         }
-        | _ -> "int64_t"
+        | _ -> emit_die(sp, fmt.format("call to `.{}` on a non-package base", method))
         }
     }
-    | _ -> "int64_t"
+    | _ -> emit_die(span_of_expr(callee), "call with an unrecognised callee shape")
     }
 }
 
-let infer_fn_return_ctype(e: *Emitter, fn_name: string, type_args: Vec<TypeExpr>): string = {
+let infer_fn_return_ctype(e: *Emitter, sp: Span, fn_name: string, type_args: Vec<TypeExpr>): string = {
     match map.get(&e.generic_fn_decls, fn_name) {
     | Some(d) -> {
         match d {
@@ -736,13 +768,13 @@ let infer_fn_return_ctype(e: *Emitter, fn_name: string, type_args: Vec<TypeExpr>
             }
             c_type_for(e, ret)
         }
-        | _ -> "int64_t"
+        | _ -> emit_die(sp, fmt.format("`{}` is in generic_fn_decls but is not a DFn", fn_name))
         }
     }
     | None -> {
         match map.get(&e.fn_returns, fn_name) {
         | Some(rt) -> c_type_for(e, rt)
-        | None     -> "int64_t"
+        | None     -> emit_die(sp, fmt.format("call to unknown function `{}` (no DFn, DExternal, or builtin matched)", fn_name))
         }
     }
     }
@@ -758,7 +790,19 @@ let infer_base_typeexpr(e: *Emitter, base: Expr): TypeExpr = {
     | EIdent(sp, ident) -> {
         match map.get(&e.locals, ident) {
         | Some(te) -> te
-        | None     -> TEUnit(sp)
+        | None -> {
+            match map.get(&e.variant_of, ident) {
+            | Some(en) -> {
+                var path: Vec<string> = vec.make()
+                vec.push(&path, en)
+                TENamed(sp, path, vec.make())
+            }
+            | None -> {
+                let _ = emit_die(sp, fmt.format("identifier `{}` has no known TypeExpr (not a local, parameter, or variant)", ident))
+                TEUnit(sp)
+            }
+            }
+        }
         }
     }
     | EField(sp, b, n) -> {
@@ -771,14 +815,41 @@ let infer_base_typeexpr(e: *Emitter, base: Expr): TypeExpr = {
             let inner = infer_base_typeexpr(e, rhs)
             match inner {
             | TEPtr(_, t) -> t
-            | _           -> TEUnit(sp)
+            | _           -> {
+                let _ = emit_die(sp, "dereference of non-pointer base in EField/EIndex")
+                TEUnit(sp)
+            }
             }
         }
         | UOpAddr -> TEPtr(sp, infer_base_typeexpr(e, rhs))
-        | _       -> TEUnit(sp)
+        | _       -> {
+            let _ = emit_die(sp, "unary operator does not yield a base TypeExpr")
+            TEUnit(sp)
+        }
         }
     }
-    | _ -> TEUnit(span_of_expr(base))
+    | ECall(sp, callee, ta, _) -> call_return_te(e, callee, ta, sp)
+    | ECast(_, _, t) -> t
+    | ERecord(_, t, _) -> t
+    | EIndex(sp, b, _) -> {
+        let bte = infer_base_typeexpr(e, b)
+        match bte {
+        | TEPtr(_, inner) -> inner
+        | TENamed(_, path, args) -> {
+            if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
+            let _ = emit_die(sp, fmt.format("indexing into non-Vec/non-pointer base"))
+            TEUnit(sp)
+        }
+        | _ -> {
+            let _ = emit_die(sp, "indexing into unrecognised base")
+            TEUnit(sp)
+        }
+        }
+    }
+    | _ -> {
+        let _ = emit_die(span_of_expr(base), "base expression has no resolvable TypeExpr")
+        TEUnit(span_of_expr(base))
+    }
     }
 }
 
@@ -822,7 +893,10 @@ let field_typeexpr_for(e: *Emitter, base_te: TypeExpr, field: string, sp: Span):
     }
     match unwrapped {
     | TENamed(_, path, args) -> {
-        if len(path) < 1 { return TEUnit(sp) }
+        if len(path) < 1 {
+            let _ = emit_die(sp, fmt.format("field access `.{}` on TypeExpr with empty path", field))
+            return TEUnit(sp)
+        }
         let lookup = type_lookup_key(e, path)
         let decl_opt = match map.get(&e.generic_decls, lookup) {
             | Some(d) -> Some(d)
@@ -840,15 +914,25 @@ let field_typeexpr_for(e: *Emitter, base_te: TypeExpr, field: string, sp: Span):
                         return f.ty
                     }
                 }
+                let _ = emit_die(sp, fmt.format("struct `{}` has no field `{}`", lookup, field))
                 TEUnit(sp)
             }
-            | _ -> TEUnit(sp)
+            | _ -> {
+                let _ = emit_die(sp, fmt.format("decl `{}` is not a struct", lookup))
+                TEUnit(sp)
+            }
             }
         }
-        | None -> TEUnit(sp)
+        | None -> {
+            let _ = emit_die(sp, fmt.format("unknown struct `{}` for field `.{}`", lookup, field))
+            TEUnit(sp)
+        }
         }
     }
-    | _ -> TEUnit(sp)
+    | _ -> {
+        let _ = emit_die(sp, fmt.format("field access `.{}` on a non-named base", field))
+        TEUnit(sp)
+    }
     }
 }
 
@@ -874,14 +958,14 @@ let infer_index_ctype(e: *Emitter, base: Expr): string = {
     let bte = infer_base_typeexpr(e, base)
     match bte {
     | TEPtr(_, inner) -> c_type_for(e, inner)
-    | TENamed(_, path, args) -> {
+    | TENamed(sp, path, args) -> {
         if len(path) >= 1 && len(args) >= 1 {
             let last = path[len(path) - 1]
             if strings.eq_raw(last, "Vec") { return c_type_for(e, args[0]) }
         }
-        "int64_t"
+        emit_die(sp, "EIndex base is neither pointer nor Vec")
     }
-    | _ -> "int64_t"
+    | _ -> emit_die(span_of_te(bte), "EIndex base has unsupported TypeExpr")
     }
 }
 
@@ -907,25 +991,104 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
         | TEPtr(_, inner) -> inner
         | TENamed(_, path, args) -> {
             if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
+            let _ = emit_die(sp, "let-binding value indexed into non-Vec base; cannot determine binding type")
             TEUnit(sp)
         }
-        | _ -> TEUnit(sp)
+        | _ -> {
+            let _ = emit_die(sp, "let-binding value indexed into unrecognised base")
+            TEUnit(sp)
+        }
         }
     }
     | EIdent(sp, name) -> {
         match map.get(&e.locals, name) {
         | Some(t) -> t
-        | None    -> TEUnit(sp)
+        | None -> {
+            let _ = emit_die(sp, fmt.format("let-binding value references unknown name `{}`", name))
+            TEUnit(sp)
+        }
         }
     }
     | ECall(sp, callee, type_args, _) -> call_return_te(e, callee, type_args, sp)
-    | _ -> TEUnit(span_of_expr(v))
+    | EInt(sp, _)    -> single_named_te(sp, "i64")
+    | EFloat(sp, _)  -> single_named_te(sp, "f64")
+    | EString(sp, _) -> single_named_te(sp, "string")
+    | EBool(sp, _)   -> single_named_te(sp, "bool")
+    | EChar(sp, _)   -> single_named_te(sp, "char")
+    | ENil(sp)       -> TEPtr(sp, single_named_te(sp, "void"))
+    | EUnary(sp, op, rhs) -> {
+        match op {
+        | UOpAddr -> TEPtr(sp, infer_value_te(e, rhs))
+        | UOpDeref -> {
+            let inner = infer_value_te(e, rhs)
+            match inner {
+            | TEPtr(_, t) -> t
+            | _           -> {
+                let _ = emit_die(sp, "let-binding dereferences a non-pointer")
+                TEUnit(sp)
+            }
+            }
+        }
+        | UOpNot -> single_named_te(sp, "bool")
+        | UOpNeg -> infer_value_te(e, rhs)
+        }
+    }
+    | EBinary(sp, op, l, _) -> {
+        match op {
+        | BOpEq -> single_named_te(sp, "bool")
+        | BOpNe -> single_named_te(sp, "bool")
+        | BOpLt -> single_named_te(sp, "bool")
+        | BOpGt -> single_named_te(sp, "bool")
+        | BOpLe -> single_named_te(sp, "bool")
+        | BOpGe -> single_named_te(sp, "bool")
+        | BOpAnd -> single_named_te(sp, "bool")
+        | BOpOr -> single_named_te(sp, "bool")
+        | _ -> infer_value_te(e, l)
+        }
+    }
+    | EBlock(_, _, tail) -> infer_value_te(e, tail)
+    | EIf(_, _, t, _) -> infer_value_te(e, t)
+    | EMatch(sp, _, arms) -> {
+        if len(arms) == 0 {
+            let _ = emit_die(sp, "match expression with no arms")
+            return TEUnit(sp)
+        }
+        infer_value_te(e, arms[0].body)
+    }
+    | ESizeOf(sp, _) -> single_named_te(sp, "i64")
+    | _ -> {
+        let _ = emit_die(span_of_expr(v), "let-binding value shape not handled by inference")
+        TEUnit(span_of_expr(v))
+    }
     }
 }
 
+let single_named_te(sp: Span, name: string): TypeExpr = {
+    var path: Vec<string> = vec.make()
+    vec.push(&path, name)
+    TENamed(sp, path, vec.make())
+}
+
 let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, sp: Span): TypeExpr = {
+    if path_is(callee, "fmt", "format") { return single_named_te(sp, "string") }
     let name = generic_callee_name(e, callee)
-    if strings.eq_raw(name, "") { return TEUnit(sp) }
+    if strings.eq_raw(name, "") {
+        let _ = emit_die(sp, "could not derive return type: callee has no recognisable name")
+        return TEUnit(sp)
+    }
+    // Built-ins.
+    if strings.eq_raw(name, "len")     { return single_named_te(sp, "i64") }
+    if strings.eq_raw(name, "size_of") { return single_named_te(sp, "i64") }
+    if strings.eq_raw(name, "hash")    { return single_named_te(sp, "u64") }
+    // Variant constructor.
+    match map.get(&e.variant_of, name) {
+    | Some(en) -> {
+        var path: Vec<string> = vec.make()
+        vec.push(&path, en)
+        return TENamed(sp, path, type_args)
+    }
+    | None -> { }
+    }
     match map.get(&e.generic_fn_decls, name) {
     | Some(d) -> {
         match d {
@@ -935,13 +1098,19 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, sp: Span
             }
             ret
         }
-        | _ -> TEUnit(sp)
+        | _ -> {
+            let _ = emit_die(sp, fmt.format("`{}` is in generic_fn_decls but not a DFn", name))
+            TEUnit(sp)
+        }
         }
     }
     | None -> {
         match map.get(&e.fn_returns, name) {
         | Some(t) -> t
-        | None    -> TEUnit(sp)
+        | None -> {
+            let _ = emit_die(sp, fmt.format("call to unknown function `{}` (no DFn, DExternal, or builtin matched)", name))
+            TEUnit(sp)
+        }
         }
     }
     }
@@ -1076,12 +1245,42 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
 // Pick the C type for a match-as-expression result variable by inspecting
 // the first arm's body. Falls back to int64_t when nothing more specific
 // can be derived.
-let match_result_ctype(e: *Emitter, arms: Vec<MatchArm>): string = {
+let match_result_ctype(e: *Emitter, enum_name: string, arms: Vec<MatchArm>): string = {
     for arm in arms {
+        bind_arm_locals(e, enum_name, arm.pat)
         let ct = infer_expr_ctype(e, arm.body)
         if !strings.eq_raw(ct, "int64_t") { return ct }
     }
     "int64_t"
+}
+
+let bind_arm_locals(e: *Emitter, enum_name: string, pat: Pattern) = {
+    match pat {
+    | PatVariant(_, path, sub_pats) -> {
+        if len(path) < 1 { return }
+        let vname = path[len(path) - 1]
+        var i: i64 = 0
+        for sp in sub_pats {
+            match sp {
+            | PatBind(_, bname) -> {
+                e.locals[bname] = variant_payload_typeexpr(e, enum_name, vname, i)
+            }
+            | _ -> { }
+            }
+            i = i + 1
+        }
+    }
+    | PatBind(_, bname) -> {
+        match map.get(&e.variant_of, bname) {
+        | Some(_) -> { }
+        | None    -> {
+            let unit_sp = Span { file: "", line: 0, col: 0 }
+            e.locals[bname] = TEUnit(unit_sp)
+        }
+        }
+    }
+    | _ -> { }
+    }
 }
 
 let default_value_for(ctype: string): string = {
@@ -2339,7 +2538,7 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     let enum_name: string = enum_lookup_name(e, scrut, bare_enum)
     let scrut_tmp = fmt.format("_qoz_ms_{}", span.line)
     let res_tmp   = fmt.format("_qoz_mv_{}", span.line)
-    let res_ctype = match_result_ctype(e, arms)
+    let res_ctype = match_result_ctype(e, enum_name, arms)
     push(e, "({ qoz_")
     push(e, enum_name)
     push(e, "* ")
@@ -2390,6 +2589,33 @@ let enum_name_from_type(e: *Emitter, te: TypeExpr, bare_enum: string): string = 
         bare_enum
     }
     | _ -> bare_enum
+    }
+}
+
+let variant_payload_typeexpr(e: *Emitter, enum_name: string, variant: string, pos: i64): TypeExpr = {
+    let bare = strip_mangled(enum_name)
+    let unit_sp = Span { file: "", line: 0, col: 0 }
+    match map.get(&e.enum_decls, bare) {
+    | None -> TEUnit(unit_sp)
+    | Some(d) -> {
+        match d {
+        | DEnum(_, _, tparams, variants) -> {
+            let inst_args = mangled_args(e, enum_name, bare)
+            for v in variants {
+                if strings.eq_raw(v.name, variant) {
+                    if pos >= 0 && pos < len(v.pos) {
+                        if len(tparams) > 0 && len(inst_args) == len(tparams) {
+                            return substitute_type(e, v.pos[pos], tparams, inst_args)
+                        }
+                        return v.pos[pos]
+                    }
+                }
+            }
+            TEUnit(unit_sp)
+        }
+        | _ -> TEUnit(unit_sp)
+        }
+    }
     }
 }
 
@@ -2535,7 +2761,9 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
             push(e, "_")
             push(e, vname)
             push(e, ": { ")
-            // Bind positional payload sub-patterns to locals.
+            // Bind positional payload sub-patterns to locals and record
+            // their TypeExpr in the emitter env so the body sees the right
+            // C type for each binding.
             var i: i64 = 0
             for sp in sub_pats {
                 match sp {
@@ -2550,6 +2778,7 @@ let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: s
                     push(e, ".f")
                     push(e, int_to_string(i))
                     push(e, "; ")
+                    e.locals[bname] = variant_payload_typeexpr(e, enum_name, vname, i)
                 }
                 | _ -> { }
                 }
