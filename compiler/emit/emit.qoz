@@ -1389,14 +1389,18 @@ let emit_main(e: *Emitter, body: Expr) = {
             emit_stmt(e, s)
         }
         if !is_nil_expr(tail) {
+            push(e, "int64_t qoz_main_result = ")
             emit_expr(e, tail)
-            push(e, ";")
+            push(e, ";\n    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
+            return
         }
         push(e, "\n")
     }
     | _ -> {
+        push(e, "int64_t qoz_main_result = ")
         emit_expr(e, body)
-        push(e, ";\n")
+        push(e, ";\n    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
+        return
     }
     }
     push(e, "    qoz_shutdown();\n")
