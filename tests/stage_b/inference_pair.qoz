@@ -1,0 +1,16 @@
+// expect: 18
+//
+// Inference: generic Pair<A, B> with three calls (pair_fst, pair_snd, identity)
+// resolved without turbofish; instantiations are derived from argument types.
+
+type Pair<A, B> = { fst: A, snd: B }
+
+let pair_fst<A, B>(p: Pair<A, B>): A = p.fst
+let pair_snd<A, B>(p: Pair<A, B>): B = p.snd
+let identity<T>(x: T): T = x
+
+let main(): i64 = {
+    let p: Pair<i64, i32> = Pair { fst: 7, snd: 3 }
+    let q: Pair<i32, i64> = Pair { fst: 1, snd: 9 }
+    pair_fst(p) + pair_snd(q) + identity(2)
+}

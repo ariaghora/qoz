@@ -410,17 +410,32 @@ let parse_postfix(p: *Parser): Expr = {
             expect_punct(p, ")")
             e = ECall(span, e, type_args, args)
         } else if is_punct(tok, "(") {
-            advance(p)
-            var args: Vec<Expr> = vec.make()
-            if !is_punct(peek(p), ")") {
-                vec.push(&args, parse_expr(p))
-                while is_punct(peek(p), ",") {
+            var handled_sizeof = false
+            match e {
+            | EIdent(_, ename) -> {
+                if strings.eq_raw(ename, "size_of") {
                     advance(p)
-                    vec.push(&args, parse_expr(p))
+                    let target = parse_type(p)
+                    expect_punct(p, ")")
+                    e = ESizeOf(span, target)
+                    handled_sizeof = true
                 }
             }
-            expect_punct(p, ")")
-            e = ECall(span, e, vec.make(), args)
+            | _ -> { }
+            }
+            if !handled_sizeof {
+                advance(p)
+                var args: Vec<Expr> = vec.make()
+                if !is_punct(peek(p), ")") {
+                    vec.push(&args, parse_expr(p))
+                    while is_punct(peek(p), ",") {
+                        advance(p)
+                        vec.push(&args, parse_expr(p))
+                    }
+                }
+                expect_punct(p, ")")
+                e = ECall(span, e, vec.make(), args)
+            }
         } else if is_punct(tok, "[") {
             advance(p)
             let idx = parse_expr(p)
@@ -436,6 +451,10 @@ let parse_postfix(p: *Parser): Expr = {
                 err_unexpected(p, "field name after `.`", name_tok)
                 more = false
             }
+        } else if is_kw(tok, "as") {
+            advance(p)
+            let target = parse_type(p)
+            e = ECast(span, e, target)
         } else {
             more = false
         }

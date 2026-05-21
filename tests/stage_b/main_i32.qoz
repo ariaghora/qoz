@@ -1,0 +1,5 @@
+// expect: 42
+//
+// main returning i32 narrows to int.
+
+let main(): i32 = 42

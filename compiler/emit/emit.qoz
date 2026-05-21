@@ -32,6 +32,7 @@ type Emitter = {
     enum_seen:         Map<string, bool>,
     fn_insts:          Vec<Instantiation>,
     fn_seen:           Map<string, bool>,
+    locals:            Map<string, TypeExpr>, // variable name -> TypeExpr for current fn body
 }
 
 let make_emitter(): Emitter = Emitter {
@@ -47,6 +48,7 @@ let make_emitter(): Emitter = Emitter {
     enum_seen:        map.make(),
     fn_insts:         vec.make(),
     fn_seen:          map.make(),
+    locals:           map.make(),
 }
 
 let register_generics(e: *Emitter, file: File) = {
@@ -106,7 +108,9 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
     for d in file.decls {
         walk_decl_for_types(e, d)
     }
-    // Generic structs may have generic-typed fields; iterate until stable.
+    // Generic structs may have generic-typed fields, and a generic
+    // function's substituted body may call other generic functions. Iterate
+    // until none of the three instantiation lists grows.
     var stable = false
     var iters: i64 = 0
     while !stable {
@@ -114,7 +118,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
         iters = iters + 1
         let before_r = len(e.record_insts)
         let before_e = len(e.enum_insts)
-        // Walk every collected instantiation and discover deps.
+        let before_f = len(e.fn_insts)
         var i: i64 = 0
         while i < len(e.record_insts) {
             let inst = e.record_insts[i]
@@ -133,9 +137,28 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
             }
             j = j + 1
         }
-        if len(e.record_insts) == before_r && len(e.enum_insts) == before_e {
+        var k: i64 = 0
+        while k < len(e.fn_insts) {
+            let inst = e.fn_insts[k]
+            match map.get(&e.generic_fn_decls, inst.name) {
+            | Some(decl) -> walk_fn_body_with_subst(e, decl, inst.args)
+            | None       -> { }
+            }
+            k = k + 1
+        }
+        if len(e.record_insts) == before_r && len(e.enum_insts) == before_e && len(e.fn_insts) == before_f {
             stable = true
         }
+    }
+}
+
+let walk_fn_body_with_subst(e: *Emitter, d: Decl, args: Vec<TypeExpr>) = {
+    match d {
+    | DFn(_, _, params, _, _, body, _) -> {
+        let subst_body = substitute_expr(e, body, params, args)
+        walk_expr_for_types(e, subst_body)
+    }
+    | _ -> { }
     }
 }
 
@@ -585,7 +608,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | EPath(_, _)                  -> push(e, "0")
     | EAssign(_, _, lhs, rhs)      -> { emit_expr(e, lhs); push(e, " = "); emit_expr(e, rhs) }
     | ECall(_, callee, ta, args)   -> emit_call(e, callee, ta, args)
-    | EField(_, base, name)        -> { emit_expr(e, base); push(e, "."); push(e, name) }
+    | EField(_, base, name)        -> emit_field(e, base, name)
     | EIndex(_, base, idx)         -> { emit_expr(e, base); push(e, "["); emit_expr(e, idx); push(e, "]") }
     | ECast(_, value, _)           -> emit_expr(e, value)
     | ETry(_, value)               -> emit_expr(e, value)
@@ -647,6 +670,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, " = ")
         emit_value_with_hint(e, value, ty)
         push(e, "; ")
+        e.locals[name] = ty
     }
     | SVar(_, name, ty, value) -> {
         push(e, infer_value_ctype(e, ty, value))
@@ -655,6 +679,7 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
         push(e, " = ")
         emit_value_with_hint(e, value, ty)
         push(e, "; ")
+        e.locals[name] = ty
     }
     | SExpr(_, expr) -> {
         emit_stmt_expr(e, expr)
@@ -662,12 +687,31 @@ let emit_stmt(e: *Emitter, s: Stmt) = {
     }
 }
 
+// Emit a statement-position condition wrapped in a single pair of parens.
+// EBinary's own emit adds parens already, so for binary conds we emit the
+// operator pieces directly to avoid clang's -Wparentheses-equality warning
+// on `if ((a == b))`.
+let emit_cond(e: *Emitter, cond: Expr) = {
+    push(e, "(")
+    match cond {
+    | EBinary(_, op, lhs, rhs) -> {
+        emit_expr(e, lhs)
+        push(e, " ")
+        push(e, binary_c_op(op))
+        push(e, " ")
+        emit_expr(e, rhs)
+    }
+    | _ -> emit_expr(e, cond)
+    }
+    push(e, ")")
+}
+
 let emit_stmt_expr(e: *Emitter, expr: Expr) = {
     match expr {
     | EIf(_, cond, then_b, else_b) -> {
-        push(e, "if (")
-        emit_expr(e, cond)
-        push(e, ") ")
+        push(e, "if ")
+        emit_cond(e, cond)
+        push(e, " ")
         emit_branch_as_statement(e, then_b)
         if !is_nil_expr(else_b) {
             push(e, " else ")
@@ -742,6 +786,39 @@ let qualified_call_name(e: *Emitter, callee: Expr): string = {
         }
     }
     | _ -> ""
+    }
+}
+
+// When the base of a field access is a pointer (typically a function
+// parameter declared as *T over a record), C wants `->` instead of `.`.
+// Use the local-type map to detect that shape.
+let emit_field(e: *Emitter, base: Expr, name: string) = {
+    let op = field_access_op(e, base)
+    emit_expr(e, base)
+    push(e, op)
+    push(e, name)
+}
+
+let field_access_op(e: *Emitter, base: Expr): string = {
+    match base {
+    | EIdent(_, ident) -> {
+        match map.get(&e.locals, ident) {
+        | Some(te) -> {
+            match te {
+            | TEPtr(_, _) -> "->"
+            | _           -> "."
+            }
+        }
+        | None -> "."
+        }
+    }
+    | EUnary(_, op, _) -> {
+        match op {
+        | UOpAddr -> "->"  // (&x).field rare; treat as pointer
+        | _       -> "."
+        }
+    }
+    | _ -> "."
     }
 }
 
@@ -914,7 +991,7 @@ let is_nil_expr(ex: Expr): bool =
     | _       -> false
     }
 
-let emit_fn_body_block(e: *Emitter, body: Expr) = {
+let emit_fn_body_block(e: *Emitter, body: Expr, ret_hint: TypeExpr) = {
     match body {
     | EBlock(_, stmts, tail) -> {
         for s in stmts {
@@ -924,7 +1001,7 @@ let emit_fn_body_block(e: *Emitter, body: Expr) = {
             push(e, "return;\n")
         } else {
             push(e, "return ")
-            emit_expr(e, tail)
+            emit_value_with_hint(e, tail, ret_hint)
             push(e, ";\n")
         }
     }
@@ -948,13 +1025,16 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
         i = i + 1
     }
     push(e, ") {\n    ")
+    e.locals = map.make()
+    for p in params { e.locals[p.name] = p.ty }
     if is_block(body) {
-        emit_fn_body_block(e, body)
+        emit_fn_body_block(e, body, ret)
     } else {
         push(e, "return ")
-        emit_expr(e, body)
+        emit_value_with_hint(e, body, ret)
         push(e, ";\n")
     }
+    e.locals = map.make()
     push(e, "}\n\n")
 }
 
@@ -1072,6 +1152,9 @@ let emit_program(f: File): string = {
                     })
                 }
                 emit_enum(&e, inst.mangled, subst_variants)
+                for v in subst_variants {
+                    emit_variant_ctor(&e, inst.mangled, v)
+                }
             }
             | _ -> { }
             }
@@ -1336,7 +1419,84 @@ let emit_record_lit(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>) = {
 let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     match value {
     | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
+    | ECall(_, callee, ta, args) -> emit_call_with_hint(e, callee, ta, args, hint)
+    | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
     | _                      -> emit_expr(e, value)
+    }
+}
+
+let emit_ident_with_hint(e: *Emitter, name: string, hint: TypeExpr) = {
+    match map.get(&e.variant_of, name) {
+    | Some(enum_name) -> {
+        let hint_args = hint_args_for_enum(hint, enum_name)
+        if len(hint_args) > 0 {
+            let mangled = mangle_inst(e, enum_name, hint_args)
+            push(e, "qoz_make_")
+            push(e, mangled)
+            push(e, "_")
+            push(e, name)
+            push(e, "()")
+            return
+        }
+        push(e, "qoz_make_")
+        push(e, enum_name)
+        push(e, "_")
+        push(e, name)
+        push(e, "()")
+    }
+    | None -> push(e, name)
+    }
+}
+
+// When a call's result feeds into a typed context (a let binding, a fn
+// return slot, or a record-literal field) and the callee is a generic
+// variant constructor like Some/None, the hint supplies the type args
+// the source did not write explicitly. Rewrite to the mangled ctor.
+let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, hint: TypeExpr) = {
+    if len(type_args) > 0 {
+        emit_call(e, callee, type_args, args)
+        return
+    }
+    match callee {
+    | EIdent(_, name) -> {
+        match map.get(&e.variant_of, name) {
+        | Some(enum_name) -> {
+            let hint_args = hint_args_for_enum(hint, enum_name)
+            if len(hint_args) > 0 {
+                let mangled = mangle_inst(e, enum_name, hint_args)
+                push(e, "qoz_make_")
+                push(e, mangled)
+                push(e, "_")
+                push(e, name)
+                push(e, "(")
+                var i: i64 = 0
+                for a in args {
+                    if i > 0 { push(e, ", ") }
+                    emit_expr(e, a)
+                    i = i + 1
+                }
+                push(e, ")")
+                return
+            }
+        }
+        | None -> { }
+        }
+    }
+    | _ -> { }
+    }
+    emit_call(e, callee, type_args, args)
+}
+
+let hint_args_for_enum(hint: TypeExpr, enum_name: string): Vec<TypeExpr> = {
+    match hint {
+    | TENamed(_, path, args) -> {
+        if len(path) >= 1 {
+            let last = path[len(path) - 1]
+            if strings.eq_raw(last, enum_name) { return args }
+        }
+        vec.make()
+    }
+    | _ -> vec.make()
     }
 }
 
@@ -1518,11 +1678,7 @@ let scrutinee_enum(e: *Emitter, scrut: Expr): string = {
 }
 
 let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>) = {
-    // We need the enum name to mangle case labels. Stage B's scrutinees in
-    // the compiler source are typically `t.kind`, so the enum is the field
-    // type. Without full type info here we make a best effort: if the first
-    // arm is a variant pattern, take the variant's enum from variant_of.
-    var enum_name = ""
+    var bare_enum: string = ""
     if len(arms) > 0 {
         let first = arms[0]
         match first.pat {
@@ -1530,7 +1686,7 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
             if len(path) > 0 {
                 let vname = path[len(path) - 1]
                 match map.get(&e.variant_of, vname) {
-                | Some(en) -> enum_name = en
+                | Some(en) -> bare_enum = en
                 | None     -> { }
                 }
             }
@@ -1538,10 +1694,11 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
         | _ -> { }
         }
     }
-    if strings.eq_raw(enum_name, "") {
+    if strings.eq_raw(bare_enum, "") {
         push(e, "/* match: enum unknown */0")
         return
     }
+    let enum_name: string = enum_lookup_name(e, scrut, bare_enum)
     let scrut_tmp = fmt.format("_qoz_ms_{}", span.line)
     let res_tmp   = fmt.format("_qoz_mv_{}", span.line)
     push(e, "({ qoz_")
@@ -1561,6 +1718,36 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     push(e, "} ")
     push(e, res_tmp)
     push(e, "; })")
+}
+
+// Choose the C-side enum name (possibly the mangled instantiation) by
+// looking up the scrutinee's TypeExpr in the current locals environment.
+// Falls back to the bare enum name when the type cannot be located.
+let enum_lookup_name(e: *Emitter, scrut: Expr, bare_enum: string): string = {
+    match scrut {
+    | EIdent(_, name) -> {
+        match map.get(&e.locals, name) {
+        | Some(te) -> enum_name_from_type(e, te, bare_enum)
+        | None     -> bare_enum
+        }
+    }
+    | _ -> bare_enum
+    }
+}
+
+let enum_name_from_type(e: *Emitter, te: TypeExpr, bare_enum: string): string = {
+    match te {
+    | TENamed(_, path, args) -> {
+        if len(args) > 0 && len(path) >= 1 {
+            let last = path[len(path) - 1]
+            if strings.eq_raw(last, bare_enum) {
+                return mangle_inst(e, bare_enum, args)
+            }
+        }
+        bare_enum
+    }
+    | _ -> bare_enum
+    }
 }
 
 let emit_match_arm(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: string, arm: MatchArm) = {

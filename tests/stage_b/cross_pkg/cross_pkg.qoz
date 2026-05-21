@@ -1,0 +1,5 @@
+// Helper package for tests/stage_b/cross_pkg/main.qoz.
+
+let identity<T>(x: T): T = x
+
+let pair_into<A, B>(a: A, b: B): A = a

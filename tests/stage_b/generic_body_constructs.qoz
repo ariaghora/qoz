@@ -1,0 +1,14 @@
+// expect: 9
+//
+// Generic function body constructs a generic record using its own type
+// parameter T. substitute_expr must rewrite the TENamed inside the record
+// literal so the emitted C uses the monomorphised struct type.
+
+type Wrapper<T> = { value: T }
+
+let wrap<T>(x: T): Wrapper<T> = Wrapper { value: x }
+
+let main(): i64 = {
+    let w: Wrapper<i64> = wrap(9)
+    w.value
+}

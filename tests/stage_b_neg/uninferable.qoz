@@ -1,0 +1,11 @@
+// Negative test: a generic function whose type parameter is not constrained
+// by any value argument (and has no explicit turbofish) should be reported.
+
+type Phantom<T> = { x: i64 }
+
+let phantom<T>(x: i64): Phantom<T> = Phantom { x: x }
+
+let main(): i64 = {
+    let p = phantom(7)
+    p.x
+}

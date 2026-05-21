@@ -1,0 +1,12 @@
+// expect: 3
+//
+// Nested generic records: Box<Pair<i32, i32>> exercises hint propagation
+// into nested record literals and topo-aware emission of struct decls.
+
+type Pair<A, B> = { fst: A, snd: B }
+type Box<T> = { value: T }
+
+let main(): i64 = {
+    let b: Box<Pair<i32, i32>> = Box { value: Pair { fst: 1, snd: 2 } }
+    b.value.fst + b.value.snd
+}

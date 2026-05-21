@@ -65,12 +65,91 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
     ""
 }
 
-let rename_with_pkg(d: Decl, pkg: string): Decl = {
+let rename_with_pkg(d: Decl, pkg: string, local_fns: Map<string, bool>): Decl = {
     if strings.eq_raw(pkg, "") { return d }
     match d {
-    | DFn(sp, n, tp, fp, rt, body, attr)    -> DFn(sp, strings.cat(strings.cat(pkg, "_"), n), tp, fp, rt, body, attr)
-    | DExternal(sp, n, sym, fp, rt)         -> DExternal(sp, strings.cat(strings.cat(pkg, "_"), n), sym, fp, rt)
+    | DFn(sp, n, tp, fp, rt, body, attr) -> {
+        let new_body = rewrite_ident_refs(body, pkg, local_fns)
+        DFn(sp, strings.cat(strings.cat(pkg, "_"), n), tp, fp, rt, new_body, attr)
+    }
+    | DExternal(sp, n, sym, fp, rt) -> DExternal(sp, strings.cat(strings.cat(pkg, "_"), n), sym, fp, rt)
     | _                                     -> d
+    }
+}
+
+// When a non-root file's DFn body refers to another decl of the same
+// package by its bare name (a sibling call site like `grow(v)` inside
+// push), rewrite the identifier to the package-prefixed name that the
+// loader assigned. Local variables shadow this rewrite by not appearing
+// in local_fns. Type expressions are not touched (struct/enum names are
+// not prefixed).
+let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr = {
+    match e {
+    | EInt(_, _)              -> e
+    | EFloat(_, _)            -> e
+    | EString(_, _)           -> e
+    | EChar(_, _)             -> e
+    | EBool(_, _)             -> e
+    | ENil(_)                 -> e
+    | EIdent(sp, name)        -> {
+        if map.contains(&local_fns, name) {
+            return EIdent(sp, strings.cat(strings.cat(pkg, "_"), name))
+        }
+        e
+    }
+    | EPath(_, _)             -> e
+    | EUnary(sp, op, rhs)     -> EUnary(sp, op, rewrite_ident_refs(rhs, pkg, local_fns))
+    | EBinary(sp, op, l, r)   -> EBinary(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
+    | EAssign(sp, op, l, r)   -> EAssign(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
+    | ECall(sp, callee, ta, args) -> {
+        var na: Vec<Expr> = vec.make()
+        for a in args { vec.push(&na, rewrite_ident_refs(a, pkg, local_fns)) }
+        ECall(sp, rewrite_ident_refs(callee, pkg, local_fns), ta, na)
+    }
+    | EField(sp, base, name)  -> EField(sp, rewrite_ident_refs(base, pkg, local_fns), name)
+    | EIndex(sp, base, idx)   -> EIndex(sp, rewrite_ident_refs(base, pkg, local_fns), rewrite_ident_refs(idx, pkg, local_fns))
+    | ECast(sp, value, t)     -> ECast(sp, rewrite_ident_refs(value, pkg, local_fns), t)
+    | ETry(sp, v)             -> ETry(sp, rewrite_ident_refs(v, pkg, local_fns))
+    | ETuple(sp, elems)       -> {
+        var ne: Vec<Expr> = vec.make()
+        for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
+        ETuple(sp, ne)
+    }
+    | ERecord(sp, te, fields) -> {
+        var nf: Vec<RecordFieldLit> = vec.make()
+        for f in fields { vec.push(&nf, RecordFieldLit { name: f.name, value: rewrite_ident_refs(f.value, pkg, local_fns) }) }
+        ERecord(sp, te, nf)
+    }
+    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, rewrite_ident_refs(body, pkg, local_fns))
+    | EBlock(sp, stmts, tail) -> {
+        var ns: Vec<Stmt> = vec.make()
+        for s in stmts { vec.push(&ns, rewrite_ident_refs_stmt(s, pkg, local_fns)) }
+        EBlock(sp, ns, rewrite_ident_refs(tail, pkg, local_fns))
+    }
+    | EIf(sp, c, t, f) -> EIf(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(t, pkg, local_fns), rewrite_ident_refs(f, pkg, local_fns))
+    | EMatch(sp, scrut, arms) -> {
+        var na: Vec<MatchArm> = vec.make()
+        for a in arms { vec.push(&na, MatchArm { pat: a.pat, body: rewrite_ident_refs(a.body, pkg, local_fns) }) }
+        EMatch(sp, rewrite_ident_refs(scrut, pkg, local_fns), na)
+    }
+    | EWhile(sp, c, b) -> EWhile(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(b, pkg, local_fns))
+    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, rewrite_ident_refs(it, pkg, local_fns), rewrite_ident_refs(body, pkg, local_fns))
+    | EReturn(sp, v)          -> EReturn(sp, rewrite_ident_refs(v, pkg, local_fns))
+    | EDefer(sp, v)           -> EDefer(sp, rewrite_ident_refs(v, pkg, local_fns))
+    | ESizeOf(_, _)           -> e
+    | EArrayLit(sp, elems)    -> {
+        var ne: Vec<Expr> = vec.make()
+        for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
+        EArrayLit(sp, ne)
+    }
+    }
+}
+
+let rewrite_ident_refs_stmt(s: Stmt, pkg: string, local_fns: Map<string, bool>): Stmt = {
+    match s {
+    | SLet(sp, name, te, val) -> SLet(sp, name, te, rewrite_ident_refs(val, pkg, local_fns))
+    | SVar(sp, name, te, val) -> SVar(sp, name, te, rewrite_ident_refs(val, pkg, local_fns))
+    | SExpr(sp, x) -> SExpr(sp, rewrite_ident_refs(x, pkg, local_fns))
     }
 }
 
@@ -106,6 +185,16 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     vec.push(sources, src)
     let tokens = tokenize.run(src)
     let file = parse.run(tokens, cur.path)
+    // First pass: collect the set of fn/extern names defined in this file so
+    // intra-package call sites can be rewritten to the package-prefixed name.
+    var local_fns: Map<string, bool> = map.make()
+    for d in file.decls {
+        match d {
+        | DFn(_, n, _, _, _, _, _) -> local_fns[n] = true
+        | DExternal(_, n, _, _, _) -> local_fns[n] = true
+        | _ -> { }
+        }
+    }
     for d in file.decls {
         match d {
         | DImport(_, ipath, alias) -> {
@@ -124,7 +213,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         }
         | _ -> { }
         }
-        vec.push(aggregated_decls, rename_with_pkg(d, cur.pkg))
+        vec.push(aggregated_decls, rename_with_pkg(d, cur.pkg, local_fns))
     }
 }
 
