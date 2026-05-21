@@ -1336,7 +1336,10 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         cg_expr(cg, b.rhs)
         cg_emitf(cg, "; %s++) ", fr.binding)
         cg.locals[fr.binding] = "int64_t"
+        saved := cg.in_return_ctx
+        cg.in_return_ctx = false
         cg_block_body(cg, fr.body)
+        cg.in_return_ctx = saved
         cg_emit(cg, "\n")
         return
     }
@@ -1360,8 +1363,11 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         cg_emit_indent(cg)
         cg_emitf(cg, "%s %s = %s.data[%s];\n", elem_c, fr.binding, col, idx)
         cg.locals[fr.binding] = elem_c
+        saved := cg.in_return_ctx
+        cg.in_return_ctx = false
         for s in fr.body.stmts do cg_stmt(cg, s)
         if fr.body.tail != nil do cg_emit_tail_as_statement(cg, fr.body.tail)
+        cg.in_return_ctx = saved
         cg.indent_lvl -= 1
         cg_emit_indent(cg); cg_emit(cg, "}\n")
         cg.indent_lvl -= 1
@@ -1446,6 +1452,16 @@ next_tmp_id :: proc(cg: ^Codegen) -> int {
 }
 
 cg_let_stmt :: proc(cg: ^Codegen, name: string, type_ann: ^Type_Expr, value: Expr, is_var: bool) {
+    // `let _ = expr` discards the value. Emit a side-effecting cast to void
+    // rather than a named local so multiple discards in the same scope do not
+    // collide on the name `_`.
+    if name == "_" {
+        cg_emit_indent(cg)
+        cg_emit(cg, "(void)(")
+        cg_expr(cg, value)
+        cg_emit(cg, ");\n")
+        return
+    }
     type_str: string
     if type_ann != nil {
         type_str = c_type_of_type_expr(cg, type_ann)
@@ -1778,8 +1794,9 @@ cg_expr :: proc(cg: ^Codegen, e: Expr) {
     case ^Expr_Defer:
         cg_error(cg, "`defer` is only allowed as a statement, not in expression position")
         cg_emit(cg, "/*defer*/0")
-    case ^Expr_Tuple,
-         ^Expr_Block, ^Expr_While, ^Expr_For:
+    case ^Expr_Block:
+        cg_emit_block_as_expr(cg, v)
+    case ^Expr_Tuple, ^Expr_While, ^Expr_For:
         cg_error(cg, fmt.tprintf("expression kind will be added in a later milestone"))
         cg_emit(cg, "/*unsupported*/0")
     }
@@ -2775,7 +2792,11 @@ cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, ar
     }
 
     cg_emitf(cg, "%s = ", result_tmp)
-    cg_expr(cg, arm.body)
+    if blk, is_blk := arm.body.(^Expr_Block); is_blk {
+        cg_emit_block_as_expr(cg, blk)
+    } else {
+        cg_expr(cg, arm.body)
+    }
     cg_emit(cg, "; break; } ")
 
     clear(&cg.locals)

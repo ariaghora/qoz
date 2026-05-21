@@ -135,6 +135,185 @@ let resolve_named(tc: *TyContext, span: Span, path: Vec<string>, args: Vec<TypeE
     ty.ty_error_()
 }
 
+// --- Environment for local bindings during expression checking ---
+
+type Binding = { name: string, ty: Ty }
+
+type Env = {
+    bindings: Vec<Binding>,
+}
+
+let env_make(): Env = Env { bindings: vec.make() }
+
+let env_define(env: *Env, name: string, t: Ty) = {
+    vec.push(&env.bindings, Binding { name: name, ty: t })
+}
+
+let env_lookup(env: *Env, name: string): Ty = {
+    var i: i64 = len(env.bindings) - 1
+    while i >= 0 {
+        let b = env.bindings[i]
+        if strings.eq_raw(b.name, name) {
+            return b.ty
+        }
+        i = i - 1
+    }
+    ty.ty_error_()
+}
+
+// --- Expression synthesis ---
+
+let synth(tc: *TyContext, env: *Env, e: Expr): Ty = {
+    match e {
+    | EInt(_, _)             -> ty.ty_int_untyped()
+    | EFloat(_, _)           -> ty.ty_float_untyped()
+    | EString(_, _)          -> ty.ty_string_()
+    | EChar(_, _)            -> ty.ty_char_()
+    | EBool(_, _)            -> ty.ty_bool_()
+    | ENil(_)                -> ty.ty_nil_()
+    | EIdent(span, name)     -> synth_ident(tc, env, span, name)
+    | EPath(_, _)            -> ty.ty_error_()
+    | EUnary(_, _, rhs)      -> synth(tc, env, rhs)
+    | EBinary(_, op, l, r)   -> synth_binary(tc, env, op, l, r)
+    | EAssign(_, _, _, v)    -> { let _ = synth(tc, env, v); ty.ty_unit_() }
+    | ECall(_, _, args)      -> synth_call(tc, env, args)
+    | EField(_, base, _)     -> { let _ = synth(tc, env, base); ty.ty_error_() }
+    | EIndex(_, base, idx)   -> { let _ = synth(tc, env, base); let _ = synth(tc, env, idx); ty.ty_error_() }
+    | ECast(_, _, te)        -> resolve_type(tc, te)
+    | ETry(_, v)             -> synth(tc, env, v)
+    | ETuple(_, _)           -> ty.ty_error_()
+    | ERecord(_, te, _)      -> resolve_type(tc, te)
+    | EClosure(_, _, _, _)   -> ty.ty_error_()
+    | EBlock(_, stmts, tail) -> synth_block(tc, env, stmts, tail)
+    | EIf(_, c, t, f)        -> synth_if(tc, env, c, t, f)
+    | EMatch(_, scrut, arms) -> synth_match(tc, env, scrut, arms)
+    | EWhile(_, c, b)        -> { let _ = synth(tc, env, c); let _ = synth(tc, env, b); ty.ty_unit_() }
+    | EFor(_, _, it, b)      -> { let _ = synth(tc, env, it); let _ = synth(tc, env, b); ty.ty_unit_() }
+    | EReturn(_, v)          -> { let _ = synth(tc, env, v); ty.ty_unit_() }
+    | EDefer(_, b)           -> { let _ = synth(tc, env, b); ty.ty_unit_() }
+    | ESizeOf(_, _)          -> ty.ty_int_(64, true)
+    | EArrayLit(_, elems)    -> { for el in elems { let _ = synth(tc, env, el) } ty.ty_error_() }
+    }
+}
+
+let is_ty_error(t: Ty): bool =
+    match t {
+    | TyError             -> true
+    | TyInt(_)            -> false
+    | TyFloat(_)          -> false
+    | TyBool              -> false
+    | TyChar              -> false
+    | TyString            -> false
+    | TyCstring           -> false
+    | TyUnit              -> false
+    | TyNil               -> false
+    | TyPtr(_)            -> false
+    | TyAdt(_, _)         -> false
+    | TyRecord(_, _)      -> false
+    | TyFn(_, _)          -> false
+    | TyVar(_, _)         -> false
+    }
+
+let synth_ident(tc: *TyContext, env: *Env, span: Span, name: string): Ty = {
+    let local = env_lookup(env, name)
+    if !is_ty_error(local) {
+        return local
+    }
+    if map.contains(&tc.fns, name) {
+        return ty.ty_error_()
+    }
+    if map.contains(&tc.externs, name) {
+        return ty.ty_error_()
+    }
+    record_error(tc, span, fmt.format("undefined name `{}`", name))
+    ty.ty_error_()
+}
+
+let synth_binary(tc: *TyContext, env: *Env, op: BinaryOp, l: Expr, r: Expr): Ty = {
+    let lt = synth(tc, env, l)
+    let _ = synth(tc, env, r)
+    match op {
+    | BOpEq             -> ty.ty_bool_()
+    | BOpNe             -> ty.ty_bool_()
+    | BOpLt             -> ty.ty_bool_()
+    | BOpGt             -> ty.ty_bool_()
+    | BOpLe             -> ty.ty_bool_()
+    | BOpGe             -> ty.ty_bool_()
+    | BOpAnd            -> ty.ty_bool_()
+    | BOpOr             -> ty.ty_bool_()
+    | BOpAdd            -> lt
+    | BOpSub            -> lt
+    | BOpMul            -> lt
+    | BOpDiv            -> lt
+    | BOpMod            -> lt
+    | BOpRange          -> lt
+    | BOpRangeInclusive -> lt
+    }
+}
+
+let synth_call(tc: *TyContext, env: *Env, args: Vec<Expr>): Ty = {
+    for a in args {
+        let _ = synth(tc, env, a)
+    }
+    ty.ty_error_()
+}
+
+let synth_block(tc: *TyContext, env: *Env, stmts: Vec<Stmt>, tail: Expr): Ty = {
+    for s in stmts {
+        match s {
+        | SLet(_, name, te, val)  -> { let _ = synth(tc, env, val); env_define(env, name, resolve_type(tc, te)) }
+        | SVar(_, name, te, val)  -> { let _ = synth(tc, env, val); env_define(env, name, resolve_type(tc, te)) }
+        | SExpr(_, ex)            -> { let _ = synth(tc, env, ex) }
+        }
+    }
+    synth(tc, env, tail)
+}
+
+let synth_if(tc: *TyContext, env: *Env, c: Expr, t: Expr, f: Expr): Ty = {
+    let _ = synth(tc, env, c)
+    let tt = synth(tc, env, t)
+    let _ = synth(tc, env, f)
+    tt
+}
+
+let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty = {
+    let _ = synth(tc, env, scrut)
+    var result: Ty = ty.ty_unit_()
+    var first = true
+    for arm in arms {
+        let armt = synth(tc, env, arm.body)
+        if first {
+            result = armt
+            first = false
+        }
+    }
+    result
+}
+
+let check_fn_bodies(tc: *TyContext, f: File) = {
+    for d in f.decls {
+        match d {
+        | DFn(_, _, _, params, _, body, _) -> {
+            var env = env_make()
+            for pp in params {
+                env_define(&env, pp.name, resolve_type(tc, pp.ty))
+            }
+            let _ = synth(tc, &env, body)
+        }
+        | DImport(_, _, _) -> { }
+        | DStruct(_, _, _, _) -> { }
+        | DEnum(_, _, _, _) -> { }
+        | DTypeAlias(_, _, _, _) -> { }
+        | DConst(_, _, _, val) -> {
+            var env = env_make()
+            let _ = synth(tc, &env, val)
+        }
+        | DExternal(_, _, _, _, _) -> { }
+        | DLink(_, _, _) -> { }
+        }
+    }
+}
+
 // --- Symbol kind sanity check ---
 
 let validate_signatures(tc: *TyContext, f: File) = {

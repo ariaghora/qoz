@@ -61,6 +61,7 @@ let main() = {
     var tc = check.make_ctx()
     check.register_file(&tc, file)
     check.validate_signatures(&tc, file)
+    check.check_fn_bodies(&tc, file)
     check.summary(&tc)
     check.report(&tc)
 }
