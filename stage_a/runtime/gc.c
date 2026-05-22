@@ -16,8 +16,6 @@
 #include <stdbool.h>
 #include <setjmp.h>
 #include <pthread.h>
-#include <stdio.h>
-#include <string.h>
 
 /* state: 0 = empty (probe stops); 1 = live; 2 = tombstone (probe continues) */
 typedef struct {
@@ -358,29 +356,9 @@ void qoz_gc_free(void *ptr) {
     g_table.ntomb++;
 }
 
-/* Free everything (called at process shutdown). When the QOZ_GC_REPORT
- * environment variable is set, print a single-line summary of how many
- * allocations and bytes are still live just before the wholesale free
- * so callers can spot leaks. A correctly-rooted program should report
- * close to zero live bytes after the implicit pre-shutdown collection
- * triggered below. */
+/* Free everything (called at process shutdown). */
 void qoz_gc_shutdown(void) {
     if (!g_table.slots) return;
-
-    const char *report = getenv("QOZ_GC_REPORT");
-    if (report && report[0]) {
-        int64_t live_before = g_bytes_live;
-        int64_t nlive_before = g_table.nlive;
-        int64_t freed_in_final = qoz_gc_run();
-        fprintf(stderr,
-                "[qoz_gc] shutdown: pre=%lld/%lld(live alloc/bytes)  "
-                "freed_in_final_sweep=%lld  "
-                "post=%lld/%lld\n",
-                (long long)nlive_before, (long long)live_before,
-                (long long)freed_in_final,
-                (long long)g_table.nlive, (long long)g_bytes_live);
-    }
-
     for (int64_t i = 0; i < g_table.nslots; i++) {
         if (g_table.slots[i].state == 1) {
             free(g_table.slots[i].ptr);

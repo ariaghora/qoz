@@ -3455,26 +3455,55 @@ let is_managed_pointer_field(e: *Emitter, te: TypeExpr): bool = {
     }
 }
 
-let emit_record_desc(e: *Emitter, name: string, fields: Vec<StructField>) = {
-    var ptr_field_names: Vec<string> = vec.make()
-    for f in fields {
-        if is_managed_pointer_field(e, f.ty) {
-            vec.push(&ptr_field_names, f.name)
+// Append to `out` one C constant-expression per managed-pointer slot
+// stored within field `field` of the parent C aggregate identified by
+// `parent` (a C type-name fragment usable inside `offsetof(parent, X)`).
+// String fields contribute two slots (.data and .root). Vec and Map
+// fields contribute one slot at the first pointer-sized word, since
+// those structs hold their backing-buffer pointer first by convention.
+let collect_field_ptr_offsets(e: *Emitter, parent: string, field: string, te: TypeExpr, out: *Vec<string>) = {
+    let base = strings.cat("offsetof(", strings.cat(parent, strings.cat(", ", strings.cat(field, ")"))))
+    match te {
+    | TEPtr(_, _) -> {
+        vec.push(out, strings.cat("(int32_t)", base))
+    }
+    | TENamed(_, path, _) -> {
+        if len(path) >= 1 {
+            let n = path[len(path) - 1]
+            if map.contains(&e.is_enum, n) {
+                vec.push(out, strings.cat("(int32_t)", base))
+                return
+            }
+            if strings.eq_raw(n, "string") {
+                vec.push(out, strings.cat("(int32_t)(", strings.cat(base, " + offsetof(qoz_string, data))")))
+                vec.push(out, strings.cat("(int32_t)(", strings.cat(base, " + offsetof(qoz_string, root))")))
+                return
+            }
+            if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") {
+                vec.push(out, strings.cat("(int32_t)", base))
+                return
+            }
         }
     }
-    let nptrs = len(ptr_field_names)
+    | _ -> { }
+    }
+}
+
+let emit_record_desc(e: *Emitter, name: string, fields: Vec<StructField>) = {
+    let parent = strings.cat("struct qoz_", name)
+    var offsets: Vec<string> = vec.make()
+    for f in fields {
+        collect_field_ptr_offsets(e, parent, f.name, f.ty, &offsets)
+    }
+    let nptrs = len(offsets)
     if nptrs > 0 {
         push(e, "static const int32_t qoz_")
         push(e, name)
         push(e, "_offsets[] = { ")
         var i: i64 = 0
-        for fn_name in ptr_field_names {
+        for expr in offsets {
             if i > 0 { push(e, ", ") }
-            push(e, "(int32_t)offsetof(struct qoz_")
-            push(e, name)
-            push(e, ", ")
-            push(e, fn_name)
-            push(e, ")")
+            push(e, expr)
             i = i + 1
         }
         push(e, " };\n")
