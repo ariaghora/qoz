@@ -2786,6 +2786,12 @@ cg_match_arm_statement :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm
     cg_emit(cg, "{\n")
     cg.indent_lvl += 1
 
+    // Per-arm shadow-stack guard so pointer-typed pattern bindings are
+    // popped when this case block exits via break, freeing their stack
+    // addresses before the next iteration of the enclosing switch.
+    cg_emit_indent(cg); cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_arm_g = qoz_gc_shadow_top();\n")
+    cg_emit_indent(cg); cg_emit(cg, "(void)_qoz_arm_g;\n")
+
     variant_decl: ^Variant_Decl
     if enum_decl, ok2 := cg.enums[enum_name]; ok2 {
         variant_decl = find_variant(enum_decl, variant_name)
@@ -2839,6 +2845,13 @@ cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
     cg_emitf(cg, "%s %s = ", scrut_c, tmp_scrut)
     cg_expr(cg, m.scrutinee)
     cg_emit(cg, "; ")
+    // The statement-expression spans a single C expression so the
+    // function-scope cleanup attribute can't restore the shadow stack
+    // around tmp_scrut. Push explicitly on entry and pop on exit.
+    pushed_scrut := cg_c_type_is_pointer(scrut_c)
+    if pushed_scrut {
+        cg_emitf(cg, "qoz_gc_push_root(&%s); ", tmp_scrut)
+    }
     cg_emitf(cg, "%s %s; ", result_c, tmp_res)
 
     synth := new(Expr_Ident, context.temp_allocator)
@@ -2859,6 +2872,9 @@ cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
         cg_match_arm_expression(cg, synth, enum_name, arm, tmp_res)
     }
     cg_emit(cg, "} ")
+    if pushed_scrut {
+        cg_emit(cg, "qoz_gc_pop_roots(1); ")
+    }
     cg_emitf(cg, "%s; ", tmp_res)
     cg_emit(cg, "})")
 }
@@ -2889,6 +2905,11 @@ cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, ar
     }
     cg_emitf(cg, "case %s_%s: ", prefix, variant_name)
     cg_emit(cg, "{ ")
+    // Per-arm shadow-stack guard. Pattern bindings emitted below push
+    // their pointer-typed locals; the case block ends at `break` so the
+    // cleanup attribute restores the shadow top before those addresses
+    // are reused for the next arm or the enclosing scope.
+    cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_arm_g = qoz_gc_shadow_top(); (void)_qoz_arm_g; ")
 
     variant_decl: ^Variant_Decl
     if enum_decl, ok2 := cg.enums[enum_name]; ok2 {
