@@ -1,0 +1,10 @@
+// expect: 134
+// os.panic aborts the process (SIGABRT = 128+6 = 134) with the message
+// on stderr. Recoverable errors should use Result<T, E> + try; panic is
+// for programmer bugs only.
+
+import std/os
+
+let main() = {
+    os.panic("intentional panic from regression test")
+}

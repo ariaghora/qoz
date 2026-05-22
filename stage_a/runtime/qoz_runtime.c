@@ -22,6 +22,14 @@ qoz_string qoz_os_arg(int64_t i) {
 
 void qoz_os_exit(int64_t code) { exit((int)code); }
 
+void qoz_panic(qoz_string msg) {
+    fputs("qoz: panic: ", stderr);
+    if (msg.len > 0) fwrite(msg.data, 1, (size_t)msg.len, stderr);
+    fputc('\n', stderr);
+    fflush(stderr);
+    abort();
+}
+
 qoz_string qoz_os_getenv(qoz_string name) {
     char buf[1024];
     if (name.len < 0 || (size_t)name.len >= sizeof(buf)) return (qoz_string){ NULL, 0 };

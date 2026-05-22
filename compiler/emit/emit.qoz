@@ -37,6 +37,7 @@ type Emitter = {
     match_hint:        TypeExpr,                // hint TypeExpr for the current match expression's result
     fn_typedefs:       Map<string, string>,    // mangled name -> typedef body (for function types)
     op_dispatch:       Map<string, string>,    // "<op>::<TypeName>" -> fn name registered via @operator
+    byval_helpers_emitted: Map<string, bool>,  // fn_name -> already emitted a _qoz_byval_FN forwarder
     tuple_typedefs:    Map<string, string>,    // mangled tuple name -> typedef body
     tuple_typedef_order: Vec<string>,          // mangled tuple names in insertion order
     fn_typedef_order:  Vec<string>,            // mangled names in insertion order
@@ -69,6 +70,7 @@ let make_emitter(): Emitter = Emitter {
     match_hint:       TEUnit(Span { file: "", line: 0, col: 0 }),
     fn_typedefs:      map.make(),
     op_dispatch:      map.make(),
+    byval_helpers_emitted: map.make(),
     tuple_typedefs:   map.make(),
     tuple_typedef_order: vec.make(),
     fn_typedef_order: vec.make(),
@@ -1168,6 +1170,10 @@ let emit_expr(e: *Emitter, ex: Expr) = {
         }
     }
     | EBlock(_, stmts, tail) -> {
+        if len(stmts) == 0 {
+            emit_block_tail_as_value(e, tail)
+            return
+        }
         push(e, "({ ")
         for s in stmts {
             emit_stmt(e, s)
@@ -2758,6 +2764,27 @@ let emit_print_one(e: *Emitter, a: Expr) = {
 }
 
 // `s == t` on qoz_string maps to qoz_string_eq; `!=` is its negation.
+// One forwarder per `@operator(...)` target. The user-written function
+// takes `*T` arguments; the forwarder accepts both operands by value
+// and passes their addresses through. Emitted at most once per
+// `fn_name` per compilation.
+let ensure_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: string, ret_ct: string) = {
+    if map.contains(&e.byval_helpers_emitted, fn_name) { return }
+    e.byval_helpers_emitted[fn_name] = true
+    var src = "static "
+    src = strings.cat(src, ret_ct)
+    src = strings.cat(src, " _qoz_byval_")
+    src = strings.cat(src, fn_name)
+    src = strings.cat(src, "(")
+    src = strings.cat(src, operand_ct)
+    src = strings.cat(src, " a, ")
+    src = strings.cat(src, operand_ct)
+    src = strings.cat(src, " b) { return ")
+    src = strings.cat(src, fn_name)
+    src = strings.cat(src, "(&a, &b); }\n")
+    vec.push(&e.synth_fn_decls, src)
+}
+
 let binary_op_text(op: BinaryOp): string = {
     match op {
     | BOpEq    -> "=="
@@ -2820,20 +2847,23 @@ let emit_binary(e: *Emitter, op: BinaryOp, lhs: Expr, rhs: Expr) = {
             let key = strings.cat(strings.cat(op_text, "::"), tname)
             if let Some(fn_name) = map.get(&e.op_dispatch, key) {
                 let ct = c_type_for(e, lhs_te)
-                // Single statement-expression so both temporaries outlive
-                // the call. Separate compounds would each end before the
-                // call begins, leaving the &-of pointers dangling at -O2.
-                push(e, "({ ")
-                push(e, ct)
-                push(e, " _qoz_oa = ")
-                emit_expr(e, lhs)
-                push(e, "; ")
-                push(e, ct)
-                push(e, " _qoz_ob = ")
-                emit_expr(e, rhs)
-                push(e, "; ")
+                let ret_te = match map.get(&e.fn_returns, fn_name) {
+                | Some(t) -> t
+                | None    -> TEUnit(Span { file: "", line: 0, col: 0 })
+                }
+                let ret_ct = c_type_for(e, ret_te)
+                ensure_byval_dispatch_helper(e, fn_name, ct, ret_ct)
+                // The user wrote `lhs OP rhs`; the operator is defined as
+                // a `let` taking `*T` parameters. Call the by-value
+                // forwarder so each argument lands in a stable local of
+                // the helper whose address can be passed through.
+                push(e, "_qoz_byval_")
                 push(e, fn_name)
-                push(e, "(&_qoz_oa, &_qoz_ob); })")
+                push(e, "(")
+                emit_expr(e, lhs)
+                push(e, ", ")
+                emit_expr(e, rhs)
+                push(e, ")")
                 return
             }
         }
@@ -3033,18 +3063,23 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
     push(e, c_type_for(e, ret))
     push(e, " ")
     push(e, name)
-    push(e, "(")
-    var i: i64 = 0
-    for p in params {
-        if i > 0 {
-            push(e, ", ")
+    if len(params) == 0 {
+        push(e, "(void)")
+    } else {
+        push(e, "(")
+        var i: i64 = 0
+        for p in params {
+            if i > 0 {
+                push(e, ", ")
+            }
+            push(e, c_type_for(e, p.ty))
+            push(e, " ")
+            push(e, p.name)
+            i = i + 1
         }
-        push(e, c_type_for(e, p.ty))
-        push(e, " ")
-        push(e, p.name)
-        i = i + 1
+        push(e, ")")
     }
-    push(e, ") {\n    ")
+    push(e, " {\n    ")
     // Shadow-stack guard: at fn entry, snapshot the top; on any return
     // (including early ones), the __cleanup__ attribute restores it. This
     // is how pointer locals stay reachable even when clang puts them in
@@ -3430,22 +3465,26 @@ let variant_has_positional(v: VariantDecl): bool = len(v.pos) > 0
 let int_to_string(n: i64): string = fmt.format("{}", n)
 
 let emit_variant_ctor(e: *Emitter, enum_name: string, v: VariantDecl) = {
-    push(e, "__attribute__((unused)) static qoz_")
+    push(e, "static qoz_")
     push(e, enum_name)
     push(e, " *qoz_make_")
     push(e, enum_name)
     push(e, "_")
     push(e, v.name)
-    push(e, "(")
-    var k: i64 = 0
-    for pt in v.pos {
-        if k > 0 { push(e, ", ") }
-        push(e, c_type_for(e, pt))
-        push(e, " f")
-        push(e, int_to_string(k))
-        k = k + 1
+    if !variant_has_positional(v) {
+        push(e, "(void) {\n")
+    } else {
+        push(e, "(")
+        var k: i64 = 0
+        for pt in v.pos {
+            if k > 0 { push(e, ", ") }
+            push(e, c_type_for(e, pt))
+            push(e, " f")
+            push(e, int_to_string(k))
+            k = k + 1
+        }
+        push(e, ") {\n")
     }
-    push(e, ") {\n")
     push(e, "    qoz_")
     push(e, enum_name)
     push(e, " *p = qoz_gc_alloc(sizeof(qoz_")
@@ -3581,7 +3620,7 @@ let emit_record_desc(e: *Emitter, name: string, fields: Vec<StructField>) = {
         }
         push(e, " };\n")
     }
-    push(e, "__attribute__((unused)) static const qoz_type_desc qoz_")
+    push(e, "static const qoz_type_desc qoz_")
     push(e, name)
     push(e, "_desc = { ")
     if nptrs == 0 {
@@ -3649,7 +3688,7 @@ let emit_adt_desc(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
             push(e, " };\n")
         }
     }
-    push(e, "__attribute__((unused)) static const qoz_variant_desc qoz_")
+    push(e, "static const qoz_variant_desc qoz_")
     push(e, name)
     push(e, "_variants[] = {\n")
     for v in variants {
@@ -3674,7 +3713,7 @@ let emit_adt_desc(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
         push(e, " },\n")
     }
     push(e, "};\n")
-    push(e, "__attribute__((unused)) static const qoz_type_desc qoz_")
+    push(e, "static const qoz_type_desc qoz_")
     push(e, name)
     push(e, "_desc = { QOZ_DESC_ADT, (int32_t)sizeof(struct qoz_")
     push(e, name)
@@ -3708,7 +3747,7 @@ let emit_struct(e: *Emitter, name: string, fields: Vec<StructField>) = {
 }
 
 let emit_record_eq(e: *Emitter, name: string, fields: Vec<StructField>) = {
-    push(e, "__attribute__((unused)) static bool qoz_eq_")
+    push(e, "static bool qoz_eq_")
     push(e, name)
     push(e, "(qoz_")
     push(e, name)
@@ -3730,7 +3769,7 @@ let emit_record_eq(e: *Emitter, name: string, fields: Vec<StructField>) = {
 }
 
 let emit_record_hash(e: *Emitter, name: string, fields: Vec<StructField>) = {
-    push(e, "__attribute__((unused)) static uint64_t qoz_hash_")
+    push(e, "static uint64_t qoz_hash_")
     push(e, name)
     push(e, "(qoz_")
     push(e, name)
@@ -3815,6 +3854,10 @@ let emit_fn_proto(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr
     push(e, c_type_for(e, ret))
     push(e, " ")
     push(e, name)
+    if len(params) == 0 {
+        push(e, "(void);\n")
+        return
+    }
     push(e, "(")
     var i: i64 = 0
     for p in params {
@@ -3832,6 +3875,10 @@ let emit_extern_proto(e: *Emitter, symbol: string, params: Vec<FnParam>, ret: Ty
     push(e, c_type_for(e, ret))
     push(e, " ")
     push(e, symbol)
+    if len(params) == 0 {
+        push(e, "(void);\n")
+        return
+    }
     push(e, "(")
     var i: i64 = 0
     for p in params {
@@ -3864,10 +3911,9 @@ let emit_record_lit(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>) = {
 // statement-expression still has a value.
 let emit_block_tail_as_value(e: *Emitter, tail: Expr) = {
     match tail {
-    | EWhile(_, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
-    | EFor(_, _, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
-    | EAssign(_, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
-    | EDefer(_, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+    | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
+        emit_stmt_expr(e, tail); push(e, " 0")
+    }
     | _ -> emit_expr(e, tail)
     }
 }
@@ -3879,12 +3925,25 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
     | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, hint)
     | EBlock(sp, stmts, tail) -> {
+        // A block with no statements is just its tail expression. Emit
+        // it directly, without wrapping in a GNU statement expression.
+        if len(stmts) == 0 {
+            match tail {
+            | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) -> {
+                push(e, "((")
+                emit_stmt_expr(e, tail)
+                push(e, "), 0)")
+            }
+            | _ -> emit_value_with_hint(e, tail, hint)
+            }
+            return
+        }
         push(e, "({ ")
         for s in stmts { emit_stmt(e, s) }
         match tail {
-        | EWhile(_, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
-        | EFor(_, _, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
-        | EAssign(_, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+        | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) -> {
+            emit_stmt_expr(e, tail); push(e, " 0")
+        }
         | _ -> emit_value_with_hint(e, tail, hint)
         }
         push(e, "; })")
@@ -4177,10 +4236,17 @@ let emit_for_loop_one(e: *Emitter, binding: string, binding2: string, iter: Expr
 }
 
 let emit_vec_for(e: *Emitter, binding: string, iter: Expr, body: Expr) = {
-    e.locals[binding] = vec_element_typeexpr(e, iter)
-    push(e, "{ __auto_type __col = ")
+    let elem_te = vec_element_typeexpr(e, iter)
+    e.locals[binding] = elem_te
+    let col_ct  = c_type_for(e, infer_base_typeexpr(e, iter))
+    let elem_ct = c_type_for(e, elem_te)
+    push(e, "{ ")
+    push(e, col_ct)
+    push(e, " __col = ")
     emit_expr(e, iter)
-    push(e, "; for (int64_t __i = 0; __i < __col.len; __i++) { __auto_type ")
+    push(e, "; for (int64_t __i = 0; __i < __col.len; __i++) { ")
+    push(e, elem_ct)
+    push(e, " ")
     push(e, binding)
     push(e, " = __col.data[__i]; (void)")
     push(e, binding)
@@ -4202,11 +4268,23 @@ let vec_element_typeexpr(e: *Emitter, iter: Expr): TypeExpr = {
 }
 
 let emit_map_for(e: *Emitter, binding: string, binding2: string, iter: Expr, body: Expr) = {
-    push(e, "{ __auto_type __col = ")
+    let iter_te = infer_base_typeexpr(e, iter)
+    let col_ct  = c_type_for(e, iter_te)
+    let key_te  = map_key_typeexpr(e, iter_te)
+    let val_te  = map_val_typeexpr(e, iter_te)
+    let key_ct  = c_type_for(e, key_te)
+    let val_ct  = c_type_for(e, val_te)
+    push(e, "{ ")
+    push(e, col_ct)
+    push(e, " __col = ")
     emit_expr(e, iter)
-    push(e, "; for (int64_t __i = 0; __i < __col.cap; __i++) { if (!__col.slots[__i].occupied || __col.slots[__i].deleted) continue; __auto_type ")
+    push(e, "; for (int64_t __i = 0; __i < __col.cap; __i++) { if (!__col.slots[__i].occupied || __col.slots[__i].deleted) continue; ")
+    push(e, key_ct)
+    push(e, " ")
     push(e, binding)
-    push(e, " = __col.slots[__i].key; __auto_type ")
+    push(e, " = __col.slots[__i].key; ")
+    push(e, val_ct)
+    push(e, " ")
     push(e, binding2)
     push(e, " = __col.slots[__i].value; (void)")
     push(e, binding)
@@ -4215,6 +4293,26 @@ let emit_map_for(e: *Emitter, binding: string, binding2: string, iter: Expr, bod
     push(e, "; ")
     emit_branch_body_inline(e, body)
     push(e, "} }")
+}
+
+let map_key_typeexpr(e: *Emitter, te: TypeExpr): TypeExpr = {
+    match te {
+    | TENamed(sp, path, args) -> {
+        if len(args) >= 2 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") { return args[0] }
+        TEUnit(sp)
+    }
+    | _ -> TEUnit(Span { file: "", line: 0, col: 0 })
+    }
+}
+
+let map_val_typeexpr(e: *Emitter, te: TypeExpr): TypeExpr = {
+    match te {
+    | TENamed(sp, path, args) -> {
+        if len(args) >= 2 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") { return args[1] }
+        TEUnit(sp)
+    }
+    | _ -> TEUnit(Span { file: "", line: 0, col: 0 })
+    }
 }
 
 let emit_branch_body_inline(e: *Emitter, body: Expr) = {
@@ -4934,10 +5032,11 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
         // For unit-returning main, control-flow tails (for/while/if-as-stmt)
         // must be emitted as statements so the loop body actually appears.
         match tail {
-        | EFor(_, _, _, _, _)   -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
-        | EWhile(_, _, _)       -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
-        | EAssign(_, _, _, _)   -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
-        | EDefer(_, _)          -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
+        | EFor(_, _, _, _, _) | EWhile(_, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
+            emit_stmt_expr(e, tail)
+            push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
+            return
+        }
         | _ -> { }
         }
         emit_expr(e, tail)

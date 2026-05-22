@@ -41,6 +41,15 @@ qoz_string qoz_os_arg(int64_t i);
 void       qoz_os_exit(int64_t code);
 qoz_string qoz_os_getenv(qoz_string name);
 
+/* Unrecoverable abort. Prints a one-line diagnostic to stderr (the
+ * message, the source location if the call site provided one, and a
+ * fixed prefix) and calls abort(). Intended for programmer bugs:
+ * invariants that "cannot" fail, exhausted match arms reaching the
+ * default, integer overflow on counter limits, etc. Expected errors
+ * flow through Result<T, E> with the `try` operator; panic is not
+ * recoverable. */
+_Noreturn void qoz_panic(qoz_string msg);
+
 /* File system */
 qoz_string qoz_fs_read_file(qoz_string path);
 bool       qoz_fs_write_file(qoz_string path, qoz_string content);

@@ -11,6 +11,13 @@ external let arg_raw(i: i64): string
 @link_name("qoz_os_exit")
 external let exit(code: i64)
 
+// Unrecoverable abort. Prints `qoz: panic: <msg>` to stderr and calls
+// abort(3). Use for programmer bugs (broken invariants, "impossible"
+// match arms, etc.). Recoverable errors should flow through
+// Result<T, E> with the `try` operator instead.
+@link_name("qoz_panic")
+external let panic(msg: string)
+
 @link_name("qoz_os_getenv")
 external let getenv(name: string): string
 
