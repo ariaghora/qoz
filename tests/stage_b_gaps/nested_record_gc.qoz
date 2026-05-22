@@ -1,0 +1,50 @@
+// expect: 0
+// A heap-allocated record whose payload includes a by-value record
+// containing managed strings. The precise GC must reach the inner
+// strings through the nested-record descriptor flattening or the
+// strings will be collected while the outer pointer is still in scope.
+
+import std/vec
+import std/strings
+import std/fmt
+
+type Inner = {
+    a: string,
+    b: string,
+}
+
+type Outer = {
+    label: string,
+    inner: Inner,
+    note:  string,
+}
+
+let make_outer(i: i64): *Outer = {
+    let label = strings.cat("label-", fmt.format("{}", i))
+    let a     = strings.cat("a-",     fmt.format("{}", i))
+    let b     = strings.cat("b-",     fmt.format("{}", i))
+    let note  = strings.cat("note-",  fmt.format("{}", i))
+    let o = mem.alloc(size_of(Outer)) as *Outer
+    o.label = label
+    o.inner = Inner { a: a, b: b }
+    o.note  = note
+    o
+}
+
+import std/mem
+
+let main(): i64 = {
+    var keep: Vec<*Outer> = vec.make()
+    var i: i64 = 0
+    while i < 128 {
+        let o = make_outer(i)
+        vec.push(&keep, o)
+        i = i + 1
+    }
+    let last = keep[len(keep) - 1]
+    if !strings.has_prefix(last.label, "label-127") { return 1 }
+    if !strings.has_prefix(last.inner.a, "a-127")   { return 2 }
+    if !strings.has_prefix(last.inner.b, "b-127")   { return 3 }
+    if !strings.has_prefix(last.note,  "note-127")  { return 4 }
+    0
+}

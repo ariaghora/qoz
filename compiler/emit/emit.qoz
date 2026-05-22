@@ -3461,13 +3461,15 @@ let is_managed_pointer_field(e: *Emitter, te: TypeExpr): bool = {
 // String fields contribute two slots (.data and .root). Vec and Map
 // fields contribute one slot at the first pointer-sized word, since
 // those structs hold their backing-buffer pointer first by convention.
+// Non-generic user record fields recurse into their inner fields with
+// composed offsets.
 let collect_field_ptr_offsets(e: *Emitter, parent: string, field: string, te: TypeExpr, out: *Vec<string>) = {
     let base = strings.cat("offsetof(", strings.cat(parent, strings.cat(", ", strings.cat(field, ")"))))
     match te {
     | TEPtr(_, _) -> {
         vec.push(out, strings.cat("(int32_t)", base))
     }
-    | TENamed(_, path, _) -> {
+    | TENamed(_, path, args) -> {
         if len(path) >= 1 {
             let n = path[len(path) - 1]
             if map.contains(&e.is_enum, n) {
@@ -3482,6 +3484,40 @@ let collect_field_ptr_offsets(e: *Emitter, parent: string, field: string, te: Ty
             if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") {
                 vec.push(out, strings.cat("(int32_t)", base))
                 return
+            }
+            // Non-generic user record: recurse into its fields and
+            // compose offsetof expressions. Generic instantiations
+            // (args != empty) are left opaque for now since computing
+            // the mangled C struct name is non-trivial here.
+            if len(args) == 0 {
+                match map.get(&e.struct_decls, n) {
+                | Some(d) -> {
+                    match d {
+                    | DStruct(_, _, params, fields) -> {
+                        if len(params) == 0 {
+                            let inner_parent = strings.cat("struct qoz_", n)
+                            for sf in fields {
+                                let composed_parent = inner_parent
+                                let composed_field  = sf.name
+                                // Build "(int32_t)(offsetof(parent, field) + offsetof(inner_parent, composed_field))"
+                                // by capturing each inner offset, then prefixing with our base offset.
+                                var inner_offsets: Vec<string> = vec.make()
+                                collect_field_ptr_offsets(e, composed_parent, composed_field, sf.ty, &inner_offsets)
+                                for inner in inner_offsets {
+                                    // inner is "(int32_t)offsetof(...)" or "(int32_t)(offsetof(...) + ...)"
+                                    // Reframe as the sum with `base`.
+                                    let stripped = strings.slice(inner, 9, len(inner))   // drop "(int32_t)"
+                                    vec.push(out, strings.cat("(int32_t)(", strings.cat(base, strings.cat(" + ", strings.cat(stripped, ")")))))
+                                }
+                            }
+                            return
+                        }
+                    }
+                    | _ -> { }
+                    }
+                }
+                | None -> { }
+                }
             }
         }
     }
@@ -3535,13 +3571,20 @@ let emit_record_desc(e: *Emitter, name: string, fields: Vec<StructField>) = {
 // variants with no payload, no positional fields, or no pointer slots.
 let collect_variant_ptr_offsets(e: *Emitter, enum_name: string, v: VariantDecl): Vec<string> = {
     var out: Vec<string> = vec.make()
-    if !variant_has_positional(v) { return out }
     let parent = strings.cat("qoz_", strings.cat(enum_name, strings.cat("_", strings.cat(v.name, "_payload"))))
-    var i: i64 = 0
-    for pt in v.pos {
-        let field = strings.cat("f", int_to_string(i))
-        collect_field_ptr_offsets(e, parent, field, pt, &out)
-        i = i + 1
+    if variant_has_positional(v) {
+        var i: i64 = 0
+        for pt in v.pos {
+            let field = strings.cat("f", int_to_string(i))
+            collect_field_ptr_offsets(e, parent, field, pt, &out)
+            i = i + 1
+        }
+        return out
+    }
+    // Named-field variants emit the payload struct with the declared
+    // field names, not f<n>.
+    for sf in v.named {
+        collect_field_ptr_offsets(e, parent, sf.name, sf.ty, &out)
     }
     out
 }
