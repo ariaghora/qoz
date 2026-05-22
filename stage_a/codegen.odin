@@ -632,16 +632,19 @@ cg_emit_one_generic_body :: proc(cg: ^Codegen, fn: ^Decl_Fn, mangled: string, ty
     defer cg.current_mangled = saved_mangled
 
     cg_emit_one_generic_signature(cg, fn, mangled, type_args)
-    cg_emit(cg, " ")
+    cg_emit(cg, " {\n")
+    cg.indent_lvl += 1
 
     clear(&cg.locals)
     for p in fn.params {
         cg.locals[p.name] = c_type_of_type_expr(cg, p.type)
     }
+    cg_emit_shadow_prologue(cg, fn.params)
     cg.cur_ret = fn.ret
     cg.in_return_ctx = fn.ret != nil
-    cg_block_body(cg, fn.body)
-    cg_emit(cg, "\n\n")
+    cg_block_inline(cg, fn.body)
+    cg.indent_lvl -= 1
+    cg_emit_indent(cg); cg_emit(cg, "}\n\n")
     cg.in_return_ctx = false
     cg.cur_ret = nil
 }
@@ -1106,22 +1109,42 @@ cg_emit_fn_prototype :: proc(cg: ^Codegen, d: ^Decl_Fn) {
     cg_emit(cg, ")")
 }
 
+cg_c_type_is_pointer :: proc(s: string) -> bool {
+    return len(s) > 0 && s[len(s)-1] == '*'
+}
+
+cg_emit_shadow_prologue :: proc(cg: ^Codegen, params: []Fn_Param) {
+    cg_emit_indent(cg)
+    cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n")
+    cg_emit_indent(cg); cg_emit(cg, "(void)_qoz_shadow_guard;\n")
+    for p in params {
+        pty := c_type_of_type_expr(cg, p.type)
+        if cg_c_type_is_pointer(pty) {
+            cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", p.name)
+        }
+    }
+}
+
 cg_fn :: proc(cg: ^Codegen, d: ^Decl_Fn) {
     if d.name == "main" {
         cg_main_fn(cg, d)
         return
     }
     cg_emit_fn_prototype(cg, d)
-    cg_emit(cg, " ")
+    cg_emit(cg, " {\n")
+    cg.indent_lvl += 1
 
     clear(&cg.locals)
     for p in d.params {
         cg.locals[p.name] = c_type_of_type_expr(cg, p.type)
     }
+    cg_emit_shadow_prologue(cg, d.params)
+
     cg.cur_ret = d.ret
     cg.in_return_ctx = d.ret != nil
-    cg_block_body(cg, d.body)
-    cg_emit(cg, "\n\n")
+    cg_block_inline(cg, d.body)
+    cg.indent_lvl -= 1
+    cg_emit_indent(cg); cg_emit(cg, "}\n\n")
     cg.in_return_ctx = false
     cg.cur_ret = nil
 }
@@ -1132,6 +1155,7 @@ cg_main_fn :: proc(cg: ^Codegen, d: ^Decl_Fn) {
     cg_emit_indent(cg); cg_emit(cg, "qoz_set_argv(argc, argv);\n")
     cg_emit_indent(cg); cg_emit(cg, "int qoz_stack_anchor;\n")
     cg_emit_indent(cg); cg_emit(cg, "qoz_init(&qoz_stack_anchor);\n")
+    cg_emit_shadow_prologue(cg, d.params)
 
     clear(&cg.locals)
     cg.in_return_ctx = false
@@ -1366,10 +1390,16 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         cg_emit_indent(cg)
         cg_emitf(cg, "%s %s = %s.slots[%s].key;\n", key_c, fr.binding, col, idx)
         cg.locals[fr.binding] = key_c
+        if cg_c_type_is_pointer(key_c) {
+            cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", fr.binding)
+        }
         if fr.binding2 != "" {
             cg_emit_indent(cg)
             cg_emitf(cg, "%s %s = %s.slots[%s].value;\n", val_c, fr.binding2, col, idx)
             cg.locals[fr.binding2] = val_c
+            if cg_c_type_is_pointer(val_c) {
+                cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", fr.binding2)
+            }
         }
         saved := cg.in_return_ctx
         cg.in_return_ctx = false
@@ -1401,6 +1431,9 @@ cg_for_stmt :: proc(cg: ^Codegen, fr: ^Expr_For) {
         cg_emit_indent(cg)
         cg_emitf(cg, "%s %s = %s.data[%s];\n", elem_c, fr.binding, col, idx)
         cg.locals[fr.binding] = elem_c
+        if cg_c_type_is_pointer(elem_c) {
+            cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", fr.binding)
+        }
         saved := cg.in_return_ctx
         cg.in_return_ctx = false
         for s in fr.body.stmts do cg_stmt(cg, s)
@@ -1441,6 +1474,7 @@ cg_let_else_stmt :: proc(cg: ^Codegen, s: ^Stmt_Let_Else) {
     cg_emitf(cg, "%s %s = ", tmp_type, tmp_name)
     cg_expr(cg, s.value)
     cg_emit(cg, ";\n")
+    cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", tmp_name)
 
     cg_emit_indent(cg)
     cg_emitf(cg, "if (%s->tag != qoz_%s_%s) ", tmp_name, enum_name, variant_name)
@@ -1464,6 +1498,9 @@ cg_let_else_stmt :: proc(cg: ^Codegen, s: ^Stmt_Let_Else) {
                 cg_emit_indent(cg)
                 cg_emitf(cg, "%s %s = %s->payload.%s.f%d;\n", c_type, b.name, tmp_name, variant_decl.name, i)
                 cg.locals[b.name] = c_type
+                if cg_c_type_is_pointer(c_type) {
+                    cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", b.name)
+                }
             }
         }
     } else if variant_decl.kind == .Named {
@@ -1478,6 +1515,9 @@ cg_let_else_stmt :: proc(cg: ^Codegen, s: ^Stmt_Let_Else) {
                 cg_emit_indent(cg)
                 cg_emitf(cg, "%s %s = %s->payload.%s.%s;\n", c_type, b.name, tmp_name, variant_decl.name, nf.name)
                 cg.locals[b.name] = c_type
+                if cg_c_type_is_pointer(c_type) {
+                    cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", b.name)
+                }
             }
         }
     }
@@ -1514,6 +1554,9 @@ cg_let_stmt :: proc(cg: ^Codegen, name: string, type_ann: ^Type_Expr, value: Exp
     cg_emit(cg, " = ")
     cg_expr(cg, value)
     cg_emit(cg, ";\n")
+    if cg_c_type_is_pointer(type_str) {
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", name)
+    }
 }
 
 cg_tail_expr :: proc(cg: ^Codegen, e: Expr) {
@@ -2699,6 +2742,9 @@ materialise_scrutinee :: proc(cg: ^Codegen, scrut: Expr) -> Expr {
     cg_expr(cg, scrut)
     cg_emit(cg, ";\n")
     cg.locals[tmp] = scrut_c_type
+    if cg_c_type_is_pointer(scrut_c_type) {
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", tmp)
+    }
 
     synth := new(Expr_Ident)
     synth.name = tmp
@@ -3007,6 +3053,9 @@ cg_emit_variant_bindings :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, v
                 cg_emit_indent(cg)
                 cg_emitf(cg, "%s %s = %s.payload.%s.f%d; (void)%s;\n", c_type, b.name, base, vd.name, i, b.name)
                 cg.locals[b.name] = c_type
+                if cg_c_type_is_pointer(c_type) {
+                    cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", b.name)
+                }
             }
         }
     } else if vd.kind == .Named {
@@ -3021,6 +3070,9 @@ cg_emit_variant_bindings :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, v
                 cg_emit_indent(cg)
                 cg_emitf(cg, "%s %s = %s.payload.%s.%s; (void)%s;\n", c_type, b.name, base, vd.name, nf.name, b.name)
                 cg.locals[b.name] = c_type
+                if cg_c_type_is_pointer(c_type) {
+                    cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", b.name)
+                }
             }
         }
     }

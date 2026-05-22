@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <setjmp.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
 
 /* state: 0 = empty (probe stops); 1 = live; 2 = tombstone (probe continues) */
 typedef struct {
@@ -37,17 +40,8 @@ static qoz_gc_table g_table  = { NULL, 0, 0, 0 };
 /* Heap-usage tracking. qoz_gc_run triggers automatically from
  * qoz_gc_alloc once g_bytes_live crosses g_bytes_threshold. After each
  * sweep, the threshold is reset to max(initial, 2 * live_after_sweep)
- * so steady-state working sets pay one collection per doubling.
- *
- * The initial threshold is large because Stage A does not yet emit the
- * shadow-stack pushes that the precise scan needs, so the GC relies on
- * the conservative C-stack scan alone for roots. That scan is enough
- * for most programs but loses some live pointers under -O2 in the
- * compiler self-host workload. Raising the threshold above the peak
- * compiler working set keeps the system correct until Stage A emits
- * shadow-stack pushes (TODO) and qoz_string fields are flattened into
- * descriptor offsets (TODO). */
-#define QOZ_GC_INITIAL_THRESHOLD (1LL << 30)   /* 1 GiB */
+ * so steady-state working sets pay one collection per doubling. */
+#define QOZ_GC_INITIAL_THRESHOLD (1 << 20)   /* 1 MiB */
 static int64_t g_bytes_live      = 0;
 static int64_t g_bytes_threshold = QOZ_GC_INITIAL_THRESHOLD;
 
@@ -56,8 +50,13 @@ static int64_t g_bytes_threshold = QOZ_GC_INITIAL_THRESHOLD;
  * the caller's qoz_gc_push_root, where the precise scan would miss
  * them. At collection time, setjmp spills callee-saved registers into
  * a jmp_buf on the stack, and the scan walks from the current stack
- * pointer up to a bottom anchor captured at process start. */
+ * pointer up to the top of the thread's stack region (queried via
+ * pthread). The user-supplied anchor in qoz_init is recorded too but
+ * the pthread bound is preferred because it covers frames above main
+ * (dyld, _start, libc init) that may transit managed pointers during
+ * argv setup. */
 static void *g_stack_bottom = NULL;
+static void *g_stack_top_bound = NULL;
 
 #define ROOT_STACK_INIT 4096
 static void   **g_roots     = NULL;
@@ -269,11 +268,12 @@ int64_t qoz_gc_mark_phase(void) {
     qoz_gc_walk_shadow_roots(mark_callback, &ms);
     /* Supplement with a conservative scan of the C stack so register-
      * resident return values and call temporaries are not missed. */
-    if (g_stack_bottom) {
+    {
         jmp_buf jb;
         (void)setjmp(jb);   /* spills callee-saved registers to jb */
         void *stack_top = (void *)&jb;
-        scan_conservative_range(&ms, stack_top, g_stack_bottom);
+        void *upper = g_stack_top_bound ? g_stack_top_bound : g_stack_bottom;
+        if (upper) scan_conservative_range(&ms, stack_top, upper);
     }
 
     int64_t marked = 0;
@@ -326,7 +326,16 @@ int64_t qoz_gc_run(void) {
     return freed;
 }
 
-void qoz_gc_set_stack_bottom(void *anchor) { g_stack_bottom = anchor; }
+void qoz_gc_set_stack_bottom(void *anchor) {
+    g_stack_bottom = anchor;
+    pthread_t self = pthread_self();
+    void *addr = pthread_get_stackaddr_np(self);
+    size_t sz   = pthread_get_stacksize_np(self);
+    /* pthread_get_stackaddr_np returns the address one past the high end
+     * of the stack on darwin; subtract one word to land inside. */
+    (void)sz;
+    if (addr) g_stack_top_bound = (char *)addr - sizeof(void *);
+}
 
 int64_t qoz_gc_alloc_size(const void *ptr) {
     if (!ptr) return 0;
@@ -349,9 +358,29 @@ void qoz_gc_free(void *ptr) {
     g_table.ntomb++;
 }
 
-/* Free everything (called at process shutdown). */
+/* Free everything (called at process shutdown). When the QOZ_GC_REPORT
+ * environment variable is set, print a single-line summary of how many
+ * allocations and bytes are still live just before the wholesale free
+ * so callers can spot leaks. A correctly-rooted program should report
+ * close to zero live bytes after the implicit pre-shutdown collection
+ * triggered below. */
 void qoz_gc_shutdown(void) {
     if (!g_table.slots) return;
+
+    const char *report = getenv("QOZ_GC_REPORT");
+    if (report && report[0]) {
+        int64_t live_before = g_bytes_live;
+        int64_t nlive_before = g_table.nlive;
+        int64_t freed_in_final = qoz_gc_run();
+        fprintf(stderr,
+                "[qoz_gc] shutdown: pre=%lld/%lld(live alloc/bytes)  "
+                "freed_in_final_sweep=%lld  "
+                "post=%lld/%lld\n",
+                (long long)nlive_before, (long long)live_before,
+                (long long)freed_in_final,
+                (long long)g_table.nlive, (long long)g_bytes_live);
+    }
+
     for (int64_t i = 0; i < g_table.nslots; i++) {
         if (g_table.slots[i].state == 1) {
             free(g_table.slots[i].ptr);
