@@ -197,6 +197,18 @@ resolve_import :: proc(imp_path: []string) -> (string, bool) {
         return strings.clone(abs), true
     }
 
+    // Embedded stdlib: `import std/X` resolves to the unpacked cache
+    // even when no QOZ_ROOT is configured and the on-disk std/ tree
+    // is absent.
+    if len(imp_path) == 2 && imp_path[0] == "std" {
+        root := ensure_stdlib_dir()
+        cand, _ := filepath.join({root, rel}, context.temp_allocator)
+        if _, err := os.stat(cand, context.temp_allocator); err == nil {
+            abs, _ := filepath.abs(cand, context.temp_allocator)
+            return strings.clone(abs), true
+        }
+    }
+
     exe_path := os.args[0]
     abs_exe, _ := filepath.abs(exe_path, context.temp_allocator)
     exe_dir := filepath.dir(abs_exe, context.temp_allocator)
@@ -249,6 +261,75 @@ runtime_gc_h := #load("runtime/gc.h")
 
 @(private)
 runtime_dir_cache: string = ""
+
+// The standard library .qoz sources are baked in so the driver can
+// resolve `import std/X` without a configured QOZ_ROOT. ensure_stdlib_dir
+// unpacks them on first use to $TMPDIR/qoz-stage-a-stdlib/std/X/X.qoz.
+@(private)
+std_fmt_qoz     := #load("../std/fmt/fmt.qoz")
+@(private)
+std_fs_qoz      := #load("../std/fs/fs.qoz")
+@(private)
+std_map_qoz     := #load("../std/map/map.qoz")
+@(private)
+std_mem_qoz     := #load("../std/mem/mem.qoz")
+@(private)
+std_option_qoz  := #load("../std/option/option.qoz")
+@(private)
+std_os_qoz      := #load("../std/os/os.qoz")
+@(private)
+std_result_qoz  := #load("../std/result/result.qoz")
+@(private)
+std_strings_qoz := #load("../std/strings/strings.qoz")
+@(private)
+std_vec_qoz     := #load("../std/vec/vec.qoz")
+
+@(private)
+stdlib_dir_cache: string = ""
+
+ensure_stdlib_dir :: proc() -> string {
+    if stdlib_dir_cache != "" do return stdlib_dir_cache
+    tmp_root := os.get_env("TMPDIR", context.temp_allocator)
+    if tmp_root == "" do tmp_root = "/tmp"
+    root, _ := filepath.join({tmp_root, "qoz-stage-a-stdlib"}, context.allocator)
+
+    write_one :: proc(root: string, pkg: string, data: []byte) {
+        pkg_dir, _ := filepath.join({root, "std", pkg}, context.temp_allocator)
+        if _, err := os.stat(pkg_dir, context.temp_allocator); err != nil {
+            // Create std/ first then std/PKG so make_directory does not
+            // fail on a missing parent.
+            std_dir, _ := filepath.join({root, "std"}, context.temp_allocator)
+            if _, e2 := os.stat(std_dir, context.temp_allocator); e2 != nil {
+                _ = os.make_directory(std_dir)
+            }
+            _ = os.make_directory(pkg_dir)
+        }
+        path, _ := filepath.join({pkg_dir, fmt.tprintf("%s.qoz", pkg)}, context.temp_allocator)
+        existing, read_err := os.read_entire_file(path, context.temp_allocator)
+        if read_err == nil && len(existing) == len(data) {
+            same := true
+            for b, i in existing { if b != data[i] { same = false; break } }
+            if same do return
+        }
+        _ = os.write_entire_file(path, data)
+    }
+
+    if _, err := os.stat(root, context.temp_allocator); err != nil {
+        _ = os.make_directory(root)
+    }
+    write_one(root, "fmt",     std_fmt_qoz)
+    write_one(root, "fs",      std_fs_qoz)
+    write_one(root, "map",     std_map_qoz)
+    write_one(root, "mem",     std_mem_qoz)
+    write_one(root, "option",  std_option_qoz)
+    write_one(root, "os",      std_os_qoz)
+    write_one(root, "result",  std_result_qoz)
+    write_one(root, "strings", std_strings_qoz)
+    write_one(root, "vec",     std_vec_qoz)
+
+    stdlib_dir_cache = root
+    return root
+}
 
 ensure_runtime_dir :: proc() -> string {
     if runtime_dir_cache != "" do return runtime_dir_cache

@@ -76,6 +76,18 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
         let abs = strings.cat(strings.cat(qoz_root, "/"), rel)
         if fs.file_exists(abs) { return abs }
     }
+    // Stage A unpacks the embedded stdlib into $TMPDIR/qoz-stage-a-stdlib
+    // on demand. Probe that location too so `import std/X` works even
+    // when no QOZ_ROOT is configured and no on-disk std/ tree exists.
+    if len(segs) >= 2 && strings.eq_raw(segs[0], "std") {
+        var tmp = os.getenv("TMPDIR")
+        if len(tmp) == 0 { tmp = "/tmp" }
+        if strings.byte_at(tmp, len(tmp) - 1) == 47 {
+            tmp = strings.slice(tmp, 0, len(tmp) - 1)
+        }
+        let cached = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", rel))
+        if fs.file_exists(cached) { return cached }
+    }
     ""
 }
 
