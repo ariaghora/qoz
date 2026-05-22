@@ -620,7 +620,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
         for s in stmts {
             emit_stmt(e, s)
         }
-        emit_expr(e, tail)
+        emit_block_tail_as_value(e, tail)
         push(e, "; })")
     }
     | EChar(_, text)               -> push(e, text)
@@ -2662,6 +2662,19 @@ let emit_record_lit(e: *Emitter, te: TypeExpr, fields: Vec<RecordFieldLit>) = {
     emit_record_lit_with_hint(e, te, fields, te)
 }
 
+// EWhile/EFor/EAssign in a block's tail position are statements with no
+// value; emit them as statements followed by a dummy 0 so the enclosing
+// statement-expression still has a value.
+let emit_block_tail_as_value(e: *Emitter, tail: Expr) = {
+    match tail {
+    | EWhile(_, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+    | EFor(_, _, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+    | EAssign(_, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+    | EDefer(_, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+    | _ -> emit_expr(e, tail)
+    }
+}
+
 let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     match value {
     | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
@@ -2670,7 +2683,12 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     | EBlock(sp, stmts, tail) -> {
         push(e, "({ ")
         for s in stmts { emit_stmt(e, s) }
-        emit_value_with_hint(e, tail, hint)
+        match tail {
+        | EWhile(_, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+        | EFor(_, _, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+        | EAssign(_, _, _, _) -> { emit_stmt_expr(e, tail); push(e, " 0") }
+        | _ -> emit_value_with_hint(e, tail, hint)
+        }
         push(e, "; })")
     }
     | EIf(sp, c, t, f) -> {
