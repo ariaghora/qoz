@@ -382,7 +382,7 @@ compile_and_link :: proc(c_source: string, out_name: string) -> bool {
     cmd := []string{
         "clang",
         "-std=c11",
-        "-O2",
+        "-O3",
         "-Wall",
         "-Werror",
         // The codegen emits some style patterns that clang would flag, none

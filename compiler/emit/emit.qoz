@@ -304,8 +304,23 @@ let walk_expr_for_types(e: *Emitter, ex: Expr) = {
     | EBlock(_, stmts, tail) -> {
         for s in stmts {
             match s {
-            | SLet(_, _, ty, val) -> { walk_typeexpr(e, ty); walk_expr_for_types(e, val) }
-            | SVar(_, _, ty, val) -> { walk_typeexpr(e, ty); walk_expr_for_types(e, val) }
+            | SLet(_, name, ty, val) -> {
+                walk_typeexpr(e, ty)
+                walk_expr_for_types(e, val)
+                // Make let-bound locals visible to subsequent walk
+                // steps (e.g. walk_assign_for_map_helpers, which needs
+                // the local's TypeExpr to register Map<K,V> instances).
+                if !is_unit_typeexpr(ty) {
+                    e.locals[name] = ty
+                }
+            }
+            | SVar(_, name, ty, val) -> {
+                walk_typeexpr(e, ty)
+                walk_expr_for_types(e, val)
+                if !is_unit_typeexpr(ty) {
+                    e.locals[name] = ty
+                }
+            }
             | SExpr(_, ex2) -> walk_expr_for_types(e, ex2)
             }
         }
@@ -2804,16 +2819,21 @@ let emit_binary(e: *Emitter, op: BinaryOp, lhs: Expr, rhs: Expr) = {
         if !strings.eq_raw(tname, "") {
             let key = strings.cat(strings.cat(op_text, "::"), tname)
             if let Some(fn_name) = map.get(&e.op_dispatch, key) {
-                push(e, fn_name)
-                push(e, "(&(")
-                push(e, c_type_for(e, lhs_te))
-                push(e, "){")
+                let ct = c_type_for(e, lhs_te)
+                // Single statement-expression so both temporaries outlive
+                // the call. Separate compounds would each end before the
+                // call begins, leaving the &-of pointers dangling at -O2.
+                push(e, "({ ")
+                push(e, ct)
+                push(e, " _qoz_oa = ")
                 emit_expr(e, lhs)
-                push(e, "}, &(")
-                push(e, c_type_for(e, lhs_te))
-                push(e, "){")
+                push(e, "; ")
+                push(e, ct)
+                push(e, " _qoz_ob = ")
                 emit_expr(e, rhs)
-                push(e, "})")
+                push(e, "; ")
+                push(e, fn_name)
+                push(e, "(&_qoz_oa, &_qoz_ob); })")
                 return
             }
         }
@@ -4894,6 +4914,15 @@ let main_return_kind(ret: TypeExpr): MainRetKind = {
 let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
     match kind {
     | MainRetUnit -> {
+        // For unit-returning main, control-flow tails (for/while/if-as-stmt)
+        // must be emitted as statements so the loop body actually appears.
+        match tail {
+        | EFor(_, _, _, _, _)   -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
+        | EWhile(_, _, _)       -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
+        | EAssign(_, _, _, _)   -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
+        | EDefer(_, _)          -> { emit_stmt_expr(e, tail); push(e, "\n    qoz_shutdown();\n    return 0;\n}\n"); return }
+        | _ -> { }
+        }
         emit_expr(e, tail)
         push(e, ";\n    qoz_shutdown();\n    return 0;\n}\n")
     }

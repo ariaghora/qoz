@@ -1070,6 +1070,15 @@ synth_binary :: proc(tc: ^Ty_Context, env: ^Ty_Env, v: ^Expr_Binary) -> Ty {
         }
         return ty_bool()
     case .Lt, .Gt, .Le, .Ge:
+        // Unresolved type variables (inside a generic body) defer to
+        // instantiation: at monomorphization the operands become concrete
+        // and dispatch resolves via the operator table (try_dispatch_binary
+        // above) or the numeric fallback.
+        _, lhs_var := lhs.(^Ty_Var)
+        _, rhs_var := rhs.(^Ty_Var)
+        if lhs_var || rhs_var {
+            return ty_bool()
+        }
         if !ty_is_numeric(lhs) || !ty_is_numeric(rhs) {
             emit_error(tc, v.span, fmt.tprintf("ordering requires numeric operands, got %s and %s", ty_to_string(lhs), ty_to_string(rhs)))
         }

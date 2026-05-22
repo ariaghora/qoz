@@ -6,6 +6,7 @@
 
 import std/mem
 import std/strings
+import std/vec
 
 type Slot<K, V> = {
     key:      K,
@@ -105,3 +106,34 @@ let contains<K, V>(m: *Map<K, V>, key: K): bool = {
 
 @operator("len")
 let len<K, V>(m: *Map<K, V>): i64 = m.len
+
+// In-place insertion sort using K's `<` operator. K must overload `<`.
+let sort_keys<K>(keys: *Vec<K>) = {
+    var i: i64 = 1
+    while i < keys.len {
+        let key = keys.data[i]
+        var j: i64 = i
+        while j > 0 && key < keys.data[j - 1] {
+            keys.data[j] = keys.data[j - 1]
+            j = j - 1
+        }
+        keys.data[j] = key
+        i = i + 1
+    }
+}
+
+// Return the map's keys in K's `<` order. Requires K: <.
+let sorted_keys<K, V>(m: *Map<K, V>): Vec<K> = {
+    var out: Vec<K> = vec.make()
+    var i: i64 = 0
+    while i < m.cap {
+        if m.slots[i].occupied {
+            if !m.slots[i].deleted {
+                vec.push(&out, m.slots[i].key)
+            }
+        }
+        i = i + 1
+    }
+    sort_keys(&out)
+    out
+}

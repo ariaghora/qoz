@@ -1,0 +1,24 @@
+// expect: 0
+// map.sorted_keys returns keys in K's `<` order. The test inserts in
+// scrambled order and asserts the iteration order is alphabetical.
+
+import std/map
+import std/vec
+import std/strings
+
+let main(): i64 = {
+    var m: Map<string, i64> = map.make()
+    m["zebra"]   = 1
+    m["apple"]   = 2
+    m["mango"]   = 3
+    m["banana"]  = 4
+    m["cherry"]  = 5
+    let keys = map.sorted_keys(&m)
+    if vec.len(&keys) != 5 { return 1 }
+    if !strings.eq_raw(keys[0], "apple")  { return 2 }
+    if !strings.eq_raw(keys[1], "banana") { return 3 }
+    if !strings.eq_raw(keys[2], "cherry") { return 4 }
+    if !strings.eq_raw(keys[3], "mango")  { return 5 }
+    if !strings.eq_raw(keys[4], "zebra")  { return 6 }
+    0
+}

@@ -35,6 +35,23 @@ let eq(a: *string, b: *string): bool = eq_raw(*a, *b)
 @operator("hash")
 let hash(s: *string): u64 = hash_raw(*s)
 
+// Lexicographic byte-order comparison.
+let lt_raw(a: string, b: string): bool = {
+    let an = len(a)
+    let bn = len(b)
+    var i: i64 = 0
+    while i < an && i < bn {
+        let ca = byte_at(a, i)
+        let cb = byte_at(b, i)
+        if ca != cb { return ca < cb }
+        i = i + 1
+    }
+    an < bn
+}
+
+@operator("<")
+let lt(a: *string, b: *string): bool = lt_raw(*a, *b)
+
 let split(s: string, sep: i64): Vec<string> = {
     var out: Vec<string> = vec.make()
     let total = len(s)
