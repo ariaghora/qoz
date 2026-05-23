@@ -1115,13 +1115,10 @@ cg_c_type_is_pointer :: proc(s: string) -> bool {
 
 cg_emit_shadow_prologue :: proc(cg: ^Codegen, params: []Fn_Param) {
     cg_emit_indent(cg)
-    cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n")
-    cg_emit_indent(cg); cg_emit(cg, "(void)_qoz_shadow_guard;\n")
+    cg_emit(cg, "int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n")
     for p in params {
         pty := c_type_of_type_expr(cg, p.type)
-        if cg_c_type_is_pointer(pty) {
-            cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", p.name)
-        }
+        cg_emit_root_pushes_for_local(cg, p.name, pty)
     }
 }
 
@@ -1554,8 +1551,33 @@ cg_let_stmt :: proc(cg: ^Codegen, name: string, type_ann: ^Type_Expr, value: Exp
     cg_emit(cg, " = ")
     cg_expr(cg, value)
     cg_emit(cg, ";\n")
+    cg_emit_root_pushes_for_local(cg, name, type_str)
+}
+
+// Shadow-stack root pushes for a freshly-bound C local of type
+// `type_str`. Direct pointer types push the address of the local
+// itself. Struct types known to carry managed-pointer fields push
+// the inner pointers; this also forces the C compiler to keep the
+// struct in addressable memory rather than splitting it across
+// registers under -O3, where conservative scan would miss the
+// pointer fields.
+cg_emit_root_pushes_for_local :: proc(cg: ^Codegen, name: string, type_str: string) {
     if cg_c_type_is_pointer(type_str) {
         cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root(&%s);\n", name)
+        return
+    }
+    if type_str == "qoz_string" {
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root((void**)&%s.data);\n", name)
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root((void**)&%s.root);\n", name)
+        return
+    }
+    if len(type_str) >= 8 && type_str[:8] == "qoz_Vec_" {
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root((void**)&%s.data);\n", name)
+        return
+    }
+    if len(type_str) >= 8 && type_str[:8] == "qoz_Map_" {
+        cg_emit_indent(cg); cg_emitf(cg, "qoz_gc_push_root((void**)&%s.slots);\n", name)
+        return
     }
 }
 

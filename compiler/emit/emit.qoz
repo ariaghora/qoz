@@ -38,6 +38,15 @@ type Emitter = {
     fn_typedefs:       Map<string, string>,    // mangled name -> typedef body (for function types)
     op_dispatch:       Map<string, string>,    // "<op>::<TypeName>" -> fn name registered via @operator
     byval_helpers_emitted: Map<string, bool>,  // fn_name -> already emitted a _qoz_byval_FN forwarder
+    // Statements queued for emission just before the current C
+    // statement. Set up by emit_stmt; written to by sub-emits that
+    // need to hoist a complex sub-expression (match in value position,
+    // closure construction, etc.) out of expression position.
+    pending_prologue:  Vec<string>,
+    // Text prepended to every `return` emitted in the current function.
+    // Used to restore the shadow stack to the function-entry snapshot
+    // without relying on __attribute__((cleanup)).
+    current_return_restore: string,
     tuple_typedefs:    Map<string, string>,    // mangled tuple name -> typedef body
     tuple_typedef_order: Vec<string>,          // mangled tuple names in insertion order
     fn_typedef_order:  Vec<string>,            // mangled names in insertion order
@@ -71,6 +80,8 @@ let make_emitter(): Emitter = Emitter {
     fn_typedefs:      map.make(),
     op_dispatch:      map.make(),
     byval_helpers_emitted: map.make(),
+    pending_prologue:  vec.make(),
+    current_return_restore: "",
     tuple_typedefs:   map.make(),
     tuple_typedef_order: vec.make(),
     fn_typedef_order: vec.make(),
@@ -633,18 +644,41 @@ let register_variants(e: *Emitter, file: File) = {
 }
 
 let strip_numeric_underscores(s: string): string = {
-    if strings.index_byte(s, 95) < 0 { return s }
-    var out = ""
-    var i: i64 = 0
-    let n = len(s)
-    while i < n {
-        let c = strings.byte_at(s, i)
-        if c != 95 {
-            out = strings.cat(out, strings.slice(s, i, i + 1))
+    var clean = s
+    if strings.index_byte(s, 95) >= 0 {
+        clean = ""
+        var i: i64 = 0
+        let n = len(s)
+        while i < n {
+            let c = strings.byte_at(s, i)
+            if c != 95 {
+                clean = strings.cat(clean, strings.slice(s, i, i + 1))
+            }
+            i = i + 1
         }
-        i = i + 1
     }
-    out
+    // C11 does not accept binary literals. Convert 0b... to decimal so
+    // the emitted C compiles under -pedantic.
+    if len(clean) >= 2 && strings.byte_at(clean, 0) == 48 {
+        let c1 = strings.byte_at(clean, 1)
+        if c1 == 98 || c1 == 66 {
+            var v: i64 = 0
+            var j: i64 = 2
+            let m = len(clean)
+            while j < m {
+                let b = strings.byte_at(clean, j)
+                if b == 48 || b == 49 {
+                    v = v * 2 + (b - 48)
+                    j = j + 1
+                } else {
+                    // Hit a non-binary suffix; bail with original to surface a clang error.
+                    return s
+                }
+            }
+            return fmt.format("{}", v)
+        }
+    }
+    clean
 }
 
 let push(e: *Emitter, s: string) = {
@@ -884,7 +918,13 @@ let emit_try(e: *Emitter, sp: Span, value: Expr) = {
     }
     e.closure_counter = e.closure_counter + 1
     let tmp = strings.cat("_qoz_try_", fmt.format("{}", e.closure_counter))
-    push(e, "({ qoz_")
+
+    // Build "qoz_<inner>* tmp = VALUE; if (tmp->tag == Err) {
+    // qoz_gc_shadow_set_top(_g); return MAKE_ERR; }" as prologue,
+    // then emit `tmp->payload.Ok.f0` in expression position.
+    let saved_out = e.out
+    e.out = vec.make()
+    push(e, "qoz_")
     push(e, inner_mangle)
     push(e, "* ")
     push(e, tmp)
@@ -894,13 +934,21 @@ let emit_try(e: *Emitter, sp: Span, value: Expr) = {
     push(e, tmp)
     push(e, "->tag == qoz_")
     push(e, inner_mangle)
-    push(e, "_Err) { return qoz_make_")
+    push(e, "_Err) { ")
+    push(e, e.current_return_restore)
+    push(e, "return qoz_make_")
     push(e, outer_mangle)
     push(e, "_Err(")
     push(e, tmp)
     push(e, "->payload.Err.f0); } ")
+    let chunks = e.out
+    e.out = saved_out
+    var stmt_text = ""
+    for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+    vec.push(&e.pending_prologue, stmt_text)
+
     push(e, tmp)
-    push(e, "->payload.Ok.f0; })")
+    push(e, "->payload.Ok.f0")
 }
 
 let emit_tuple_lit(e: *Emitter, sp: Span, elems: Vec<Expr>) = {
@@ -964,7 +1012,8 @@ let emit_array_lit_using(e: *Emitter, sp: Span, elems: Vec<Expr>, hint: TypeExpr
     let vec_c = strings.cat("qoz_", mangle_inst(e, "Vec", elem_args))
     e.closure_counter = e.closure_counter + 1
     let tmp = strings.cat("_qoz_arr_", fmt.format("{}", e.closure_counter))
-    push(e, "({ ")
+    let saved_out = e.out
+    e.out = vec.make()
     push(e, vec_c)
     push(e, " ")
     push(e, tmp)
@@ -980,8 +1029,12 @@ let emit_array_lit_using(e: *Emitter, sp: Span, elems: Vec<Expr>, hint: TypeExpr
         emit_expr(e, el)
         push(e, "); ")
     }
+    let chunks = e.out
+    e.out = saved_out
+    var stmt_text = ""
+    for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+    vec.push(&e.pending_prologue, stmt_text)
     push(e, tmp)
-    push(e, "; })")
 }
 
 let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: TypeExpr, body: Expr) = {
@@ -1087,6 +1140,7 @@ let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: Type
     if is_block(body) {
         emit_fn_body_block(e, body, ret)
     } else {
+        let saved = open_statement_scope(e)
         if is_unit_typeexpr(ret) {
             emit_expr(e, body)
             push(e, ";\n    return;\n")
@@ -1095,6 +1149,7 @@ let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: Type
             emit_value_with_hint(e, body, ret)
             push(e, ";\n")
         }
+        close_statement_scope(e, saved)
     }
     push(e, "}\n\n")
     let def = render(e)
@@ -1114,19 +1169,33 @@ let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: Type
     if len(captures) == 0 {
         push(e, "NULL")
     } else {
-        push(e, "({ struct ")
+        // Hoist the env alloc and field stores into a prologue. The
+        // expression position becomes `(void*)_e_<counter>`.
+        let env_local = strings.cat("_qoz_env_", fmt.format("{}", counter))
+        let saved_out = e.out
+        e.out = vec.make()
+        push(e, "struct ")
         push(e, env_struct)
-        push(e, " *_e = qoz_alloc(sizeof(struct ")
+        push(e, " *")
+        push(e, env_local)
+        push(e, " = qoz_alloc(sizeof(struct ")
         push(e, env_struct)
         push(e, ")); ")
         for c in captures {
-            push(e, "_e->")
+            push(e, env_local)
+            push(e, "->")
             push(e, c)
             push(e, " = ")
             push(e, c)
             push(e, "; ")
         }
-        push(e, "(void *)_e; })")
+        let chunks = e.out
+        e.out = saved_out
+        var stmt_text = ""
+        for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+        vec.push(&e.pending_prologue, stmt_text)
+        push(e, "(void *)")
+        push(e, env_local)
     }
     push(e, ", .fn = ")
     push(e, cname)
@@ -1864,7 +1933,42 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Ve
     }
 }
 
+type StmtScope = {
+    out:      Vec<string>,
+    prologue: Vec<string>,
+}
+
+// Open a new statement scope. Sub-emits may stash text into
+// `e.pending_prologue` for code that needs to land just before the
+// current C statement (a hoisted match-as-value, a closure
+// construction). The caller is responsible for calling close_*.
+let open_statement_scope(e: *Emitter): StmtScope = {
+    let saved = StmtScope { out: e.out, prologue: e.pending_prologue }
+    e.out              = vec.make()
+    e.pending_prologue = vec.make()
+    saved
+}
+
+let close_statement_scope(e: *Emitter, saved: StmtScope) = {
+    let prologues   = e.pending_prologue
+    let stmt_chunks = e.out
+    e.out              = saved.out
+    e.pending_prologue = saved.prologue
+    for p in prologues  { push(e, p) }
+    for t in stmt_chunks { push(e, t) }
+}
+
+// Sub-emit may stash text into `e.pending_prologue` for code that
+// needs to land just before the current C statement (a hoisted
+// match-as-value, a closure construction, and similar). Capture the
+// statement's own text first, then flush the prologue, then the text.
 let emit_stmt(e: *Emitter, s: Stmt) = {
+    let saved = open_statement_scope(e)
+    emit_stmt_inner(e, s)
+    close_statement_scope(e, saved)
+}
+
+let emit_stmt_inner(e: *Emitter, s: Stmt) = {
     match s {
     | SLet(_, name, ty, value) -> {
         if strings.eq_raw(name, "_") {
@@ -2434,7 +2538,18 @@ let emit_fmt_format(e: *Emitter, args: Vec<Expr>) = {
         push(e, "((qoz_string){NULL,0})")
         return
     }
-    push(e, "({ qoz_strbuf __sb; qoz_strbuf_init(&__sb); ")
+    e.closure_counter = e.closure_counter + 1
+    let sb_name = strings.cat("_qoz_sb_", fmt.format("{}", e.closure_counter))
+
+    // Build the strbuf declaration and appends as a prologue. The
+    // expression position resolves to qoz_strbuf_finish(&sb_name).
+    let saved_out = e.out
+    e.out = vec.make()
+    push(e, "qoz_strbuf ")
+    push(e, sb_name)
+    push(e, "; qoz_strbuf_init(&")
+    push(e, sb_name)
+    push(e, "); ")
     var pi: i64 = 1
     let n = len(template)
     var i: i64 = 0
@@ -2443,12 +2558,14 @@ let emit_fmt_format(e: *Emitter, args: Vec<Expr>) = {
         if strings.byte_at(template, i) == 123 && strings.byte_at(template, i + 1) == 125 {
             if i > lit_start {
                 let chunk = strings.slice(template, lit_start, i)
-                push(e, "qoz_strbuf_append_str(&__sb, ")
+                push(e, "qoz_strbuf_append_str(&")
+                push(e, sb_name)
+                push(e, ", ")
                 push(e, c_string_literal(chunk))
                 push(e, "); ")
             }
             if pi < len(args) {
-                emit_fmt_append_arg(e, args[pi])
+                emit_fmt_append_arg(e, sb_name, args[pi])
                 pi = pi + 1
             }
             i = i + 2
@@ -2459,28 +2576,46 @@ let emit_fmt_format(e: *Emitter, args: Vec<Expr>) = {
     }
     if lit_start < n {
         let chunk = strings.slice(template, lit_start, n)
-        push(e, "qoz_strbuf_append_str(&__sb, ")
+        push(e, "qoz_strbuf_append_str(&")
+        push(e, sb_name)
+        push(e, ", ")
         push(e, c_string_literal(chunk))
         push(e, "); ")
     }
-    push(e, "qoz_strbuf_finish(&__sb); })")
+    let chunks = e.out
+    e.out = saved_out
+    var stmt_text = ""
+    for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+    vec.push(&e.pending_prologue, stmt_text)
+
+    push(e, "qoz_strbuf_finish(&")
+    push(e, sb_name)
+    push(e, ")")
 }
 
-let emit_fmt_append_arg(e: *Emitter, arg: Expr) = {
+let emit_fmt_append_arg(e: *Emitter, sb_name: string, arg: Expr) = {
     let ct = infer_expr_ctype(e, arg)
     if strings.eq_raw(ct, "qoz_string") {
-        push(e, "qoz_strbuf_append_str(&__sb, "); emit_expr(e, arg); push(e, "); ")
+        push(e, "qoz_strbuf_append_str(&")
+        push(e, sb_name)
+        push(e, ", "); emit_expr(e, arg); push(e, "); ")
         return
     }
     if strings.eq_raw(ct, "bool") {
-        push(e, "qoz_strbuf_append_bool(&__sb, "); emit_expr(e, arg); push(e, "); ")
+        push(e, "qoz_strbuf_append_bool(&")
+        push(e, sb_name)
+        push(e, ", "); emit_expr(e, arg); push(e, "); ")
         return
     }
     if strings.eq_raw(ct, "double") || strings.eq_raw(ct, "float") {
-        push(e, "qoz_strbuf_append_f64(&__sb, (double)("); emit_expr(e, arg); push(e, ")); ")
+        push(e, "qoz_strbuf_append_f64(&")
+        push(e, sb_name)
+        push(e, ", (double)("); emit_expr(e, arg); push(e, ")); ")
         return
     }
-    push(e, "qoz_strbuf_append_i64(&__sb, (int64_t)("); emit_expr(e, arg); push(e, ")); ")
+    push(e, "qoz_strbuf_append_i64(&")
+    push(e, sb_name)
+    push(e, ", (int64_t)("); emit_expr(e, arg); push(e, ")); ")
 }
 
 let string_literal_to_value(raw: string): string = {
@@ -2781,8 +2916,18 @@ let ensure_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: strin
     src = strings.cat(src, operand_ct)
     src = strings.cat(src, " b) { return ")
     src = strings.cat(src, fn_name)
+    var proto = "static "
+    proto = strings.cat(proto, ret_ct)
+    proto = strings.cat(proto, " _qoz_byval_")
+    proto = strings.cat(proto, fn_name)
+    proto = strings.cat(proto, "(")
+    proto = strings.cat(proto, operand_ct)
+    proto = strings.cat(proto, ", ")
+    proto = strings.cat(proto, operand_ct)
+    proto = strings.cat(proto, ");\n")
+    vec.push(&e.synth_fn_decls, proto)
     src = strings.cat(src, "(&a, &b); }\n")
-    vec.push(&e.synth_fn_decls, src)
+    vec.push(&e.synth_fn_defs, src)
 }
 
 let binary_op_text(op: BinaryOp): string = {
@@ -3025,9 +3170,12 @@ let emit_fn_body_block(e: *Emitter, body: Expr, ret_hint: TypeExpr) = {
         | _ -> { }
         }
         if len(defers) == 0 {
+            let saved = open_statement_scope(e)
+            push(e, e.current_return_restore)
             push(e, "return ")
             emit_value_with_hint(e, effective_tail, ret_hint)
             push(e, ";\n")
+            close_statement_scope(e, saved)
         } else {
             e.closure_counter = e.closure_counter + 1
             let tmp = strings.cat("_qoz_ret_", fmt.format("{}", e.closure_counter))
@@ -3080,11 +3228,13 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
         push(e, ")")
     }
     push(e, " {\n    ")
-    // Shadow-stack guard: at fn entry, snapshot the top; on any return
-    // (including early ones), the __cleanup__ attribute restores it. This
-    // is how pointer locals stay reachable even when clang puts them in
-    // registers across allocation calls.
-    push(e, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n    (void)_qoz_shadow_guard;\n    ")
+    // Snapshot the shadow-stack top at entry. Every return path and
+    // the natural fall-through end restore from this snapshot, so
+    // pointer locals stay reachable until the function returns even
+    // when the C compiler keeps them in registers.
+    push(e, "int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n    ")
+    let saved_ret = e.current_return_restore
+    e.current_return_restore = "qoz_gc_shadow_set_top(_qoz_shadow_guard); "
     e.locals = map.make()
     for p in params {
         e.locals[p.name] = p.ty
@@ -3095,18 +3245,25 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
         }
     }
     e.current_ret_te = ret
-    if is_block(body) {
+    let is_b = is_block(body)
+    if is_b {
         emit_fn_body_block(e, body, ret)
     } else {
+        let saved = open_statement_scope(e)
         if is_unit_typeexpr(ret) {
             emit_expr(e, body)
-            push(e, ";\n    return;\n")
+            push(e, ";\n    ")
+            push(e, e.current_return_restore)
+            push(e, "return;\n")
         } else {
+            push(e, e.current_return_restore)
             push(e, "return ")
             emit_value_with_hint(e, body, ret)
             push(e, ";\n")
         }
+        close_statement_scope(e, saved)
     }
+    e.current_return_restore = saved_ret
     e.locals = map.make()
     push(e, "}\n\n")
 }
@@ -3226,8 +3383,9 @@ let emit_program(f: File): string = {
     push(&e, "\n/* user code */\n")
     push(&e, "<<<FN_TYPEDEFS>>>")
     push(&e, "<<<TUPLE_TYPEDEFS>>>")
-    push(&e, "<<<SYNTH_FN_DECLS>>>")
-    // Forward declare monomorphized records and enums.
+    // Forward declare monomorphized records and enums first, then emit
+    // the synth fn decls (byval forwarders, closure prototypes) which
+    // can reference those typedefs by name.
     for inst in e.record_insts {
         push(&e, "typedef struct qoz_")
         push(&e, inst.mangled)
@@ -3244,7 +3402,9 @@ let emit_program(f: File): string = {
         e.is_enum[inst.mangled] = true
     }
     push(&e, "\n")
-    // Forward declarations: records and enums.
+    // Forward declarations: user-declared records and enums. Done
+    // before SYNTH_FN_DECLS so the byval forwarders can reference
+    // them by name in their signatures.
     for d in f.decls {
         match d {
         | DStruct(_, name, params, _) -> {
@@ -3269,6 +3429,7 @@ let emit_program(f: File): string = {
         }
     }
     push(&e, "\n")
+    push(&e, "<<<SYNTH_FN_DECLS>>>")
     emit_records_topological(&e, f)
     // Enum definitions (non-generic).
     for d in f.decls {
@@ -3443,19 +3604,25 @@ let emit_enum(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
     push(e, "    qoz_")
     push(e, name)
     push(e, "_tag tag;\n")
-    push(e, "    union {\n")
+    var any_payload = false
     for v in variants {
-        if variant_has_positional(v) {
-            push(e, "        qoz_")
-            push(e, name)
-            push(e, "_")
-            push(e, v.name)
-            push(e, "_payload ")
-            push(e, v.name)
-            push(e, ";\n")
-        }
+        if variant_has_positional(v) { any_payload = true }
     }
-    push(e, "    } payload;\n")
+    if any_payload {
+        push(e, "    union {\n")
+        for v in variants {
+            if variant_has_positional(v) {
+                push(e, "        qoz_")
+                push(e, name)
+                push(e, "_")
+                push(e, v.name)
+                push(e, "_payload ")
+                push(e, v.name)
+                push(e, ";\n")
+            }
+        }
+        push(e, "    } payload;\n")
+    }
     push(e, "};\n\n")
     emit_adt_desc(e, name, variants)
 }
@@ -3713,15 +3880,24 @@ let emit_adt_desc(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
         push(e, " },\n")
     }
     push(e, "};\n")
+    var any_payload2 = false
+    for v in variants {
+        if variant_has_positional(v) { any_payload2 = true }
+    }
+    let payload_off_expr = if any_payload2 {
+        strings.cat("(int32_t)offsetof(struct qoz_", strings.cat(name, ", payload)"))
+    } else {
+        "0"
+    }
     push(e, "static const qoz_type_desc qoz_")
     push(e, name)
     push(e, "_desc = { QOZ_DESC_ADT, (int32_t)sizeof(struct qoz_")
     push(e, name)
     push(e, "), 0, NULL, (int32_t)offsetof(struct qoz_")
     push(e, name)
-    push(e, ", tag), (int32_t)offsetof(struct qoz_")
-    push(e, name)
-    push(e, ", payload), ")
+    push(e, ", tag), ")
+    push(e, payload_off_expr)
+    push(e, ", ")
     push(e, int_to_string(len(variants)))
     push(e, ", qoz_")
     push(e, name)
@@ -4392,7 +4568,14 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
     let res_tmp   = fmt.format("_qoz_mv_{}", e.match_counter)
     let res_ctype = match_result_ctype_with_hint(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
-    push(e, "({ qoz_")
+
+    // Build the switch into a fresh output buffer; the entire block
+    // becomes a single prologue entry attached to the enclosing C
+    // statement, and the expression position resolves to `res_tmp`
+    // (or 0 for void-yielding matches).
+    let saved_out = e.out
+    e.out = vec.make()
+    push(e, "qoz_")
     push(e, enum_name)
     push(e, "* ")
     push(e, scrut_tmp)
@@ -4414,11 +4597,15 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
         emit_match_arm_with_kind(e, enum_name, scrut_tmp, res_tmp, arm, is_void)
     }
     push(e, "} ")
+    let chunks = e.out
+    e.out = saved_out
+    var stmt_text = ""
+    for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+    vec.push(&e.pending_prologue, stmt_text)
     if is_void {
-        push(e, "0; })")
+        push(e, "0")
     } else {
         push(e, res_tmp)
-        push(e, "; })")
     }
 }
 
@@ -4435,7 +4622,8 @@ let emit_match_as_if_chain(e: *Emitter, span: Span, scrut: Expr, arms: Vec<Match
     let mflag     = fmt.format("_qoz_mm_{}", e.match_counter)
     let res_ctype = match_result_ctype_with_hint(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
-    push(e, "({ ")
+    let saved_out = e.out
+    e.out = vec.make()
     if is_enum_match {
         push(e, "qoz_")
         push(e, enum_name)
@@ -4462,11 +4650,15 @@ let emit_match_as_if_chain(e: *Emitter, span: Span, scrut: Expr, arms: Vec<Match
     for arm in arms {
         emit_arm_in_chain_with_te(e, enum_name, scrut_tmp, scrut_te, res_tmp, mflag, arm, is_void)
     }
+    let chunks = e.out
+    e.out = saved_out
+    var stmt_text = ""
+    for c in chunks { stmt_text = strings.cat(stmt_text, c) }
+    vec.push(&e.pending_prologue, stmt_text)
     if is_void {
-        push(e, "0; })")
+        push(e, "0")
     } else {
         push(e, res_tmp)
-        push(e, "; })")
     }
 }
 
@@ -4501,7 +4693,9 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
                 push(e, "; ")
             }
         } else {
-            push(e, ") { __auto_type ")
+            push(e, ") { ")
+            push(e, c_type_for(e, scrut_te))
+            push(e, " ")
             push(e, name)
             push(e, " = ")
             push(e, scrut_tmp)
@@ -5033,20 +5227,26 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
         // must be emitted as statements so the loop body actually appears.
         match tail {
         | EFor(_, _, _, _, _) | EWhile(_, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
+            let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
             push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
+            close_statement_scope(e, saved)
             return
         }
         | _ -> { }
         }
+        let saved = open_statement_scope(e)
         emit_expr(e, tail)
         push(e, ";\n    qoz_shutdown();\n    return 0;\n}\n")
+        close_statement_scope(e, saved)
     }
     | MainRetInt(ctype) -> {
+        let saved = open_statement_scope(e)
         push(e, ctype)
         push(e, " qoz_main_result = ")
         emit_expr(e, tail)
         push(e, ";\n    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
+        close_statement_scope(e, saved)
     }
     }
 }
