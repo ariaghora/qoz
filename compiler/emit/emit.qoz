@@ -1642,6 +1642,24 @@ let binding_te(e: *Emitter, declared: TypeExpr, value: Expr): TypeExpr = {
 // Stable Expr identity for cache lookup. Matches check.expr_id.
 let expr_id(e: Expr): i64 = (e as *void) as i64
 
+// Pick the better TypeExpr for an ERecord: prefer the check-phase
+// cached TypeExpr when it includes the struct's type arguments, fall
+// back to the literal's annotation otherwise.
+let prefer_typed_record(e: *Emitter, lit: TypeExpr, cached: TypeExpr): TypeExpr = {
+    let cached_args = type_args_of(cached)
+    let lit_args    = type_args_of(lit)
+    if len(cached_args) > len(lit_args) { return cached }
+    lit
+}
+
+let type_args_of(te: TypeExpr): Vec<TypeExpr> = {
+    let empty: Vec<TypeExpr> = vec.make()
+    match te {
+    | TENamed(_, _, args) -> args
+    | _                   -> empty
+    }
+}
+
 // Look up the type recorded for `v` by the check phase. Falls back to
 // structural inference when no entry exists (synthesised exprs). The
 // active generic-instantiation substitution is applied to the result
@@ -1663,7 +1681,18 @@ let infer_value_te_cached(e: *Emitter, v: Expr): TypeExpr = {
 let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
     match v {
     | ECast(_, _, t) -> t
-    | ERecord(_, t, _) -> t
+    | ERecord(_, t, _) -> {
+        // The literal's TypeExpr may omit the struct's type arguments
+        // (`Pair { fst: 7, snd: "hello" }` has te = TENamed("Pair", [])).
+        // The check phase recorded the fully-inferred type in
+        // expr_types; prefer that when its arg count matches the
+        // struct's tparam count.
+        let cached = match map.get(&e.expr_types, expr_id(v)) {
+        | Some(cte) -> cte
+        | None      -> t
+        }
+        prefer_typed_record(e, t, cached)
+    }
     | EField(sp, base, name) -> field_typeexpr_for(e, infer_base_typeexpr(e, base), name, sp)
     | EIndex(sp, base, _) -> {
         let bte = infer_base_typeexpr(e, base)

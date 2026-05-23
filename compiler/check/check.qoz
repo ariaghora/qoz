@@ -242,7 +242,7 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
         for el in elems { vec.push(&elem_tys, synth(tc, env, el)) }
         ty.ty_tuple_(elem_tys)
     }
-    | ERecord(_, te, _)      -> resolve_type(tc, te)
+    | ERecord(_, te, fields) -> synth_record(tc, env, te, fields)
     | EClosure(_, cps, ret, body) -> {
         var pty: Vec<Ty> = vec.make()
         for cp in cps {
@@ -488,6 +488,135 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
         | None    -> synth_variant_ctor_with_args(tc, fn_name, arg_tys)
         }
     }
+    }
+}
+
+// Synthesise a record literal's type, inferring the struct's type
+// parameters from the field values when the annotation does not pin
+// them. The unification matches each declared field's TypeExpr (which
+// may name a tparam) against the synthesised value type and accumulates
+// bindings.
+let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFieldLit>): Ty = {
+    let bare_resolved = resolve_type(tc, te)
+    var struct_name = ""
+    match bare_resolved {
+    | TyRecord(n, _) -> struct_name = n
+    | _              -> { }
+    }
+    if strings.eq_raw(struct_name, "") { return bare_resolved }
+    let tparams = struct_tparams(tc, struct_name)
+    if len(tparams) == 0 { return bare_resolved }
+    if annotation_pins_type_args(te, tparams) { return bare_resolved }
+    var bindings: Map<string, Ty> = map.make()
+    let saved = tc.type_params
+    set_type_params(tc, tparams)
+    var i: i64 = 0
+    while i < len(fields) {
+        let f = fields[i]
+        if !strings.eq_raw(f.name, "..") {
+            let decl_te = struct_field_typeexpr(tc, struct_name, f.name)
+            match decl_te {
+            | Some(dte) -> {
+                let p_ty = resolve_type(tc, dte)
+                let v_ty = synth(tc, env, f.value)
+                let _ = unify(p_ty, v_ty, &bindings)
+            }
+            | None -> { }
+            }
+        }
+        i = i + 1
+    }
+    tc.type_params = saved
+    var args: Vec<Ty> = vec.make()
+    var ti: i64 = 0
+    while ti < len(tparams) {
+        let tp = tparams[ti]
+        match map.get(&bindings, tp) {
+        | Some(t) -> vec.push(&args, t)
+        | None    -> vec.push(&args, ty.ty_var_(tp))
+        }
+        ti = ti + 1
+    }
+    ty.ty_record_(struct_name, args)
+}
+
+// Rewrite an ERecord's TypeExpr to include the type arguments inferred
+// by synth_record. When the annotation already pins the args (or the
+// struct has no tparams), the original te is returned unchanged so the
+// AST node identity does not flip.
+let inferred_record_te(tc: *TyContext, env: *Env, sp: Span, te: TypeExpr, fields: Vec<RecordFieldLit>): TypeExpr = {
+    let orig_path = te_path_segments(te)
+    let struct_name = if len(orig_path) >= 1 { orig_path[len(orig_path) - 1] } else { "" }
+    if strings.eq_raw(struct_name, "") { return te }
+    let tparams = struct_tparams(tc, struct_name)
+    if len(tparams) == 0 { return te }
+    if annotation_pins_type_args(te, tparams) { return te }
+    let synth_ty = synth_record(tc, env, te, fields)
+    let args = ty_record_args(synth_ty)
+    if len(args) != len(tparams) { return te }
+    var te_args: Vec<TypeExpr> = vec.make()
+    var i: i64 = 0
+    while i < len(args) {
+        vec.push(&te_args, ty.ty_to_type_expr_at(args[i], sp))
+        i = i + 1
+    }
+    TENamed(sp, orig_path, te_args)
+}
+
+let te_path_segments(te: TypeExpr): Vec<string> = {
+    let empty: Vec<string> = vec.make()
+    match te {
+    | TENamed(_, path, _) -> path
+    | _                   -> empty
+    }
+}
+
+let ty_record_args(t: Ty): Vec<Ty> = {
+    let empty: Vec<Ty> = vec.make()
+    match t {
+    | TyRecord(_, args) -> args
+    | _                 -> empty
+    }
+}
+
+let annotation_pins_type_args(te: TypeExpr, tparams: Vec<string>): bool = {
+    match te {
+    | TENamed(_, _, ann_args) -> len(ann_args) == len(tparams)
+    | _                       -> false
+    }
+}
+
+let struct_tparams(tc: *TyContext, name: string): Vec<string> = {
+    let empty: Vec<string> = vec.make()
+    match map.get(&tc.structs, name) {
+    | Some(d) -> {
+        match d {
+        | DStruct(_, _, tps, _) -> tps
+        | _                     -> empty
+        }
+    }
+    | None -> empty
+    }
+}
+
+let struct_field_typeexpr(tc: *TyContext, name: string, field: string): Option<TypeExpr> = {
+    match map.get(&tc.structs, name) {
+    | Some(d) -> {
+        match d {
+        | DStruct(_, _, _, fields) -> {
+            var i: i64 = 0
+            while i < len(fields) {
+                if strings.eq_raw(fields[i].name, field) {
+                    return Some(fields[i].ty)
+                }
+                i = i + 1
+            }
+            None
+        }
+        | _ -> None
+        }
+    }
+    | None -> None
     }
 }
 
@@ -1071,7 +1200,12 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: Expr, expected: Ty): Expr = {
             let field_hint = record_field_hint(tc, effective_te, f.name)
             vec.push(&nf, RecordFieldLit { name: f.name, value: infer_calls_expr(tc, env, f.value, field_hint) })
         }
-        ERecord(sp, te, nf)
+        // Rebuild the TypeExpr with the inferred type arguments so the
+        // emit walk picks up the right struct instantiation. Start from
+        // effective_te so an enclosing annotation like `let b: Box<T>`
+        // wins over re-inference from the field literals.
+        let inferred_te = inferred_record_te(tc, env, sp, effective_te, nf)
+        ERecord(sp, inferred_te, nf)
     }
     | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, infer_calls_expr(tc, env, body, ty.ty_error_()))
     | EBlock(sp, stmts, tail) -> {
