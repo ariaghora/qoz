@@ -2637,7 +2637,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         }
         let dispatch_name = match map.get(&e.externs, qualified) {
             | Some(sym) -> sym
-            | None      -> qualified
+            | None      -> user_fn_c_name(qualified)
         }
         push(e, "{dispatch_name}(")
         var hints: Vec<TypeExpr> = vec.make()
@@ -2773,7 +2773,24 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
     }
     | _ -> { }
     }
-    emit_expr(e, callee)
+    // A bare ident callee that names a top-level user function (in
+    // fn_params, not an extern, not a local closure value) gets the
+    // `qoz_` prefix at the call site to match the definition's
+    // emitted name. Closure-typed locals and externs keep their
+    // identifier as written.
+    var emitted_callee = false
+    match callee {
+    | EIdent(_, cname) -> {
+        if map.contains(&e.fn_params, cname)
+                && !map.contains(&e.externs, cname)
+                && !map.contains(&e.locals, cname) {
+            push(e, user_fn_c_name(cname))
+            emitted_callee = true
+        }
+    }
+    | _ -> { }
+    }
+    if !emitted_callee { emit_expr(e, callee) }
     push(e, "(")
     var fallback_hints: Vec<TypeExpr> = vec.make()
     match callee {
@@ -2824,6 +2841,7 @@ let callee_value_typeexpr(e: *Emitter, callee: Expr): TypeExpr = {
 let ensure_unary_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: string, ret_ct: string) = {
     if map.contains(&e.byval_helpers_emitted, fn_name) { return }
     e.byval_helpers_emitted[fn_name] = true
+    let call_name = user_fn_c_name(fn_name)
     var src = "static "
     src = strings.cat(src, ret_ct)
     src = strings.cat(src, " _qoz_byval_")
@@ -2831,7 +2849,7 @@ let ensure_unary_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct:
     src = strings.cat(src, "(")
     src = strings.cat(src, operand_ct)
     src = strings.cat(src, " a) { return ")
-    src = strings.cat(src, fn_name)
+    src = strings.cat(src, call_name)
     src = strings.cat(src, "(&a); }\n")
     var proto = "static "
     proto = strings.cat(proto, ret_ct)
@@ -2856,6 +2874,7 @@ let unary_op_text(op: UnaryOp): string = {
 let ensure_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: string, ret_ct: string) = {
     if map.contains(&e.byval_helpers_emitted, fn_name) { return }
     e.byval_helpers_emitted[fn_name] = true
+    let call_name = user_fn_c_name(fn_name)
     var src = "static "
     src = strings.cat(src, ret_ct)
     src = strings.cat(src, " _qoz_byval_")
@@ -2865,7 +2884,7 @@ let ensure_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: strin
     src = strings.cat(src, " a, ")
     src = strings.cat(src, operand_ct)
     src = strings.cat(src, " b) { return ")
-    src = strings.cat(src, fn_name)
+    src = strings.cat(src, call_name)
     var proto = "static "
     proto = strings.cat(proto, ret_ct)
     proto = strings.cat(proto, " _qoz_byval_")
@@ -3177,9 +3196,19 @@ let is_unit_typeexpr(te: TypeExpr): bool = {
     }
 }
 
+// User functions defined in the program are emitted with a `qoz_`
+// prefix so they cannot collide with libc names like `div`, `index`,
+// `time`. Names that already start with `qoz_` (notably mangled
+// generic instantiations) keep their existing prefix.
+let user_fn_c_name(name: string): string = {
+    if strings.has_prefix(name, "qoz_") { return name }
+    strings.cat("qoz_", name)
+}
+
 let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body: Expr) = {
     let ret_c = c_type_for(e, ret)
-    push(e, "{ret_c} {name}")
+    let c_name = user_fn_c_name(name)
+    push(e, "{ret_c} {c_name}")
     if len(params) == 0 {
         push(e, "(void)")
     } else {
@@ -3864,7 +3893,8 @@ let emit_field_eq_expr(e: *Emitter, te: TypeExpr, fname: string) = {
 
 let emit_fn_proto(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr) = {
     let rc = c_type_for(e, ret)
-    push(e, "{rc} {name}")
+    let c_name = user_fn_c_name(name)
+    push(e, "{rc} {c_name}")
     if len(params) == 0 {
         push(e, "(void);\n")
         return
@@ -4135,8 +4165,9 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<TypeExpr>, ret: 
 
     var def = sig
     def = strings.cat(def, ") {\n    (void)_qoz_env;\n    ")
+    let call_name = user_fn_c_name(fn_name)
     if is_unit_typeexpr(ret) {
-        def = strings.cat(def, fn_name)
+        def = strings.cat(def, call_name)
         def = strings.cat(def, "(")
         var pj: i64 = 0
         for _p in params {
@@ -4148,7 +4179,7 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<TypeExpr>, ret: 
         def = strings.cat(def, ");\n    return;\n")
     } else {
         def = strings.cat(def, "return ")
-        def = strings.cat(def, fn_name)
+        def = strings.cat(def, call_name)
         def = strings.cat(def, "(")
         var pj: i64 = 0
         for _p in params {
