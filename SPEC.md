@@ -467,7 +467,7 @@ Link directives at the top of a file surface as linker flags to clang. `#link("n
 `#load_string("relative/path")` in expression position evaluates at parse time to a string literal whose contents are the bytes of the file at that path. The path is resolved relative to the working directory of the compiler invocation. A missing file is a hard parse error, never a silent fallback.
 
 ```qoz
-let runtime_h: string = #load_string("stage_a/runtime/qoz_runtime.h")
+let runtime_h: string = #load_string("runtime/qoz_runtime.h")
 ```
 
 The form follows the same `#`-prefix convention as `#link`. Compile-time directives are visually distinct from runtime function calls.
@@ -596,7 +596,7 @@ The standard library lives at `std/` and is written in Qoz on top of thin C bind
 | `std/option` | `Option<T>` constructors `Some`, `None`. Prelude package (no explicit import needed). |
 | `std/result` | `Result<T, E>` constructors `Ok`, `Err`. Prelude package. |
 
-`Option<T>` and `Result<T, E>` are in the prelude. Their constructors `Some`, `None`, `Ok`, `Err` are in scope without import. `Vec<T>` lives in `std/vec`, `Map<K, V>` lives in `std/map`. Both require an explicit `import`. Types are imported into the bare namespace; functions are imported under the package prefix. Direct libc bindings are not exposed at the Qoz level; the compiler's runtime shim (`stage_a/runtime/qoz_runtime.{h,c}`) calls libc and the stdlib packages bind to that shim through `@link_name`.
+`Option<T>` and `Result<T, E>` are in the prelude. Their constructors `Some`, `None`, `Ok`, `Err` are in scope without import. `Vec<T>` lives in `std/vec`, `Map<K, V>` lives in `std/map`. Both require an explicit `import`. Types are imported into the bare namespace; functions are imported under the package prefix. Direct libc bindings are not exposed at the Qoz level; the compiler's runtime shim (`runtime/qoz_runtime.{h,c}`) calls libc and the stdlib packages bind to that shim through `@link_name`.
 
 ---
 
@@ -614,7 +614,7 @@ The runtime is statically linked. Every Qoz binary contains tgc.
 
 ### CLI
 
-The active compiler binary is `./main` (Stage B, built either by Stage A or from `bootstrap/stage1.c`). The subcommands are:
+The active compiler binary is `./qoz` (or `./main` during development), built from `bootstrap/stage1.c` via `make`. The subcommands are:
 
 ```
 qoz <path>                      // default: emit <path>.c only
@@ -625,7 +625,7 @@ qoz run   <path>                // emit, clang, execute, propagate exit code
 
 `<path>` is the entry-point `.qoz` file. The emitted `.c` is self-contained: the runtime is inlined as `#load_string` literals, so no `-I` flag or extra object files are required when invoking clang directly.
 
-The `bootstrap/` directory holds a pre-built `stage1.c`. Anyone without the Stage A Odin compiler can build the compiler with `clang bootstrap/stage1.c -o main` and use that binary to compile the Qoz source tree from scratch.
+The `bootstrap/` directory holds a checked-in `stage1.c`. From a clean checkout, `make` clangs that file into a stage-0 binary, uses it to emit a fresh `compiler/main.qoz.c`, and clangs the result into `./qoz`. No external compiler toolchain is required beyond clang.
 
 ---
 

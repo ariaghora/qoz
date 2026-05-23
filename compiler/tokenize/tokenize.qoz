@@ -1,4 +1,4 @@
-// compiler/tokenize: Stage B tokenizer for Qoz source.
+// compiler/tokenize: tokenizer for Qoz source.
 
 import std/strings
 import std/vec

@@ -1,5 +1,6 @@
-// stage-b-skip: Stage B has no SLetElse AST yet; the test relies on
-// `let Pattern = expr else { ... }` syntax which Stage A supports.
+// stage-b-skip: the compiler has no SLetElse AST yet; the test relies
+// on `let Pattern = expr else { ... }` syntax. Re-enable once that
+// feature lands.
 import std/strings
 import std/fmt
 

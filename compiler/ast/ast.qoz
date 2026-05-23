@@ -1,9 +1,8 @@
-// compiler/ast: Stage B AST.
+// compiler/ast: AST node definitions.
 //
-// In Stage A, the AST was a struct-per-node-kind with a top-level union of
-// pointer types. In Stage B every AST category is a single algebraic data
-// type. Each variant carries the source span as its first positional field
-// so error reporting always has location information.
+// Every AST category is a single algebraic data type. Each variant
+// carries the source span as its first positional field so error
+// reporting always has location information.
 
 import std/vec
 

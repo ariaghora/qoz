@@ -11,6 +11,14 @@ CLAUDE.md
 .claude
 
 /main
+/qoz
+/stage0
+/stage1
+stage1-emit.qoz.c
+qoz-emit.qoz.c
 tests/**/*.qoz.c
+tests/**/*.qoz.bin
+examples/**/*.qoz.c
+examples/**/*.qoz.bin
 compiler/main.qoz.c
 stage2

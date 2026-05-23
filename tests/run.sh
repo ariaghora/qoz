@@ -12,27 +12,22 @@ set -u
 ulimit -d 1048576 2>/dev/null || true   # data segment: 1 GB
 ulimit -t 30 2>/dev/null || true        # CPU seconds: 30 per child
 
-# Stage B (./main) is the active compiler. When it is missing the
-# runner builds it from bootstrap/stage1.c via clang. Two further
-# fall-backs exist for development: the live Stage B source in
-# compiler/main.qoz (compiled by an existing ./main), and the
-# archived Stage A.
-STAGE_B="$PWD/main"
-if [ ! -x "$STAGE_B" ] && [ -f bootstrap/stage1.c ]; then
+# The active compiler is `./main`. When it is missing the runner
+# builds it from bootstrap/stage1.c via clang. No further fallback;
+# if bootstrap/stage1.c is broken the suite refuses to run.
+QOZ_BIN="$PWD/main"
+if [ ! -x "$QOZ_BIN" ] && [ -f bootstrap/stage1.c ]; then
     clang -std=c11 -pedantic -Wall \
           -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable \
           -Wno-unused-const-variable -Wno-parentheses-equality -Wno-unused-value \
           -Wno-overlength-strings \
-          bootstrap/stage1.c -o "$STAGE_B" >/dev/null 2>&1
+          bootstrap/stage1.c -o "$QOZ_BIN" >/dev/null 2>&1
 fi
-if [ ! -x "$STAGE_B" ] && [ -x ./archive/qoz-stage-a/stage_a/stage_a.exe ]; then
-    ./archive/qoz-stage-a/stage_a/stage_a.exe build compiler/main.qoz >/dev/null 2>&1
-fi
-if [ ! -x "$STAGE_B" ]; then
-    echo "Stage B binary (./main) not found, no bootstrap/stage1.c, no Stage A."
+if [ ! -x "$QOZ_BIN" ]; then
+    echo "qoz binary (./main) not found and bootstrap/stage1.c could not produce one."
     exit 2
 fi
-QOZ="$STAGE_B"
+QOZ="$QOZ_BIN"
 
 PASS=0
 FAIL=0
@@ -98,7 +93,7 @@ if true; then
             fails+=("$t (missing // expect: header)")
             return 1
         fi
-        out=$(QOZ_ROOT="$PWD" "$STAGE_B" emit "$t" 2>&1)
+        out=$(QOZ_ROOT="$PWD" "$QOZ_BIN" emit "$t" 2>&1)
         rc=$?
         if [ $rc -ne 0 ]; then
             FAIL=$((FAIL+1))
@@ -112,7 +107,24 @@ if true; then
             rm -f "$bin" "${t}.c"
             return 1
         fi
-        "$bin"
+        # Tests whose expected exit code is in the signal range
+        # (>= 128) deliberately die from a signal (SIGABRT for the
+        # panic test, etc.). Bash prints its own "Abort trap: 6" line
+        # to stderr in those cases, which makes the suite output
+        # look like there is a problem. Suppress stderr for those
+        # runs so the runner's own diagnostics stay readable. Tests
+        # with normal exit codes keep stderr live so genuine failures
+        # surface.
+        if [ "$expect" -ge 128 ]; then
+            # Run in the background and wait, so bash does not print
+            # its automatic "Abort trap: 6" line for direct foreground
+            # signal deaths. The waited-on PID's exit status is what
+            # `wait` reports.
+            "$bin" 2>/dev/null &
+            wait $! 2>/dev/null
+        else
+            "$bin"
+        fi
         rc=$?
         rm -f "$bin" "${t}.c"
         if [ "$rc" != "$expect" ]; then
@@ -125,7 +137,7 @@ if true; then
 
     run_stage_b_neg() {
         local t="$1"
-        out=$(QOZ_ROOT="$PWD" "$STAGE_B" emit "$t" 2>&1)
+        out=$(QOZ_ROOT="$PWD" "$QOZ_BIN" emit "$t" 2>&1)
         rc=$?
         rm -f "${t}.c"
         if [ $rc -eq 0 ]; then

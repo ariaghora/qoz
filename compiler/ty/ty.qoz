@@ -1,4 +1,4 @@
-// compiler/ty: Stage B type representation.
+// compiler/ty: type representation.
 
 import std/vec
 import std/strings

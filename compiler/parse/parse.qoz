@@ -1,4 +1,4 @@
-// compiler/parse: Stage B parser.
+// compiler/parse: parser.
 //
 // Recursive descent. Consumes a Vec<Token> from compiler/tokenize and
 // produces an ast.File. The parser collects errors in a side-channel and

@@ -1,4 +1,4 @@
-// compiler/emit: Stage B codegen.
+// compiler/emit: codegen.
 
 import std/fmt
 import std/os

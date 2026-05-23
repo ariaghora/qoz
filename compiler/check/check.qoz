@@ -1,4 +1,4 @@
-// compiler/check: Stage B type checker.
+// compiler/check: type checker.
 
 import std/fmt
 import std/vec
@@ -118,7 +118,7 @@ let resolve_type(tc: *TyContext, te: TypeExpr): Ty = {
 
 let resolve_named(tc: *TyContext, span: Span, path: Vec<string>, args: Vec<TypeExpr>): Ty = {
     if len(path) != 1 {
-        record_error(tc, span, "qualified type paths are not yet resolved in Stage B")
+        record_error(tc, span, "qualified type paths are not yet supported")
         return ty.ty_error_()
     }
     let name: string = path[0]
@@ -152,7 +152,7 @@ let resolve_named(tc: *TyContext, span: Span, path: Vec<string>, args: Vec<TypeE
         return ty.ty_record_(name, resolved_args)
     }
     if map.contains(&tc.aliases, name) {
-        // For Stage B, leave aliases as named records until we add unfolding.
+        // Aliases stay as named records until type-alias unfolding lands.
         return ty.ty_record_(name, resolved_args)
     }
     record_error(tc, span, "unknown type `{name}`")

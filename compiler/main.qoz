@@ -1,4 +1,4 @@
-// compiler/main: Stage B driver.
+// compiler/main: driver.
 
 import std/fmt
 import std/fs
@@ -82,16 +82,6 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
         let abs_dir    = strings.cat(strings.cat(qoz_root, "/"), dir_rel)
         let abs_legacy = strings.cat(strings.cat(qoz_root, "/"), legacy_rel)
         if fs.file_exists(abs_legacy) { return abs_dir }
-    }
-    if len(segs) >= 2 && strings.eq_raw(segs[0], "std") {
-        var tmp = os.getenv("TMPDIR")
-        if len(tmp) == 0 { tmp = "/tmp" }
-        if strings.byte_at(tmp, len(tmp) - 1) == 47 {
-            tmp = strings.slice(tmp, 0, len(tmp) - 1)
-        }
-        let cached_legacy = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", legacy_rel))
-        let cached_dir    = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", dir_rel))
-        if fs.file_exists(cached_legacy) { return cached_dir }
     }
     ""
 }
@@ -310,9 +300,9 @@ let cmd_build(path: string, qoz_root: string): string = {
     out_path
 }
 
-// The set of clang flags Stage A used for both `build` and `run` and
-// the test runner used for stage_b/* tests. Kept in one place so the
-// compiler binary, the build script, and the bootstrap path agree.
+// Clang flags used for both `build` and `run`. Kept in one place so
+// the compiler binary, the build script, and the bootstrap path
+// agree.
 let clang_argv(c_path: string, bin_path: string): Vec<string> = {
     var argv: Vec<string> = vec.make()
     vec.push(&argv, "clang")
@@ -334,10 +324,23 @@ let clang_argv(c_path: string, bin_path: string): Vec<string> = {
     argv
 }
 
+// Delete a file by exec'ing `rm -f <path>`. Used by `build` and `run`
+// to clean up the temporary .c and binary they emit. The compiler
+// stays portable to platforms whose libc layout differs; only a
+// working `rm` on PATH is required.
+let unlink_quiet(path: string) = {
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "rm")
+    vec.push(&argv, "-f")
+    vec.push(&argv, path)
+    let _ = os.process_exec(argv)
+}
+
 // Compile, link, and execute. The child's stdout and stderr stream to
 // the parent's terminals via the buffered process_exec call (so the
-// captured streams print on completion). The Qoz compiler exits with
-// the child's exit code, matching `qoz_a run`'s behaviour.
+// captured streams print on completion). The compiler exits with the
+// child's exit code. The emitted .c and the binary are removed after
+// the run; users who want the source should invoke `qoz emit`.
 let cmd_run(path: string, qoz_root: string) = {
     let c_path = cmd_build(path, qoz_root)
     let bin_path = strings.cat(path, ".bin")
@@ -346,6 +349,7 @@ let cmd_run(path: string, qoz_root: string) = {
     if clang_result.exit_code != 0 {
         fmt.print(clang_result.stdout)
         fmt.print(clang_result.stderr)
+        unlink_quiet(c_path)
         os.exit(1)
     }
 
@@ -354,6 +358,8 @@ let cmd_run(path: string, qoz_root: string) = {
     let result = os.process_exec(run_argv)
     fmt.print(result.stdout)
     fmt.print(result.stderr)
+    unlink_quiet(c_path)
+    unlink_quiet(bin_path)
     os.exit(result.exit_code)
 }
 
@@ -392,8 +398,12 @@ let main() = {
         if r.exit_code != 0 {
             fmt.print(r.stdout)
             fmt.print(r.stderr)
+            unlink_quiet(c_path)
             os.exit(1)
         }
+        // build keeps only the binary. Use `qoz emit` to retain the
+        // C source.
+        unlink_quiet(c_path)
         os.exit(0)
     } else { if strings.eq_raw(first, "run") {
         if len(args) < 3 {
