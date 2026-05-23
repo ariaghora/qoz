@@ -1,0 +1,131 @@
+// A small ray tracer that writes a P3-format PPM image to stdout.
+// The scene is a single sphere centred at z = -1 against a vertical
+// gradient background.
+
+import std/cmath
+import std/fmt
+import std/strings
+
+type Vec3 = { x: f64, y: f64, z: f64 }
+
+@operator("+")
+let vec_add(a: *Vec3, b: *Vec3): Vec3 = Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+
+@operator("-")
+let vec_sub(a: *Vec3, b: *Vec3): Vec3 = Vec3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }
+
+@operator("unary-")
+let vec_neg(a: *Vec3): Vec3 = Vec3 { x: 0.0 - a.x, y: 0.0 - a.y, z: 0.0 - a.z }
+
+let scale(v: Vec3, k: f64): Vec3 = Vec3 { x: v.x * k, y: v.y * k, z: v.z * k }
+
+let dot(a: Vec3, b: Vec3): f64 = a.x * b.x + a.y * b.y + a.z * b.z
+
+let length(v: Vec3): f64 = cmath.sqrt(dot(v, v))
+
+let unit_vec(v: Vec3): Vec3 = scale(v, 1.0 / length(v))
+
+type Ray = { origin: Vec3, direction: Vec3 }
+
+let ray_at(r: Ray, t: f64): Vec3 = {
+    let step = scale(r.direction, t)
+    r.origin + step
+}
+
+// Returns the smallest positive `t` for which the ray hits the sphere,
+// or -1.0 when the ray misses entirely.
+let hit_sphere(center: Vec3, radius: f64, ray: Ray): f64 = {
+    let oc = ray.origin - center
+    let a = dot(ray.direction, ray.direction)
+    let half_b = dot(oc, ray.direction)
+    let c = dot(oc, oc) - radius * radius
+    let disc = half_b * half_b - a * c
+    if disc < 0.0 {
+        0.0 - 1.0
+    } else {
+        (0.0 - half_b - cmath.sqrt(disc)) / a
+    }
+}
+
+// Shade a ray. A hit gets the sphere's surface normal mapped into the
+// 0..1 colour cube; a miss linearly interpolates a sky gradient from
+// white at the bottom to pale blue at the top.
+let ray_color(r: Ray): Vec3 = {
+    let center = Vec3 { x: 0.0, y: 0.0, z: 0.0 - 1.0 }
+    let t = hit_sphere(center, 0.5, r)
+    if t > 0.0 {
+        let p = ray_at(r, t)
+        let n = unit_vec(p - center)
+        scale(Vec3 { x: n.x + 1.0, y: n.y + 1.0, z: n.z + 1.0 }, 0.5)
+    } else {
+        let u = unit_vec(r.direction)
+        let a = 0.5 * (u.y + 1.0)
+        let white = Vec3 { x: 1.0, y: 1.0, z: 1.0 }
+        let sky   = Vec3 { x: 0.5, y: 0.7, z: 1.0 }
+        let lo = scale(white, 1.0 - a)
+        let hi = scale(sky, a)
+        lo + hi
+    }
+}
+
+let to_byte(c: f64): i64 = {
+    let scaled = c * 255.999
+    let i = scaled as i64
+    if i < 0   { 0 }
+    else { if i > 255 { 255 } else { i } }
+}
+
+let main(): i64 = {
+    let aspect_ratio  = 16.0 / 9.0
+    let image_width: i64 = 400
+    let image_height_raw = (image_width as f64) / aspect_ratio
+    let image_height: i64 = image_height_raw as i64
+
+    // Viewport in world units.
+    let focal_length    = 1.0
+    let viewport_height = 2.0
+    let viewport_width  = viewport_height * (image_width as f64) / (image_height as f64)
+    let camera_origin   = Vec3 { x: 0.0, y: 0.0, z: 0.0 }
+
+    let viewport_u = Vec3 { x: viewport_width, y: 0.0, z: 0.0 }
+    let viewport_v = Vec3 { x: 0.0, y: 0.0 - viewport_height, z: 0.0 }
+
+    let pixel_delta_u = scale(viewport_u, 1.0 / (image_width  as f64))
+    let pixel_delta_v = scale(viewport_v, 1.0 / (image_height as f64))
+
+    let focal_offset = Vec3 { x: 0.0, y: 0.0, z: focal_length }
+    let half_u = scale(viewport_u, 0.5)
+    let half_v = scale(viewport_v, 0.5)
+    let step1 = camera_origin - focal_offset
+    let step2 = step1 - half_u
+    let viewport_upper_left = step2 - half_v
+    let delta_sum = pixel_delta_u + pixel_delta_v
+    let pixel00_offset = scale(delta_sum, 0.5)
+    let pixel00 = viewport_upper_left + pixel00_offset
+
+    fmt.println("P3")
+    fmt.println("{image_width} {image_height}")
+    fmt.println("255")
+
+    var j: i64 = 0
+    while j < image_height {
+        var i: i64 = 0
+        while i < image_width {
+            let step_u = scale(pixel_delta_u, i as f64)
+            let step_v = scale(pixel_delta_v, j as f64)
+            let pixel_part1 = pixel00 + step_u
+            let pixel_center = pixel_part1 + step_v
+            let ray_dir = pixel_center - camera_origin
+            let r = Ray { origin: camera_origin, direction: ray_dir }
+            let color = ray_color(r)
+            let ir = to_byte(color.x)
+            let ig = to_byte(color.y)
+            let ib = to_byte(color.z)
+            fmt.println("{ir} {ig} {ib}")
+            i = i + 1
+        }
+        j = j + 1
+    }
+
+    0
+}
