@@ -498,11 +498,7 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
 // bindings.
 let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFieldLit>): Ty = {
     let bare_resolved = resolve_type(tc, te)
-    var struct_name = ""
-    match bare_resolved {
-    | TyRecord(n, _) -> struct_name = n
-    | _              -> { }
-    }
+    let struct_name = record_name_of(bare_resolved)
     if strings.eq_raw(struct_name, "") { return bare_resolved }
     let tparams = struct_tparams(tc, struct_name)
     if len(tparams) == 0 { return bare_resolved }
@@ -514,14 +510,10 @@ let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFiel
     while i < len(fields) {
         let f = fields[i]
         if !strings.eq_raw(f.name, "..") {
-            let decl_te = struct_field_typeexpr(tc, struct_name, f.name)
-            match decl_te {
-            | Some(dte) -> {
+            if let Some(dte) = struct_field_typeexpr(tc, struct_name, f.name) {
                 let p_ty = resolve_type(tc, dte)
                 let v_ty = synth(tc, env, f.value)
                 let _ = unify(p_ty, v_ty, &bindings)
-            }
-            | None -> { }
             }
         }
         i = i + 1
@@ -531,9 +523,10 @@ let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFiel
     var ti: i64 = 0
     while ti < len(tparams) {
         let tp = tparams[ti]
-        match map.get(&bindings, tp) {
-        | Some(t) -> vec.push(&args, t)
-        | None    -> vec.push(&args, ty.ty_var_(tp))
+        if let Some(t) = map.get(&bindings, tp) {
+            vec.push(&args, t)
+        } else {
+            vec.push(&args, ty.ty_var_(tp))
         }
         ti = ti + 1
     }
@@ -576,6 +569,22 @@ let ty_record_args(t: Ty): Vec<Ty> = {
     match t {
     | TyRecord(_, args) -> args
     | _                 -> empty
+    }
+}
+
+// Verify a `let name: T = value` binding's declared type accepts the
+// value's synthesised type. Skips the check when there is no
+// annotation (te is TEUnit) since the value's type is used as the
+// binding's type. Skips when either side is an error so that a
+// single mismatch does not cascade.
+let check_binding_compat(tc: *TyContext, sp: Span, te: TypeExpr, bound: Ty, vt: Ty) = {
+    // No annotation = nothing to check; the binding's type is the
+    // value's type by definition.
+    if let TEUnit(_) = te { return }
+    if !ty.ty_assignable(bound, vt) {
+        let want = ty.ty_show(bound)
+        let got  = ty.ty_show(vt)
+        record_error(tc, sp, "binding type {want} cannot accept value of type {got}")
     }
 }
 
@@ -651,13 +660,21 @@ let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<Ty>)
     var ti: i64 = 0
     while ti < len(tparams) {
         let tp = tparams[ti]
-        match map.get(&bindings, tp) {
-        | Some(t) -> vec.push(&args, t)
-        | None    -> vec.push(&args, ty.ty_var_(tp))
+        if let Some(t) = map.get(&bindings, tp) {
+            vec.push(&args, t)
+        } else {
+            vec.push(&args, ty.ty_var_(tp))
         }
         ti = ti + 1
     }
     ty.ty_adt_(enum_name, args)
+}
+
+let record_name_of(t: Ty): string = {
+    match t {
+    | TyRecord(name, _) -> name
+    | _                 -> ""
+    }
 }
 
 let variant_enum_name(tc: *TyContext, variant: string): string = {
@@ -925,14 +942,16 @@ let synth_binary(tc: *TyContext, env: *Env, op: BinaryOp, l: Expr, r: Expr): Ty 
 let synth_block(tc: *TyContext, env: *Env, stmts: Vec<Stmt>, tail: Expr): Ty = {
     for s in stmts {
         match s {
-        | SLet(_, name, te, val)  -> {
+        | SLet(sp, name, te, val)  -> {
             let vt = synth(tc, env, val)
             let bound = match te { | TEUnit(_) -> vt | _ -> resolve_type(tc, te) }
+            check_binding_compat(tc, sp, te, bound, vt)
             env_define(env, name, bound)
         }
-        | SVar(_, name, te, val)  -> {
+        | SVar(sp, name, te, val)  -> {
             let vt = synth(tc, env, val)
             let bound = match te { | TEUnit(_) -> vt | _ -> resolve_type(tc, te) }
+            check_binding_compat(tc, sp, te, bound, vt)
             env_define(env, name, bound)
         }
         | SExpr(_, ex)            -> { let _ = synth(tc, env, ex) }
