@@ -23,7 +23,7 @@ let bytes_eq(ad: *u8, ao: i64, bd: *u8, bo: i64, n: i64): bool = {
     var i: i64 = 0
     while i < n {
         if ad[ao + i] != bd[bo + i] { return false }
-        i = i + 1
+        i += 1
     }
     true
 }
@@ -51,7 +51,7 @@ let hash_raw(s: string): u64 = {
     while i < n {
         h = h ^ (data[i] as u64)
         h = h * 1099511628211
-        i = i + 1
+        i += 1
     }
     h
 }
@@ -90,7 +90,7 @@ let index_byte(s: string, byte: i64): i64 = {
     var i: i64 = 0
     while i < n {
         if (data[i] as i64) == byte { return i }
-        i = i + 1
+        i += 1
     }
     0 - 1
 }
@@ -147,7 +147,7 @@ let parse_int(s: string): i64 = {
         if b < 48 { return if neg { 0 - acc } else { acc } }
         if b > 57 { return if neg { 0 - acc } else { acc } }
         acc = acc * 10 + (b - 48)
-        i = i + 1
+        i += 1
     }
     if neg { 0 - acc } else { acc }
 }
@@ -167,7 +167,7 @@ let lt_raw(a: string, b: string): bool = {
         let ca = byte_at(a, i)
         let cb = byte_at(b, i)
         if ca != cb { return ca < cb }
-        i = i + 1
+        i += 1
     }
     an < bn
 }
@@ -186,10 +186,10 @@ let replace_all(s: string, needle: string, replacement: string): string = {
     while i + nn <= total {
         if has_prefix(slice(s, i, total), needle) {
             out = cat(out, replacement)
-            i = i + nn
+            i += nn
         } else {
             out = cat(out, slice(s, i, i + 1))
-            i = i + 1
+            i += 1
         }
     }
     if i < total {
@@ -212,12 +212,12 @@ let i64_to_string(v: i64): string = {
     let neg = n < 0
     if neg { n = 0 - n }
     while n > 0 {
-        pos = pos - 1
+        pos -= 1
         bp[pos] = ((n % 10) + 48) as u8
         n = n / 10
     }
     if neg {
-        pos = pos - 1
+        pos -= 1
         bp[pos] = 45 as u8
     }
     let out_len = 21 - pos
@@ -237,7 +237,7 @@ let split(s: string, sep: i64): Vec<string> = {
             vec.push(&out, slice(s, start, i))
             start = i + 1
         }
-        i = i + 1
+        i += 1
     }
     vec.push(&out, slice(s, start, total))
     out

@@ -32,7 +32,7 @@ let probe<K, V>(m: *Map<K, V>, key: K): i64 = {
                 return idx
             }
         }
-        idx = idx + 1
+        idx += 1
         if idx == m.cap { idx = 0 }
     }
     idx
@@ -65,7 +65,7 @@ let grow<K, V>(m: *Map<K, V>) = {
                 insert_raw(m, slot.key, slot.value)
             }
         }
-        j = j + 1
+        j += 1
     }
 }
 
@@ -115,10 +115,10 @@ let sort_keys<K>(keys: *Vec<K>) = {
         var j: i64 = i
         while j > 0 && key < keys.data[j - 1] {
             keys.data[j] = keys.data[j - 1]
-            j = j - 1
+            j -= 1
         }
         keys.data[j] = key
-        i = i + 1
+        i += 1
     }
 }
 
@@ -132,7 +132,7 @@ let sorted_keys<K, V>(m: *Map<K, V>): Vec<K> = {
                 vec.push(&out, m.slots[i].key)
             }
         }
-        i = i + 1
+        i += 1
     }
     sort_keys(&out)
     out

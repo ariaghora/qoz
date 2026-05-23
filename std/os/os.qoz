@@ -33,7 +33,7 @@ let args(): Vec<string> = {
     var i: i64 = 0
     while i < n {
         vec.push(&v, arg_raw(i))
-        i = i + 1
+        i += 1
     }
     v
 }

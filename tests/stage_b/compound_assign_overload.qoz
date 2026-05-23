@@ -1,0 +1,16 @@
+// expect: 33
+// Compound `+=` on a user record uses the overloaded `+`.
+// The result's x and y fields are summed and returned as the program
+// exit code so the runner can verify the value.
+
+type Pair = { x: i64, y: i64 }
+
+@operator("+")
+let pair_add(a: *Pair, b: *Pair): Pair = Pair { x: a.x + b.x, y: a.y + b.y }
+
+let main(): i64 = {
+    var r = Pair { x: 1, y: 2 }
+    let q = Pair { x: 10, y: 20 }
+    r += q
+    r.x + r.y
+}

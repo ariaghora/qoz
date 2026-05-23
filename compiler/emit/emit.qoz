@@ -232,7 +232,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
     var iters: i64 = 0
     while !stable {
         if iters > 32 { stable = true }
-        iters = iters + 1
+        iters += 1
         let before_r = len(e.record_insts)
         let before_e = len(e.enum_insts)
         let before_f = len(e.fn_insts)
@@ -242,7 +242,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
             if let Some(decl) = map.get(&e.generic_decls, inst.name) {
                 walk_struct_fields_with_subst(e, decl, inst.args)
             }
-            i = i + 1
+            i += 1
         }
         var j: i64 = 0
         while j < len(e.enum_insts) {
@@ -250,7 +250,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
             if let Some(decl) = map.get(&e.generic_decls, inst.name) {
                 walk_enum_variants_with_subst(e, decl, inst.args)
             }
-            j = j + 1
+            j += 1
         }
         var k: i64 = 0
         while k < len(e.fn_insts) {
@@ -258,7 +258,7 @@ let collect_type_instantiations(e: *Emitter, file: File) = {
             if let Some(decl) = map.get(&e.generic_fn_decls, inst.name) {
                 walk_fn_body_with_subst(e, decl, inst.args)
             }
-            k = k + 1
+            k += 1
         }
         if len(e.record_insts) == before_r && len(e.enum_insts) == before_e && len(e.fn_insts) == before_f {
             stable = true
@@ -610,7 +610,7 @@ let substitute_type(e: *Emitter, t: TypeExpr, params: Vec<string>, args: Vec<Typ
                 if strings.eq_raw(p, n) {
                     return args[i]
                 }
-                i = i + 1
+                i += 1
             }
         }
         var new_args: Vec<TypeExpr> = vec.make()
@@ -781,7 +781,7 @@ let strip_numeric_underscores(s: string): string = {
             if c != 95 {
                 clean = strings.cat(clean, strings.slice(s, i, i + 1))
             }
-            i = i + 1
+            i += 1
         }
     }
     // C11 does not accept binary literals. Convert 0b... to decimal so
@@ -796,7 +796,7 @@ let strip_numeric_underscores(s: string): string = {
                 let b = strings.byte_at(clean, j)
                 if b == 48 || b == 49 {
                     v = v * 2 + (b - 48)
-                    j = j + 1
+                    j += 1
                 } else {
                     // Hit a non-binary suffix; bail with original to surface a clang error.
                     return s
@@ -913,7 +913,7 @@ let register_tuple_typedef(e: *Emitter, elems: Vec<TypeExpr>): string = {
             body = strings.cat(body, " _")
             body = strings.cat(body, int_to_string(i))
             body = strings.cat(body, "; ")
-            i = i + 1
+            i += 1
         }
         body = strings.cat(body, "} ")
         body = strings.cat(body, name)
@@ -1057,7 +1057,7 @@ let emit_tuple_lit(e: *Emitter, sp: Span, elems: Vec<Expr>) = {
     for el in elems {
         if i > 0 { push(e, ", ") }
         emit_expr(e, el)
-        i = i + 1
+        i += 1
     }
     push(e, " }})")
 }
@@ -1169,7 +1169,7 @@ let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: Type
             env_decl = strings.cat(env_decl, " ")
             env_decl = strings.cat(env_decl, c)
             env_decl = strings.cat(env_decl, "; ")
-            ci = ci + 1
+            ci += 1
         }
         env_decl = strings.cat(env_decl, "};\n")
         vec.push(&e.synth_fn_decls, env_decl)
@@ -1198,7 +1198,7 @@ let emit_closure_lifted(e: *Emitter, sp: Span, cps: Vec<ClosureParam>, ret: Type
             let c_c = c_type_for(e, capture_tes[ci2])
             push(e, "{c_c} {c} = _env->{c};\n    ")
             e.locals[c] = capture_tes[ci2]
-            ci2 = ci2 + 1
+            ci2 += 1
         }
     }
     e.current_ret_te = ret
@@ -1615,7 +1615,7 @@ let tuple_field_index(field: string): i64 = {
         let b = strings.byte_at(field, i)
         if b < 48 || b > 57 { return -1 }
         n = n * 10 + (b - 48)
-        i = i + 1
+        i += 1
     }
     n
 }
@@ -1861,7 +1861,7 @@ let literal_variant_type_args(e: *Emitter, enum_name: string, variant: string, a
                             | None         -> resolved_all = false
                             }
                         }
-                        i = i + 1
+                        i += 1
                     }
                 }
             }
@@ -1902,7 +1902,7 @@ let infer_variant_type_args(e: *Emitter, enum_name: string, variant: string, arg
                             let arg_te = infer_value_te(e, args[i])
                             unify_te(pos_te, arg_te, &bindings)
                         }
-                        i = i + 1
+                        i += 1
                     }
                 }
             }
@@ -1939,7 +1939,7 @@ let unify_te(pattern: TypeExpr, concrete: TypeExpr, env: *Map<string, TypeExpr>)
                 var i: i64 = 0
                 while i < len(p_args) {
                     unify_te(p_args[i], c_args[i], env)
-                    i = i + 1
+                    i += 1
                 }
             }
         }
@@ -2125,7 +2125,7 @@ let emit_defers_reverse(e: *Emitter, defers: Vec<Expr>) = {
     var i: i64 = len(defers) - 1
     while i >= 0 {
         emit_stmt_expr(e, defers[i])
-        i = i - 1
+        i -= 1
     }
 }
 
@@ -2303,7 +2303,7 @@ let bind_arm_locals(e: *Emitter, enum_name: string, pat: Pattern) = {
             }
             | _ -> { }
             }
-            i = i + 1
+            i += 1
         }
     }
     | PatBind(_, bname) -> {
@@ -2630,7 +2630,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             for a in args {
                 if i > 0 { push(e, ", ") }
                 emit_expr(e, a)
-                i = i + 1
+                i += 1
             }
             push(e, ")")
             return
@@ -2653,7 +2653,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             } else {
                 emit_expr(e, a)
             }
-            i = i + 1
+            i += 1
         }
         push(e, ")")
         return
@@ -2688,7 +2688,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             for a in args {
                 if i > 0 { push(e, ", ") }
                 emit_expr(e, a)
-                i = i + 1
+                i += 1
             }
             push(e, ")")
             return
@@ -2707,7 +2707,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
                 for a in args {
                     if i > 0 { push(e, ", ") }
                     emit_expr(e, a)
-                    i = i + 1
+                    i += 1
                 }
                 push(e, ")")
                 return
@@ -2738,7 +2738,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
                 } else {
                     emit_expr(e, a)
                 }
-                i = i + 1
+                i += 1
             }
             push(e, ")")
             return
@@ -2766,7 +2766,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             } else {
                 emit_expr(e, a)
             }
-            i = i + 1
+            i += 1
         }
         push(e, ")")
         return
@@ -2812,7 +2812,7 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         } else {
             emit_expr(e, a)
         }
-        i = i + 1
+        i += 1
     }
     push(e, ")")
 }
@@ -3219,7 +3219,7 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
             let pc = c_type_for(e, p.ty)
             let pn = p.name
             push(e, "{pc} {pn}")
-            i = i + 1
+            i += 1
         }
         push(e, ")")
     }
@@ -3303,7 +3303,7 @@ let emit_records_topological(e: *Emitter, f: File) = {
     var i: i64 = 0
     while i < len(names) {
         emit_record_visit(e, names[i], names, field_lists, &visited)
-        i = i + 1
+        i += 1
     }
 }
 
@@ -3323,7 +3323,7 @@ let emit_record_visit(e: *Emitter, name: string, names: Vec<string>, field_lists
             emit_struct(e, name, fields)
             return
         }
-        i = i + 1
+        i += 1
     }
 }
 
@@ -3567,7 +3567,7 @@ let emit_enum(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
     for v in variants {
         let vn = v.name
         push(e, "    qoz_{name}_{vn},\n")
-        i = i + 1
+        i += 1
     }
     push(e, "}} qoz_{name}_tag;\n\n")
     for v in variants {
@@ -3579,7 +3579,7 @@ let emit_enum(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
                 let pc = c_type_for(e, pt)
                 let ks = int_to_string(k)
                 push(e, "    {pc} f{ks};\n")
-                k = k + 1
+                k += 1
             }
             push(e, "}} qoz_{name}_{vn}_payload;\n\n")
         }
@@ -3620,7 +3620,7 @@ let emit_variant_ctor(e: *Emitter, enum_name: string, v: VariantDecl) = {
             let pc = c_type_for(e, pt)
             let ks = int_to_string(k)
             push(e, "{pc} f{ks}")
-            k = k + 1
+            k += 1
         }
         push(e, ") {{\n")
     }
@@ -3631,7 +3631,7 @@ let emit_variant_ctor(e: *Emitter, enum_name: string, v: VariantDecl) = {
         for _ in v.pos {
             let js = int_to_string(j)
             push(e, "    p->payload.{vn}.f{js} = f{js};\n")
-            j = j + 1
+            j += 1
         }
     }
     push(e, "    return p;\n}}\n\n")
@@ -3724,7 +3724,7 @@ let emit_record_desc(e: *Emitter, name: string, fields: Vec<StructField>) = {
         for expr in offsets {
             if i > 0 { push(e, ", ") }
             push(e, expr)
-            i = i + 1
+            i += 1
         }
         push(e, " }};\n")
     }
@@ -3747,7 +3747,7 @@ let collect_variant_ptr_offsets(e: *Emitter, enum_name: string, v: VariantDecl):
         for pt in v.pos {
             let field = strings.cat("f", int_to_string(i))
             collect_field_ptr_offsets(e, parent, field, pt, &out)
-            i = i + 1
+            i += 1
         }
         return out
     }
@@ -3774,7 +3774,7 @@ let emit_adt_desc(e: *Emitter, name: string, variants: Vec<VariantDecl>) = {
             for expr in voffs {
                 if j > 0 { push(e, ", ") }
                 push(e, expr)
-                j = j + 1
+                j += 1
             }
             push(e, " }};\n")
         }
@@ -3826,7 +3826,7 @@ let emit_record_eq(e: *Emitter, name: string, fields: Vec<StructField>) = {
         for f in fields {
             if i > 0 { push(e, " && ") }
             emit_field_eq_expr(e, f.ty, f.name)
-            i = i + 1
+            i += 1
         }
     }
     push(e, ";\n}}\n\n")
@@ -3906,7 +3906,7 @@ let emit_fn_proto(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr
         let pc = c_type_for(e, p.ty)
         let pn = p.name
         push(e, "{pc} {pn}")
-        i = i + 1
+        i += 1
     }
     push(e, ");\n")
 }
@@ -3923,7 +3923,7 @@ let emit_extern_proto(e: *Emitter, symbol: string, params: Vec<FnParam>, ret: Ty
     for p in params {
         if i > 0 { push(e, ", ") }
         push(e, c_type_for(e, p.ty))
-        i = i + 1
+        i += 1
     }
     push(e, ");\n")
 }
@@ -4183,7 +4183,7 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<TypeExpr>, ret: 
         sig = strings.cat(sig, c_type_for(e, p))
         sig = strings.cat(sig, " _p")
         sig = strings.cat(sig, int_to_string(pi))
-        pi = pi + 1
+        pi += 1
     }
     let sig_decl = strings.cat(sig, ");\n")
     vec.push(&e.synth_fn_decls, sig_decl)
@@ -4199,7 +4199,7 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<TypeExpr>, ret: 
             if pj > 0 { def = strings.cat(def, ", ") }
             def = strings.cat(def, "_p")
             def = strings.cat(def, int_to_string(pj))
-            pj = pj + 1
+            pj += 1
         }
         def = strings.cat(def, ");\n    return;\n")
     } else {
@@ -4211,7 +4211,7 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<TypeExpr>, ret: 
             if pj > 0 { def = strings.cat(def, ", ") }
             def = strings.cat(def, "_p")
             def = strings.cat(def, int_to_string(pj))
-            pj = pj + 1
+            pj += 1
         }
         def = strings.cat(def, ");\n")
     }
@@ -4246,7 +4246,7 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
                 for a in args {
                     if i > 0 { push(e, ", ") }
                     emit_expr(e, a)
-                    i = i + 1
+                    i += 1
                 }
                 push(e, ")")
                 return
@@ -4283,7 +4283,7 @@ let emit_record_lit_with_hint(e: *Emitter, te: TypeExpr, fields: Vec<RecordField
         push(e, ".{fn} = ")
         let field_hint = field_type_hint(e, effective, f.name)
         emit_value_with_hint(e, f.value, field_hint)
-        i = i + 1
+        i += 1
     }
     push(e, " }})")
 }
@@ -4308,7 +4308,7 @@ let expand_record_spread_fields(e: *Emitter, te: TypeExpr, fields: Vec<RecordFie
         } else {
             listed[f.name] = true
         }
-        i = i + 1
+        i += 1
     }
     if !has_spread { return fields }
 
@@ -4325,7 +4325,7 @@ let expand_record_spread_fields(e: *Emitter, te: TypeExpr, fields: Vec<RecordFie
         if !strings.eq_raw(f.name, "..") {
             vec.push(&out, f)
         }
-        j = j + 1
+        j += 1
     }
     var k: i64 = 0
     while k < len(decl_field_names) {
@@ -4336,7 +4336,7 @@ let expand_record_spread_fields(e: *Emitter, te: TypeExpr, fields: Vec<RecordFie
                 value: EField(sp, spread_base, fname),
             })
         }
-        k = k + 1
+        k += 1
     }
     out
 }
@@ -4346,7 +4346,7 @@ let struct_decl_field_names(fields: Vec<StructField>): Vec<string> = {
     var i: i64 = 0
     while i < len(fields) {
         vec.push(&out, fields[i].name)
-        i = i + 1
+        i += 1
     }
     out
 }
@@ -4693,7 +4693,7 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
                 }
                 | _ -> { }
                 }
-                i = i + 1
+                i += 1
             }
         } else {
             push(e, ") {{ ")
@@ -4797,7 +4797,7 @@ let emit_match_arm_with_kind(e: *Emitter, enum_name: string, scrut_tmp: string, 
                 }
                 | _ -> { }
                 }
-                i = i + 1
+                i += 1
             }
             if arm.has_guard {
                 push(e, "if (")
@@ -4915,7 +4915,7 @@ let strip_mangled(name: string): string = {
         if strings.byte_at(name, i) == 95 && strings.byte_at(name, i + 1) == 95 {
             return strings.slice(name, 0, i)
         }
-        i = i + 1
+        i += 1
     }
     name
 }
@@ -4934,9 +4934,9 @@ let mangled_args(e: *Emitter, mangled: string, bare: string): Vec<TypeExpr> = {
         if strings.byte_at(tail, i) == 95 && strings.byte_at(tail, i + 1) == 95 {
             vec.push(&out, type_expr_from_mangled_part(strings.slice(tail, start, i), sp))
             start = i + 2
-            i = i + 2
+            i += 2
         } else {
-            i = i + 1
+            i += 1
         }
     }
     if start < n {

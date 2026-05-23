@@ -16,7 +16,7 @@ let last_slash(p: string): i64 = {
             found = i
             i = 0 - 1
         } else {
-            i = i - 1
+            i -= 1
         }
     }
     found
@@ -53,7 +53,7 @@ let ext(p: string): string = {
         if strings.byte_at(b, i) == 46 {
             return strings.slice(b, i, n)
         }
-        i = i - 1
+        i -= 1
     }
     ""
 }
@@ -93,10 +93,10 @@ let clean(p: string): string = {
     var i: i64 = if rooted { 1 } else { 0 }
     while i < n {
         // Skip consecutive slashes.
-        while i < n && strings.byte_at(p, i) == 47 { i = i + 1 }
+        while i < n && strings.byte_at(p, i) == 47 { i += 1 }
         if i >= n { i = n }
         var j: i64 = i
-        while j < n && strings.byte_at(p, j) != 47 { j = j + 1 }
+        while j < n && strings.byte_at(p, j) != 47 { j += 1 }
         if j > i {
             let seg = strings.slice(p, i, j)
             if strings.eq_raw(seg, ".") {
@@ -110,7 +110,7 @@ let clean(p: string): string = {
                     var k: i64 = 0
                     while k < segs_len - 1 {
                         vec.push(&rebuilt, segs[k])
-                        k = k + 1
+                        k += 1
                     }
                     segs = rebuilt
                 }

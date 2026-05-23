@@ -180,7 +180,7 @@ let env_lookup(env: *Env, name: string): Ty = {
         if strings.eq_raw(b.name, name) {
             return b.ty
         }
-        i = i - 1
+        i -= 1
     }
     ty.ty_error_()
 }
@@ -192,7 +192,7 @@ let env_has(env: *Env, name: string): bool = {
         if strings.eq_raw(b.name, name) {
             return true
         }
-        i = i - 1
+        i -= 1
     }
     false
 }
@@ -274,7 +274,7 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
         var i: i64 = 1
         while i < len(elems) {
             let _ = synth(tc, env, elems[i])
-            i = i + 1
+            i += 1
         }
         var args: Vec<Ty> = vec.make()
         vec.push(&args, elem_ty)
@@ -374,7 +374,7 @@ let apply_subst(t: Ty, params: Vec<string>, args: Vec<Ty>): Ty = {
                 if i < len(args) { return args[i] }
                 return t
             }
-            i = i + 1
+            i += 1
         }
         t
     }
@@ -516,7 +516,7 @@ let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFiel
                 let _ = unify(p_ty, v_ty, &bindings)
             }
         }
-        i = i + 1
+        i += 1
     }
     tc.type_params = saved
     var args: Vec<Ty> = vec.make()
@@ -528,7 +528,7 @@ let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFiel
         } else {
             vec.push(&args, ty.ty_var_(tp))
         }
-        ti = ti + 1
+        ti += 1
     }
     ty.ty_record_(struct_name, args)
 }
@@ -551,7 +551,7 @@ let inferred_record_te(tc: *TyContext, env: *Env, sp: Span, te: TypeExpr, fields
     var i: i64 = 0
     while i < len(args) {
         vec.push(&te_args, ty.ty_to_type_expr_at(args[i], sp))
-        i = i + 1
+        i += 1
     }
     TENamed(sp, orig_path, te_args)
 }
@@ -618,7 +618,7 @@ let struct_field_typeexpr(tc: *TyContext, name: string, field: string): Option<T
                 if strings.eq_raw(fields[i].name, field) {
                     return Some(fields[i].ty)
                 }
-                i = i + 1
+                i += 1
             }
             None
         }
@@ -653,7 +653,7 @@ let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<Ty>)
             let pos_ty = resolve_type(tc, variant_pos[i])
             let _ = unify(pos_ty, arg_tys[i], &bindings)
         }
-        i = i + 1
+        i += 1
     }
     tc.type_params = saved
     var args: Vec<Ty> = vec.make()
@@ -665,7 +665,7 @@ let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<Ty>)
         } else {
             vec.push(&args, ty.ty_var_(tp))
         }
-        ti = ti + 1
+        ti += 1
     }
     ty.ty_adt_(enum_name, args)
 }
@@ -714,7 +714,7 @@ let variant_positional_types(tc: *TyContext, enum_name: string, variant: string)
                         found = true
                     }
                 }
-                i = i + 1
+                i += 1
             }
             out
         }
@@ -745,7 +745,7 @@ let synth_call_with_decl(tc: *TyContext, sp: Span, d: Decl, type_args: Vec<TypeE
                     let got  = ty.ty_show(arg_tys[i])
                     record_error(tc, sp, "expected {want}, got {got}")
                 }
-                i = i + 1
+                i += 1
             }
             let r = resolve_type(tc, ret)
             tc.type_params = saved
@@ -765,7 +765,7 @@ let synth_call_with_decl(tc: *TyContext, sp: Span, d: Decl, type_args: Vec<TypeE
             var i: i64 = 0
             while i < len(arg_tys) && i < len(param_tys) {
                 if !unify(param_tys[i], arg_tys[i], &subst_env) { ok = false }
-                i = i + 1
+                i += 1
             }
             if !ok {
                 record_error(tc, sp, "could not infer generic type arguments at call site")
@@ -882,7 +882,7 @@ let unify_args(a: Vec<Ty>, b: Vec<Ty>, env: *Map<string, Ty>): bool = {
     var i: i64 = 0
     while i < len(a) {
         if !unify(a[i], b[i], env) { return false }
-        i = i + 1
+        i += 1
     }
     true
 }
@@ -1142,7 +1142,7 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, path: Vec<string>, sub_pats:
                                 let pos_ty = resolve_type_with_subst(tc, pos_te, tparams, tyargs)
                                 bind_pattern(tc, env, sub_pats[i], pos_ty)
                             }
-                            i = i + 1
+                            i += 1
                         }
                     }
                 }
@@ -1452,7 +1452,7 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
     for a in args {
         let hint = if ai < len(arg_hints) { arg_hints[ai] } else { ty.ty_error_() }
         vec.push(&new_args, infer_calls_expr(tc, env, a, hint))
-        ai = ai + 1
+        ai += 1
     }
     if len(type_args) > 0 {
         return ECall(sp, new_callee, type_args, new_args)
@@ -1481,7 +1481,7 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
             var ok = true
             while i < len(arg_tys) && i < len(param_tys) {
                 if !unify(param_tys[i], arg_tys[i], &subst_env) { ok = false }
-                i = i + 1
+                i += 1
             }
             if !is_ty_error(expected) {
                 let _ = unify(ret_pattern, expected, &subst_env)

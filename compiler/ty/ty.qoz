@@ -185,7 +185,7 @@ let ty_args_eq(a: Vec<Ty>, b: Vec<Ty>): bool = {
     var i: i64 = 0
     while i < len(a) {
         if !ty_eq(a[i], b[i]) { return false }
-        i = i + 1
+        i += 1
     }
     true
 }
@@ -220,7 +220,7 @@ let ty_show(t: Ty): string = {
         for a in args {
             if i > 0 { out = strings.cat(out, ", ") }
             out = strings.cat(out, ty_show(a))
-            i = i + 1
+            i += 1
         }
         strings.cat(out, ">")
     }
@@ -230,7 +230,7 @@ let ty_show(t: Ty): string = {
         for p in params {
             if i > 0 { out = strings.cat(out, ", ") }
             out = strings.cat(out, ty_show(p))
-            i = i + 1
+            i += 1
         }
         out = strings.cat(out, ") -> ")
         strings.cat(out, ty_show(ret))
@@ -241,7 +241,7 @@ let ty_show(t: Ty): string = {
         for e in elems {
             if i > 0 { out = strings.cat(out, ", ") }
             out = strings.cat(out, ty_show(e))
-            i = i + 1
+            i += 1
         }
         strings.cat(out, ")")
     }
@@ -316,7 +316,7 @@ let same_constructor_assignable(param: Ty, arg: Ty): bool = {
             var i: i64 = 0
             while i < len(pa) {
                 if !ty_assignable(pa[i], aa[i]) { return false }
-                i = i + 1
+                i += 1
             }
             true
         }
@@ -331,7 +331,7 @@ let same_constructor_assignable(param: Ty, arg: Ty): bool = {
             var i: i64 = 0
             while i < len(pa) {
                 if !ty_assignable(pa[i], aa[i]) { return false }
-                i = i + 1
+                i += 1
             }
             true
         }
