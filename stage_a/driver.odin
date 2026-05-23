@@ -299,6 +299,8 @@ runtime_dir_cache: string = ""
 // Each package is a directory; multiple .qoz files in the directory
 // belong to the same package (Odin model).
 @(private)
+std_cmath_qoz           := #load("../std/cmath/cmath.qoz")
+@(private)
 std_fmt_qoz             := #load("../std/fmt/fmt.qoz")
 @(private)
 std_fs_qoz              := #load("../std/fs/fs.qoz")
@@ -352,6 +354,7 @@ ensure_stdlib_dir :: proc() -> string {
     if _, err := os.stat(root, context.temp_allocator); err != nil {
         _ = os.make_directory(root)
     }
+    write_file(root, "cmath",   "cmath.qoz",   std_cmath_qoz)
     write_file(root, "fmt",     "fmt.qoz",     std_fmt_qoz)
     write_file(root, "fs",      "fs.qoz",      std_fs_qoz)
     write_file(root, "map",     "map.qoz",     std_map_qoz)

@@ -1,0 +1,65 @@
+// std/cmath: bindings to the C math library.
+//
+// Every function here is a direct extern. The host program must be
+// linked with -lm on platforms that need it (Linux). macOS folds libm
+// into libSystem; no extra flag is required.
+
+@link_name("sqrt")
+external let sqrt(x: f64): f64
+
+@link_name("pow")
+external let pow(x: f64, y: f64): f64
+
+@link_name("fabs")
+external let fabs(x: f64): f64
+
+@link_name("floor")
+external let floor(x: f64): f64
+
+@link_name("ceil")
+external let ceil(x: f64): f64
+
+@link_name("round")
+external let round(x: f64): f64
+
+@link_name("fmod")
+external let fmod(x: f64, y: f64): f64
+
+@link_name("sin")
+external let sin(x: f64): f64
+
+@link_name("cos")
+external let cos(x: f64): f64
+
+@link_name("tan")
+external let tan(x: f64): f64
+
+@link_name("asin")
+external let asin(x: f64): f64
+
+@link_name("acos")
+external let acos(x: f64): f64
+
+@link_name("atan")
+external let atan(x: f64): f64
+
+@link_name("atan2")
+external let atan2(y: f64, x: f64): f64
+
+@link_name("exp")
+external let exp(x: f64): f64
+
+@link_name("log")
+external let log(x: f64): f64
+
+@link_name("log10")
+external let log10(x: f64): f64
+
+@link_name("log2")
+external let log2(x: f64): f64
+
+@link_name("fmin")
+external let fmin(x: f64, y: f64): f64
+
+@link_name("fmax")
+external let fmax(x: f64, y: f64): f64
