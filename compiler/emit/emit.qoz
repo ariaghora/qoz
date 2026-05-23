@@ -1171,20 +1171,57 @@ let emit_expr(e: *Emitter, ex: Expr) = {
             emit_block_tail_as_value(e, tail)
             return
         }
+        // A statement-shape tail (for, while, assign, defer, return)
+        // contributes no value. Hoist the block as a void compound and
+        // leave a placeholder 0 in the expression position so the
+        // surrounding context still has a syntactic value.
+        match tail {
+        | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) | EDefer(_, _) | EReturn(_, _) -> {
+            let start_s = strings.sb_len(&e.out)
+            push(e, "{{\n        ")
+            for s in stmts { emit_stmt(e, s) }
+            let saved = open_statement_scope(e)
+            emit_stmt_expr(e, tail)
+            close_statement_scope(e, saved)
+            push(e, "\n    }}\n    ")
+            hoist_to_prologue(e, start_s)
+            push(e, "0")
+            return
+        }
+        | _ -> { }
+        }
         // Hoist the block into a fresh C compound and a result temp.
         // The compound runs at the enclosing statement's prologue and
-        // the expression position reads the result temp.
+        // the expression position reads the result temp. A unit-typed
+        // tail skips the result temp because `void` cannot be a C
+        // variable type; the placeholder 0 sits in the expression slot
+        // and the tail emits as a statement.
+        let tail_te = infer_value_te(e, tail)
+        if is_unit_typeexpr(tail_te) {
+            let start_u = strings.sb_len(&e.out)
+            push(e, "{{\n        ")
+            for s in stmts { emit_stmt(e, s) }
+            let saved_tail = open_statement_scope(e)
+            emit_stmt_expr(e, tail)
+            close_statement_scope(e, saved_tail)
+            push(e, "\n    }}\n    ")
+            hoist_to_prologue(e, start_u)
+            push(e, "0")
+            return
+        }
         e.closure_counter = e.closure_counter + 1
         let counter = e.closure_counter
         let tmp_res = strings.cat("_qoz_bv_", "{counter}")
-        let tail_te = infer_value_te(e, tail)
         let result_c = c_type_for(e, tail_te)
         let start = strings.sb_len(&e.out)
         push(e, "{result_c} {tmp_res};\n    {{\n        ")
         for s in stmts { emit_stmt(e, s) }
+        let saved_inner = open_statement_scope(e)
         push(e, "{tmp_res} = ")
         emit_expr(e, tail)
-        push(e, ";\n    }}\n    ")
+        push(e, ";\n    ")
+        close_statement_scope(e, saved_inner)
+        push(e, "}}\n    ")
         hoist_to_prologue(e, start)
         push(e, tmp_res)
     }
@@ -1543,7 +1580,10 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
         | _ -> infer_value_te(e, l)
         }
     }
-    | EBlock(_, _, tail) -> infer_value_te(e, tail)
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts { ingest_stmt_locals(e, s) }
+        infer_value_te(e, tail)
+    }
     | EIf(_, _, t, _) -> infer_value_te(e, t)
     | EMatch(sp, scrut, arms) -> {
         if len(arms) == 0 {
@@ -1594,6 +1634,19 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
         var path: Vec<string> = vec.make()
         vec.push(&path, "Vec")
         TENamed(sp, path, args)
+    }
+    // Statement-shape expressions have no value type. They occur in
+    // value position when an outer block ends with one; the inferred
+    // type is unit and the emitter renders them as statements with a
+    // dummy 0 placeholder where a value is syntactically required.
+    | EAssign(sp, _, _, _) -> TEUnit(sp)
+    | EWhile(sp, _, _)     -> TEUnit(sp)
+    | EFor(sp, _, _, _, _) -> TEUnit(sp)
+    | EReturn(sp, _)       -> TEUnit(sp)
+    | EDefer(sp, _)        -> TEUnit(sp)
+    | EPath(sp, _) -> {
+        let _ = emit_die(sp, "EPath in value position is not supported (expected pkg.fn or a record name)")
+        TEUnit(sp)
     }
     | _ -> {
         let _ = emit_die(span_of_expr(v), "let-binding value shape not handled by inference")
@@ -1912,11 +1965,17 @@ let emit_branch_as_statement(e: *Emitter, br: Expr) = {
             emit_stmt(e, s)
         }
         if !is_nil_expr(tail) {
+            let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
+            close_statement_scope(e, saved)
         }
         push(e, "} ")
     }
-    | _ -> emit_stmt_expr(e, br)
+    | _ -> {
+        let saved = open_statement_scope(e)
+        emit_stmt_expr(e, br)
+        close_statement_scope(e, saved)
+    }
     }
 }
 
@@ -2637,10 +2696,36 @@ let emit_binary(e: *Emitter, op: BinaryOp, lhs: Expr, rhs: Expr) = {
         }
     }
     let p = binary_prec(op)
-    emit_with_prec(e, lhs, p)
+    let needs_paren_child = is_logical_op(op)
+    emit_binary_child(e, lhs, p, needs_paren_child)
     let bop = binary_c_op(op)
     push(e, " {bop} ")
-    emit_with_prec(e, rhs, p + 1)
+    emit_binary_child(e, rhs, p + 1, needs_paren_child)
+}
+
+// Clang's -Wlogical-op-parentheses rejects `a && b || c && d` even though
+// C precedence makes the grouping unambiguous. Wrap every direct binary
+// child of `&&` or `||` in explicit parentheses so the emitted output
+// passes -pedantic -Werror unchanged.
+let is_logical_op(op: BinaryOp): bool = match op {
+| BOpAnd -> true
+| BOpOr  -> true
+| _      -> false
+}
+
+let emit_binary_child(e: *Emitter, ex: Expr, min_prec: i64, force_paren_if_binary: bool) = {
+    match ex {
+    | EBinary(_, _, _, _) -> {
+        if force_paren_if_binary {
+            push(e, "(")
+            emit_expr(e, ex)
+            push(e, ")")
+        } else {
+            emit_with_prec(e, ex, min_prec)
+        }
+    }
+    | _ -> emit_with_prec(e, ex, min_prec)
+    }
 }
 
 // C operator precedence (higher binds tighter).
@@ -2752,7 +2837,9 @@ let emit_fn_body_block(e: *Emitter, body: Expr, ret_hint: TypeExpr) = {
             return
         }
         if is_unit_typeexpr(ret_hint) {
+            let saved = open_statement_scope(e)
             emit_stmt_expr(e, effective_tail)
+            close_statement_scope(e, saved)
             emit_defers_reverse(e, defers)
             push(e, "\n    return;\n")
             return
@@ -3534,12 +3621,38 @@ let range_cmp_op(op: BinaryOp): string =
     }
 
 // EWhile/EFor/EAssign in a block's tail position are statements with no
-// value; emit them as statements followed by a dummy 0 so the enclosing
-// statement-expression still has a value.
+// value. Emit them as a C comma-expression `(expr_form, 0)` so the
+// expression can appear inside a ternary or other expression context.
+// EAssign already emits as an expression form (`lhs = rhs` without `;`),
+// so it goes through directly. EFor/EWhile cannot appear as
+// expressions in C; for those, hoist the loop to the enclosing
+// statement's prologue and leave 0 in place.
 let emit_block_tail_as_value(e: *Emitter, tail: Expr) = {
     match tail {
-    | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
-        emit_stmt_expr(e, tail); push(e, " 0")
+    | EAssign(_, _, lhs, rhs) -> {
+        push(e, "(")
+        emit_assign(e, lhs, rhs)
+        push(e, ", 0)")
+    }
+    | EWhile(_, _, _) | EFor(_, _, _, _, _) | EDefer(_, _) -> {
+        let start = strings.sb_len(&e.out)
+        emit_stmt_expr(e, tail)
+        hoist_to_prologue(e, start)
+        push(e, "0")
+    }
+    | EIf(_, _, _, f) -> {
+        // An `if` whose else branch is missing, or whose branches both
+        // yield unit, has no value. Emit it as a C statement (hoisted to
+        // the surrounding prologue) and leave 0 in the expression slot.
+        let unit_if = is_nil_expr(f) || is_unit_typeexpr(infer_value_te(e, tail))
+        if unit_if {
+            let start = strings.sb_len(&e.out)
+            emit_stmt_expr(e, tail)
+            hoist_to_prologue(e, start)
+            push(e, "0")
+        } else {
+            emit_expr(e, tail)
+        }
     }
     | _ -> emit_expr(e, tail)
     }
@@ -3579,13 +3692,17 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
         for s in stmts { emit_stmt(e, s) }
         match tail {
         | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) -> {
+            let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
+            close_statement_scope(e, saved)
             push(e, "\n        {tmp_res} = 0;\n    ")
         }
         | _ -> {
+            let saved = open_statement_scope(e)
             push(e, "{tmp_res} = ")
             emit_value_with_hint(e, tail, hint)
             push(e, ";\n    ")
+            close_statement_scope(e, saved)
         }
         }
         push(e, "}}\n    ")
@@ -3919,11 +4036,15 @@ let emit_branch_body_inline(e: *Emitter, body: Expr) = {
             emit_stmt(e, s)
         }
         if !is_nil_expr(tail) {
+            let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
+            close_statement_scope(e, saved)
         }
     }
     | _ -> {
+        let saved = open_statement_scope(e)
         emit_stmt_expr(e, body)
+        close_statement_scope(e, saved)
     }
     }
 }
@@ -4114,11 +4235,19 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
 // Dispatch arm body emission on whether the enclosing match yields a
 // value (assigns into res_tmp) or is statement-position only.
 let emit_arm_body_kind(e: *Emitter, is_void: bool, res_tmp: string, body: Expr, body_hint: TypeExpr) = {
+    // Open a fresh statement scope around the arm body so that any
+    // prologue it emits (a nested hoist for a block-as-value, a match
+    // expression nested inside the arm, a closure-env construction)
+    // lands inside the C `case` block rather than ahead of the enclosing
+    // `switch`. The pattern-bound variables live in the case block; the
+    // prologue must see them.
+    let saved = open_statement_scope(e)
     if is_void {
         emit_stmt_expr(e, body)
     } else {
         emit_arm_body_with_hint(e, res_tmp, body, body_hint)
     }
+    close_statement_scope(e, saved)
 }
 
 let emit_match_arm_with_kind(e: *Emitter, enum_name: string, scrut_tmp: string, res_tmp: string, arm: MatchArm, is_void: bool) = {
@@ -4445,6 +4574,13 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
     | MainRetUnit -> {
         // For unit-returning main, control-flow tails (for/while/if-as-stmt)
         // must be emitted as statements so the loop body actually appears.
+        // An `if` whose else branch is nil is statement-shaped here too:
+        // ternary-emitting it would require a value type for the missing
+        // arm.
+        let is_unit_if = match tail {
+        | EIf(_, _, _, f) -> is_nil_expr(f)
+        | _               -> false
+        }
         match tail {
         | EFor(_, _, _, _, _) | EWhile(_, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
             let saved = open_statement_scope(e)
@@ -4454,6 +4590,13 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
             return
         }
         | _ -> { }
+        }
+        if is_unit_if {
+            let saved = open_statement_scope(e)
+            emit_stmt_expr(e, tail)
+            push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
+            close_statement_scope(e, saved)
+            return
         }
         let saved = open_statement_scope(e)
         emit_expr(e, tail)

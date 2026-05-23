@@ -12,3 +12,5 @@ CLAUDE.md
 
 /main
 tests/**/*.qoz.c
+compiler/main.qoz.c
+stage2
