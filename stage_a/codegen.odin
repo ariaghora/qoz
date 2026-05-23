@@ -620,6 +620,7 @@ cg_emit_one_generic_signature :: proc(cg: ^Codegen, fn: ^Decl_Fn, mangled: strin
         if i > 0 do cg_emit(cg, ", ")
         cg_emitf(cg, "%s %s", c_type_of_type_expr(cg, p.type), p.name)
     }
+    if len(fn.params) == 0 do cg_emit(cg, "void")
     cg_emit(cg, ")")
 }
 
@@ -1030,17 +1031,21 @@ cg_emit_variant_ctors_for_base :: proc(cg: ^Codegen, e: ^Decl_Enum, base: string
 
     for v in e.variants {
         cg_emitf(cg, "static qoz_%s *qoz_make_%s_%s(", base, base, v.name)
+        param_count := 0
         if v.kind == .Positional {
             for t, i in v.pos {
                 if i > 0 do cg_emit(cg, ", ")
                 cg_emitf(cg, "%s f%d", c_type_of_type_expr(cg, t), i)
+                param_count += 1
             }
         } else if v.kind == .Named {
             for fld, i in v.named {
                 if i > 0 do cg_emit(cg, ", ")
                 cg_emitf(cg, "%s %s", c_type_of_type_expr(cg, fld.type), fld.name)
+                param_count += 1
             }
         }
+        if param_count == 0 do cg_emit(cg, "void")
         cg_emit(cg, ") {\n")
         cg_emitf(cg, "    qoz_%s *p = qoz_alloc(sizeof(qoz_%s));\n", base, base)
         cg_emitf(cg, "    p->tag = qoz_%s_%s;\n", base, v.name)
@@ -1106,6 +1111,7 @@ cg_emit_fn_prototype :: proc(cg: ^Codegen, d: ^Decl_Fn) {
         if i > 0 do cg_emit(cg, ", ")
         cg_emitf(cg, "%s %s", c_type_of_type_expr(cg, p.type), p.name)
     }
+    if len(d.params) == 0 do cg_emit(cg, "void")
     cg_emit(cg, ")")
 }
 
@@ -1593,6 +1599,7 @@ cg_tail_expr :: proc(cg: ^Codegen, e: Expr) {
             cg_emit(cg, ";\n")
             return
         }
+        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
         cg_emit_indent(cg)
         cg_emit(cg, "return ")
         cg_expr(cg, e)
@@ -1873,6 +1880,7 @@ cg_expr :: proc(cg: ^Codegen, e: Expr) {
         cg_expr(cg, v.index)
         cg_emit(cg, "]")
     case ^Expr_Return:
+        cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard); ")
         if v.value != nil {
             cg_emit(cg, "return ")
             cg_expr(cg, v.value)
@@ -2808,11 +2816,10 @@ cg_match_arm_statement :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm
     cg_emit(cg, "{\n")
     cg.indent_lvl += 1
 
-    // Per-arm shadow-stack guard so pointer-typed pattern bindings are
-    // popped when this case block exits via break, freeing their stack
-    // addresses before the next iteration of the enclosing switch.
-    cg_emit_indent(cg); cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_arm_g = qoz_gc_shadow_top();\n")
-    cg_emit_indent(cg); cg_emit(cg, "(void)_qoz_arm_g;\n")
+    // Snapshot at case-block entry; restore at the case's break so
+    // pointer-typed pattern bindings stop being roots once the arm
+    // is done.
+    cg_emit_indent(cg); cg_emit(cg, "int64_t _qoz_arm_g = qoz_gc_shadow_top();\n")
 
     variant_decl: ^Variant_Decl
     if enum_decl, ok2 := cg.enums[enum_name]; ok2 {
@@ -2826,6 +2833,8 @@ cg_match_arm_statement :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm
     for k, val in cg.locals do saved_locals[k] = val
 
     cg_emit_arm_body_statement(cg, arm)
+    cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_arm_g);\n")
+    cg_emit_indent(cg); cg_emit(cg, "break;\n")
 
     clear(&cg.locals)
     for k, val in saved_locals do cg.locals[k] = val
@@ -2843,7 +2852,6 @@ cg_emit_arm_body_statement :: proc(cg: ^Codegen, arm: Match_Arm) {
         cg_expr(cg, arm.body)
         cg_emit(cg, ";\n")
     }
-    cg_emit_indent(cg); cg_emit(cg, "break;\n")
 }
 
 cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
@@ -2927,11 +2935,9 @@ cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, ar
     }
     cg_emitf(cg, "case %s_%s: ", prefix, variant_name)
     cg_emit(cg, "{ ")
-    // Per-arm shadow-stack guard. Pattern bindings emitted below push
-    // their pointer-typed locals; the case block ends at `break` so the
-    // cleanup attribute restores the shadow top before those addresses
-    // are reused for the next arm or the enclosing scope.
-    cg_emit(cg, "__attribute__((cleanup(qoz_gc_restore_shadow))) int64_t _qoz_arm_g = qoz_gc_shadow_top(); (void)_qoz_arm_g; ")
+    // Snapshot the shadow-stack top at case entry; restore at the end
+    // of the arm so pattern-binding pushes do not leak across arms.
+    cg_emit(cg, "int64_t _qoz_arm_g = qoz_gc_shadow_top(); ")
 
     variant_decl: ^Variant_Decl
     if enum_decl, ok2 := cg.enums[enum_name]; ok2 {
@@ -2949,7 +2955,7 @@ cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, ar
     } else {
         cg_expr(cg, arm.body)
     }
-    cg_emit(cg, "; break; } ")
+    cg_emit(cg, "; qoz_gc_shadow_set_top(_qoz_arm_g); break; } ")
 
     clear(&cg.locals)
     for k, val in saved_locals do cg.locals[k] = val
@@ -3021,6 +3027,7 @@ cg_match_arm_return :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: M
         cg_emit(cg, "default: ")
         cg_emit(cg, "{\n")
         cg.indent_lvl += 1
+        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
         cg_emit_indent(cg)
         cg_emit(cg, "return ")
         if blk, is_blk := arm.body.(^Expr_Block); is_blk {
@@ -3066,12 +3073,14 @@ cg_match_arm_return :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: M
         cg_expr(cg, arm.guard)
         cg_emit(cg, ") {\n")
         cg.indent_lvl += 1
+        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
         cg_emit_indent(cg); cg_emit(cg, "return ")
         cg_expr(cg, arm.body)
         cg_emit(cg, ";\n")
         cg.indent_lvl -= 1
         cg_emit_indent(cg); cg_emit(cg, "} else { break; }\n")
     } else {
+        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
         cg_emit_indent(cg); cg_emit(cg, "return ")
         cg_expr(cg, arm.body)
         cg_emit(cg, ";\n")
