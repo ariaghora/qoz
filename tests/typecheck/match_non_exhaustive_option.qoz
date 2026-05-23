@@ -1,0 +1,11 @@
+// Stage B must reject a match on Option that omits None.
+import std/fmt
+
+let main(): i64 = {
+    let o = Some(5)
+    let x = match o {
+    | Some(v) -> v
+    }
+    fmt.println("got {x}")
+    0
+}

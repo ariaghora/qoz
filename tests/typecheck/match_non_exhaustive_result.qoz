@@ -1,0 +1,8 @@
+// Stage B must reject a match on Result that omits Err.
+let main(): i64 = {
+    let r: Result<i64, i64> = Ok(5)
+    let x = match r {
+    | Ok(v) -> v
+    }
+    x
+}
