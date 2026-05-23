@@ -1156,7 +1156,17 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, lhs, rhs)
     | EUnary(_, op, rhs) -> {
         push(e, unary_c_op(op))
-        emit_expr(e, rhs)
+        // Wrap a binary operand in parens so the C unary operator does
+        // not steal precedence: `!(a == b)` must not lower to `!a == b`,
+        // which clang would reinterpret as `(!a) == b`.
+        match rhs {
+        | EBinary(_, _, _, _) -> {
+            push(e, "(")
+            emit_expr(e, rhs)
+            push(e, ")")
+        }
+        | _ -> emit_expr(e, rhs)
+        }
     }
     | EReturn(_, value) -> {
         if is_nil_expr(value) {
@@ -4578,7 +4588,7 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: Expr) = {
         // ternary-emitting it would require a value type for the missing
         // arm.
         let is_unit_if = match tail {
-        | EIf(_, _, _, f) -> is_nil_expr(f)
+        | EIf(_, _, _, f) -> is_nil_expr(f) || is_unit_typeexpr(infer_value_te(e, tail))
         | _               -> false
         }
         match tail {

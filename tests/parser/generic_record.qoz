@@ -1,3 +1,4 @@
+import std/strings
 import std/fmt
 
 type Pair<A, B> = { fst: A, snd: B }

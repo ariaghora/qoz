@@ -284,17 +284,12 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     }
 }
 
-let main() = {
-    let args = os.args()
-    if len(args) < 2 {
-        fmt.println("usage: compiler <path>")
-        os.exit(1)
-    }
-    let path = args[1]
-    let qoz_root = os.getenv("QOZ_ROOT")
+// Compile `path` to a .qoz.c file next to the source. Returns the
+// emitted .c path. Aborts the process on type-check failure or write
+// failure.
+let cmd_build(path: string, qoz_root: string): string = {
     let loaded = load_all(path, qoz_root)
     let file = loaded.file
-    fmt.println("{len(file.decls)} decls (after import resolution)")
     var tc = check.make_ctx()
     check.register_file(&tc, file)
     check.validate_signatures(&tc, file)
@@ -308,7 +303,111 @@ let main() = {
     let _keep_alive = loaded.sources
     let out_path = strings.cat(path, ".c")
     let ok = fs.write_file(out_path, c_source)
-    if ok {
-        fmt.println("wrote {out_path}")
+    if !ok {
+        fmt.println("could not write {out_path}")
+        os.exit(1)
     }
+    out_path
+}
+
+// The set of clang flags Stage A used for both `build` and `run` and
+// the test runner used for stage_b/* tests. Kept in one place so the
+// compiler binary, the build script, and the bootstrap path agree.
+let clang_argv(c_path: string, bin_path: string): Vec<string> = {
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "clang")
+    vec.push(&argv, "-std=c11")
+    vec.push(&argv, "-pedantic")
+    vec.push(&argv, "-O3")
+    vec.push(&argv, "-Wall")
+    vec.push(&argv, "-Werror")
+    vec.push(&argv, "-Wno-unused-function")
+    vec.push(&argv, "-Wno-unused-variable")
+    vec.push(&argv, "-Wno-unused-but-set-variable")
+    vec.push(&argv, "-Wno-unused-const-variable")
+    vec.push(&argv, "-Wno-parentheses-equality")
+    vec.push(&argv, "-Wno-unused-value")
+    vec.push(&argv, "-Wno-overlength-strings")
+    vec.push(&argv, c_path)
+    vec.push(&argv, "-o")
+    vec.push(&argv, bin_path)
+    argv
+}
+
+// Compile, link, and execute. The child's stdout and stderr stream to
+// the parent's terminals via the buffered process_exec call (so the
+// captured streams print on completion). The Qoz compiler exits with
+// the child's exit code, matching `qoz_a run`'s behaviour.
+let cmd_run(path: string, qoz_root: string) = {
+    let c_path = cmd_build(path, qoz_root)
+    let bin_path = strings.cat(path, ".bin")
+    let cargv = clang_argv(c_path, bin_path)
+    let clang_result = os.process_exec(cargv)
+    if clang_result.exit_code != 0 {
+        fmt.print(clang_result.stdout)
+        fmt.print(clang_result.stderr)
+        os.exit(1)
+    }
+
+    var run_argv: Vec<string> = vec.make()
+    vec.push(&run_argv, bin_path)
+    let result = os.process_exec(run_argv)
+    fmt.print(result.stdout)
+    fmt.print(result.stderr)
+    os.exit(result.exit_code)
+}
+
+// Run the requested subcommand and exit with the appropriate status.
+// All paths terminate by calling os.exit; main() exists only to dispatch.
+let main() = {
+    let args = os.args()
+    if len(args) < 2 {
+        fmt.println("usage: qoz <subcommand> <path>")
+        fmt.println("       qoz build <path>   compile to <path>.c and clang to <path>.bin")
+        fmt.println("       qoz run   <path>   build, then execute and propagate exit code")
+        fmt.println("       qoz emit  <path>   write <path>.c only (no clang)")
+        os.exit(1)
+    }
+    let qoz_root = os.getenv("QOZ_ROOT")
+    let first = args[1]
+
+    if strings.eq_raw(first, "emit") {
+        if len(args) < 3 {
+            fmt.println("usage: qoz emit <path>")
+            os.exit(1)
+        }
+        let out = cmd_build(args[2], qoz_root)
+        fmt.println("wrote {out}")
+        os.exit(0)
+    } else { if strings.eq_raw(first, "build") {
+        if len(args) < 3 {
+            fmt.println("usage: qoz build <path>")
+            os.exit(1)
+        }
+        let path = args[2]
+        let c_path = cmd_build(path, qoz_root)
+        let bin_path = strings.cat(path, ".bin")
+        let cargv = clang_argv(c_path, bin_path)
+        let r = os.process_exec(cargv)
+        if r.exit_code != 0 {
+            fmt.print(r.stdout)
+            fmt.print(r.stderr)
+            os.exit(1)
+        }
+        os.exit(0)
+    } else { if strings.eq_raw(first, "run") {
+        if len(args) < 3 {
+            fmt.println("usage: qoz run <path>")
+            os.exit(1)
+        }
+        cmd_run(args[2], qoz_root)
+    } else {
+        // No subcommand. Treat the first argument as a path and emit
+        // C only. This is the historical default that
+        // bootstrap/stage1.c was built against; preserved so existing
+        // build scripts keep working.
+        let out = cmd_build(first, qoz_root)
+        fmt.println("wrote {out}")
+        os.exit(0)
+    } } }
 }

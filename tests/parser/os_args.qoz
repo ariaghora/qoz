@@ -1,3 +1,4 @@
+import std/strings
 import std/fmt
 import std/os
 

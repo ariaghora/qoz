@@ -1,3 +1,4 @@
+import std/strings
 import std/fmt
 
 let div(a: i64, b: i64): Result<i64, i64> = {

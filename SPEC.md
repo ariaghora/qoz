@@ -17,7 +17,7 @@ Qoz is a statically typed, garbage-collected systems language that compiles to C
 - Identifiers: `[A-Za-z_][A-Za-z0-9_]*`. Type names conventionally start uppercase.
 - Integer literals: decimal `42`, hex `0xff`, binary `0b1010`, octal `0o755`. Untyped by default, coerce to context. Underscores `_` may appear between digits and are ignored: `1_000_000`, `0xff_ff`.
 - Float literals: `1.0`, `3.14`, `1e9`, `2.5e-3`. Underscores are ignored as in integer literals.
-- String literals: `"hello\n"`. UTF-8 bytes. Interpolation: `"hello {name}"` evaluates the identifier (or dotted path like `e.out`) between `{` and `}` and inserts its string form. Only identifier paths are allowed inside the braces; bind a more complex expression to a `let` first. Literal `{` and `}` are written `{{` and `}}`. Interpolation desugars at parse time to `fmt.format("hello {}", name)`; the result has type `string`.
+- String literals: `"hello\n"`. UTF-8 bytes. Interpolation: `"hello {name}"` evaluates any complete Qoz expression between `{` and `}` and appends its string form. Identifiers, dotted paths (`e.out`), function calls (`len(file.decls)`), arithmetic, and index expressions are all accepted; the parser re-tokenises the body and parses it as one expression. Literal `{` and `}` are written `{{` and `}}`. Interpolation desugars at parse time to a `std/strings::Strbuf` block that appends each literal chunk and each interpolated value; the result has type `string`. Code that uses interpolation must `import std/strings` so the Strbuf record and its append helpers resolve.
 - Character literals: `'a'`, `'\n'`. A single byte.
 - Boolean literals: `true`, `false`.
 - Comments: `// line` and `/* block */`. Block comments nest.
@@ -340,7 +340,7 @@ let read_two_files(): Result<string, FsError> = {
 
 ## Packages
 
-A package is a directory under the source tree. The directory name is the package name. The package's source lives in a file named after the directory (`std/vec/vec.qoz`, `std/map/map.qoz`, and so on).
+A package is a directory under the source tree. The directory name is the package name. A package may hold one or more `.qoz` files in its directory; every file in the directory is part of the same package and shares the same namespace, matching Odin's model. `std/strings/`, for example, contains both `strings.qoz` and `strbuf.qoz`, and the declarations in both files are referenced as `strings.X` from outside.
 
 ```
 import std/fmt
@@ -350,7 +350,7 @@ import std/map
 let main() = {
     var v: Vec<i32> = vec.make()
     vec.push(&v, 1)
-    fmt.println("len:", vec.len(&v))
+    fmt.println("len: {vec.len(&v)}")
 }
 ```
 
@@ -585,17 +585,18 @@ The standard library lives at `std/` and is written in Qoz on top of thin C bind
 | Package | Provides |
 |---------|----------|
 | `std/mem` | `mem.alloc`, `mem.calloc`, `mem.realloc` bound to the tgc-backed runtime |
-| `std/strings` | `strings.eq_raw`, `strings.hash_raw`, plus `@operator("==")` and `@operator("hash")` registrations for `string` |
-| `std/fmt` | `println` (reserved builtin, no import needed); `format` and `Builder` planned |
+| `std/strings` | `strings.eq_raw`, `strings.hash_raw`, `strings.cat`, `strings.slice`, `strings.has_prefix`, `strings.has_suffix`, `strings.byte_at`, `strings.parse_int`, `strings.split`, `strings.replace_all`, plus `@operator("==")`, `@operator("<")`, and `@operator("hash")` for `string`. `strings.Strbuf` is a growable byte buffer with `sb_init`, `sb_append`, `sb_append_i64`, `sb_append_bool`, `sb_append_f64`, `sb_len`, `sb_truncate`, `sb_slice_copy`, `sb_finish`. The Strbuf is what string interpolation desugars to. |
+| `std/fmt` | `fmt.println(s: string)` writes `s` followed by a newline. `fmt.print(s: string)` writes `s` without a newline. Both require `import std/fmt`. Multi-value formatting is done through string interpolation at the call site (`fmt.println("count={n}")`). |
 | `std/vec` | `Vec<T>`, `vec.make`, `vec.push`, `vec.grow`, `vec.get`, `vec.len`, plus `@operator("[]")` and `@operator("len")` for `Vec<T>` |
 | `std/map` | `Map<K, V>`, `map.make`, `map.insert`, `map.get`, `map.contains`, `map.len`, plus `@operator("[]=")` and `@operator("len")` for `Map<K, V>` |
-| `std/libc` | planned: thin C bindings (open, read, write, fork, execvp, memcpy, getenv) |
-| `std/os` | planned: `args()`, `exit()`, `getenv()`, `process_exec()` |
-| `std/fs` | planned: `read_file`, `write_file`, `remove`, `read_dir` |
-| `std/path` | planned: `abs`, `dir`, `base`, `join`, `clean` |
-| `std/cmath` | planned: bindings to libm |
+| `std/os` | `os.args(): Vec<string>`, `os.exit(code: i64)`, `os.getenv(name: string): string`, `os.panic(msg: string)`, `os.process_exec(argv: Vec<string>): ProcessResult` (fork + exec + capture stdout/stderr + waitpid). |
+| `std/fs` | `fs.read_file`, `fs.write_file`, `fs.file_exists`, `fs.list_qoz_files`. |
+| `std/path` | `path.dir`, `path.base`, `path.ext`, `path.join2`, `path.join`, `path.clean`. POSIX path manipulation, pure-Qoz on top of `std/strings`. |
+| `std/cmath` | Direct `@link_name` bindings to libm: `sqrt`, `pow`, `fabs`, `floor`, `ceil`, `round`, `fmod`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`, `log10`, `log2`, `fmin`, `fmax`. |
+| `std/option` | `Option<T>` constructors `Some`, `None`. Prelude package (no explicit import needed). |
+| `std/result` | `Result<T, E>` constructors `Ok`, `Err`. Prelude package. |
 
-`Option<T>` and `Result<T, E>` are built-in types in the prelude. Their constructors `Some`, `None`, `Ok`, `Err` are in scope without import. `Vec<T>` lives in `std/vec`, `Map<K, V>` lives in `std/map`. Both require an explicit `import`. Types are imported into the bare namespace; functions are imported under the package prefix.
+`Option<T>` and `Result<T, E>` are in the prelude. Their constructors `Some`, `None`, `Ok`, `Err` are in scope without import. `Vec<T>` lives in `std/vec`, `Map<K, V>` lives in `std/map`. Both require an explicit `import`. Types are imported into the bare namespace; functions are imported under the package prefix. Direct libc bindings are not exposed at the Qoz level; the compiler's runtime shim (`stage_a/runtime/qoz_runtime.{h,c}`) calls libc and the stdlib packages bind to that shim through `@link_name`.
 
 ---
 
@@ -613,13 +614,18 @@ The runtime is statically linked. Every Qoz binary contains tgc.
 
 ### CLI
 
+The active compiler binary is `./main` (Stage B, built either by Stage A or from `bootstrap/stage1.c`). The subcommands are:
+
 ```
-qoz build <package>             // compile to executable
-qoz run <package>               // compile, run, remove executable
-qoz build <package> --emit-c    // stop after C emission
-qoz build <package> -O0..<4     // optimization level (default -O3)
-qoz build <package> -o name     // output name
+qoz <path>                      // default: emit <path>.c only
+qoz emit  <path>                // emit <path>.c (same as the default)
+qoz build <path>                // emit <path>.c, then clang to <path>.bin
+qoz run   <path>                // emit, clang, execute, propagate exit code
 ```
+
+`<path>` is the entry-point `.qoz` file. The emitted `.c` is self-contained: the runtime is inlined as `#load_string` literals, so no `-I` flag or extra object files are required when invoking clang directly.
+
+The `bootstrap/` directory holds a pre-built `stage1.c`. Anyone without the Stage A Odin compiler can build the compiler with `clang bootstrap/stage1.c -o main` and use that binary to compile the Qoz source tree from scratch.
 
 ---
 
@@ -656,7 +662,7 @@ let main() = {
         Expr.Num(3),
         Expr.Mul(Expr.Num(4), Expr.Num(5)),
     )
-    fmt.println("result:", eval(e))                 // 23
+    fmt.println("result: {eval(e)}")                 // 23
 }
 ```
 
@@ -672,7 +678,7 @@ let main() = {
     for x in v {
         sum = sum + x
     }
-    fmt.println("sum:", sum)                        // 60
+    fmt.println("sum: {sum}")                        // 60
 }
 ```
 

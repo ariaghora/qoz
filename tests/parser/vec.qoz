@@ -1,43 +1,47 @@
+import std/strings
 import std/fmt
 
 external let qoz_alloc(size: i64): *void
 external let qoz_realloc(ptr: *void, size: i64): *void
 
-type Vec<T> = {
+// Renamed to UserVec so the test's local generic does not clash with
+// std/vec::Vec, which std/strings pulls in transitively.
+type UserVec<T> = {
     data: *T,
     len:  i64,
     cap:  i64,
 }
 
-let vec_new<T>(): Vec<T> = Vec { data: nil, len: 0, cap: 0 }
+let uv_new<T>(): UserVec<T> = UserVec { data: nil, len: 0, cap: 0 }
 
-let vec_grow<T>(v: *Vec<T>) = {
+let uv_grow<T>(v: *UserVec<T>) = {
     let new_cap = if v.cap == 0 { 8 } else { v.cap * 2 }
     let new_data = qoz_realloc(v.data as *void, new_cap * size_of(T)) as *T
     v.data = new_data
     v.cap = new_cap
 }
 
-let vec_push<T>(v: *Vec<T>, x: T) = {
+let uv_push<T>(v: *UserVec<T>, x: T) = {
     if v.len == v.cap {
-        vec_grow(v)
+        uv_grow(v)
     }
     v.data[v.len] = x
     v.len = v.len + 1
 }
 
-let vec_get<T>(v: *Vec<T>, i: i64): T = v.data[i]
+let uv_get<T>(v: *UserVec<T>, i: i64): T = v.data[i]
 
 let main() = {
-    var v: Vec<i32> = vec_new()
-    vec_push(&v, 10)
-    vec_push(&v, 20)
-    vec_push(&v, 30)
-    vec_push(&v, 40)
+    var v: UserVec<i32> = uv_new()
+    uv_push(&v, 10)
+    uv_push(&v, 20)
+    uv_push(&v, 30)
+    uv_push(&v, 40)
 
     var i: i64 = 0
     while i < v.len {
-        fmt.println("v[ {i} ] = {vec_get(&v, i)}")
+        let x = uv_get(&v, i)
+        fmt.println("v[ {i} ] = {x}")
         i = i + 1
     }
     fmt.println("len = {v.len} cap = {v.cap}")
