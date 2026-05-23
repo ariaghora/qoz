@@ -144,6 +144,41 @@ let register_fn_instantiation(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr
     for ta in type_args { walk_typeexpr(e, ta) }
 }
 
+// Extract the variant name when `callee` references a variant of a
+// known enum, in any of the three accepted call shapes. Returns ""
+// when the callee is not a variant constructor.
+let variant_callee_name(e: *Emitter, callee: Expr): string = {
+    match callee {
+    | EIdent(_, name) -> {
+        match map.get(&e.variant_of, name) {
+        | Some(_) -> name
+        | None    -> ""
+        }
+    }
+    | EField(_, base, method) -> {
+        match base {
+        | EIdent(_, enum_name) -> {
+            if !map.contains(&e.enum_decls, enum_name) { return "" }
+            match map.get(&e.variant_of, method) {
+            | Some(_) -> method
+            | None    -> ""
+            }
+        }
+        | _ -> ""
+        }
+    }
+    | EPath(_, segs) -> {
+        if len(segs) != 2 { return "" }
+        if !map.contains(&e.enum_decls, segs[0]) { return "" }
+        match map.get(&e.variant_of, segs[1]) {
+        | Some(_) -> segs[1]
+        | None    -> ""
+        }
+    }
+    | _ -> ""
+    }
+}
+
 let generic_callee_name(e: *Emitter, callee: Expr): string = {
     match callee {
     | EIdent(_, name) -> name
@@ -153,10 +188,36 @@ let generic_callee_name(e: *Emitter, callee: Expr): string = {
             if map.contains(&e.packages, pkg) {
                 return strings.cat(strings.cat(pkg, "_"), method)
             }
+            // `Enum.Variant(...)`: when the base is a known enum and
+            // the method is one of its variants, the callee is the
+            // variant constructor. Return the bare variant name so
+            // the variant_of dispatch downstream picks it up.
+            if map.contains(&e.enum_decls, pkg) {
+                match map.get(&e.variant_of, method) {
+                | Some(_) -> return method
+                | None    -> { }
+                }
+            }
             ""
         }
         | _ -> ""
         }
+    }
+    | EPath(_, segs) -> {
+        if len(segs) == 2 {
+            let pkg    = segs[0]
+            let method = segs[1]
+            if map.contains(&e.packages, pkg) {
+                return strings.cat(strings.cat(pkg, "_"), method)
+            }
+            if map.contains(&e.enum_decls, pkg) {
+                match map.get(&e.variant_of, method) {
+                | Some(_) -> return method
+                | None    -> { }
+                }
+            }
+        }
+        ""
     }
     | _ -> ""
     }
@@ -2500,12 +2561,15 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
     }
     | _ -> { }
     }
-    // Variant constructor call: replace ident with qoz_make_<Enum>_<Variant>
-    match callee {
-    | EIdent(_, name) -> {
-        match map.get(&e.variant_of, name) {
+    // Variant constructor call. Three callee shapes can reach this
+    // point: bare `Variant(...)`, qualified `Enum.Variant(...)` parsed
+    // as EField, and qualified `Enum.Variant(...)` parsed as EPath.
+    // All three lower to `qoz_make_<Enum>_<Variant>(...)`.
+    let variant_name = variant_callee_name(e, callee)
+    if !strings.eq_raw(variant_name, "") {
+        match map.get(&e.variant_of, variant_name) {
         | Some(enum_name) -> {
-            push(e, "qoz_make_{enum_name}_{name}(")
+            push(e, "qoz_make_{enum_name}_{variant_name}(")
             var i: i64 = 0
             for a in args {
                 if i > 0 { push(e, ", ") }
@@ -2517,8 +2581,6 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         }
         | None -> { }
         }
-    }
-    | _ -> { }
     }
     // Generic function call: rewrite the callee to the mangled instantiation name.
     if len(type_args) > 0 {
