@@ -2249,6 +2249,25 @@ let is_int_ctype(ctype: string): bool = {
 
 // C requires `->` rather than `.` for field access on a pointer base.
 let emit_field(e: *Emitter, base: Expr, name: string) = {
+    // `Enum.Variant` in value position: the base is a known enum and
+    // the field is a variant of it. Emit the unit-payload variant
+    // constructor `qoz_make_<Enum>_<Variant>()`. Variants that carry
+    // payloads reach this path only through emit_call's variant
+    // dispatch, which handles the argument list.
+    match base {
+    | EIdent(_, enum_name) -> {
+        if map.contains(&e.enum_decls, enum_name) {
+            match map.get(&e.variant_of, name) {
+            | Some(_) -> {
+                push(e, "qoz_make_{enum_name}_{name}()")
+                return
+            }
+            | None -> { }
+            }
+        }
+    }
+    | _ -> { }
+    }
     let op = field_access_op(e, base)
     emit_expr(e, base)
     push(e, "{op}{name}")
@@ -3862,6 +3881,13 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
     | ECall(_, callee, ta, args) -> emit_call_with_hint(e, callee, ta, args, hint)
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
     | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, hint)
+    | EField(_, base, name) -> {
+        // `Enum.Variant` in value position with a known type hint
+        // (e.g. `let a: Option<i32> = Option.None`) emits the mangled
+        // constructor so the result type matches the binding's type.
+        let did_emit = emit_qualified_variant_with_hint(e, base, name, hint)
+        if !did_emit { emit_field(e, base, name) }
+    }
     | EBlock(sp, stmts, tail) -> {
         // A block with no statements is just its tail expression. Emit
         // it directly, without wrapping in a GNU statement expression.
@@ -3926,6 +3952,32 @@ let emit_match_as_expr_with_hint(e: *Emitter, sp: Span, scrut: Expr, arms: Vec<M
     e.match_hint = hint
     emit_match_as_expr(e, sp, scrut, arms)
     e.match_hint = saved_hint
+}
+
+// Returns true when `base.name` is `Enum.Variant` and the unit-payload
+// constructor was emitted with the type hint folded into the mangled
+// enum name. False otherwise; the caller falls back to the normal
+// field-access emit.
+let emit_qualified_variant_with_hint(e: *Emitter, base: Expr, name: string, hint: TypeExpr): bool = {
+    match base {
+    | EIdent(_, enum_name) -> {
+        if !map.contains(&e.enum_decls, enum_name) { return false }
+        match map.get(&e.variant_of, name) {
+        | Some(_) -> {
+            let hint_args = hint_args_for_enum(hint, enum_name)
+            if len(hint_args) > 0 {
+                let mangled = mangle_inst(e, enum_name, hint_args)
+                push(e, "qoz_make_{mangled}_{name}()")
+            } else {
+                push(e, "qoz_make_{enum_name}_{name}()")
+            }
+            true
+        }
+        | None -> false
+        }
+    }
+    | _ -> false
+    }
 }
 
 let emit_ident_with_hint(e: *Emitter, name: string, hint: TypeExpr) = {
@@ -4026,14 +4078,19 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
         emit_call(e, callee, type_args, args)
         return
     }
-    match callee {
-    | EIdent(_, name) -> {
-        match map.get(&e.variant_of, name) {
+    // Variant constructor with a known enclosing-type hint: emit the
+    // mangled `qoz_make_<Enum__T1__T2>_<Variant>` constructor so the
+    // result type matches the surrounding binding's declared type.
+    // Accepts bare `Variant(...)`, qualified EField `Enum.Variant(...)`,
+    // and qualified EPath `Enum::Variant(...)`.
+    let variant_name = variant_callee_name(e, callee)
+    if !strings.eq_raw(variant_name, "") {
+        match map.get(&e.variant_of, variant_name) {
         | Some(enum_name) -> {
             let hint_args = hint_args_for_enum(hint, enum_name)
             if len(hint_args) > 0 {
                 let mangled = mangle_inst(e, enum_name, hint_args)
-                push(e, "qoz_make_{mangled}_{name}(")
+                push(e, "qoz_make_{mangled}_{variant_name}(")
                 var i: i64 = 0
                 for a in args {
                     if i > 0 { push(e, ", ") }
@@ -4046,8 +4103,6 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
         }
         | None -> { }
         }
-    }
-    | _ -> { }
     }
     emit_call(e, callee, type_args, args)
 }

@@ -299,8 +299,24 @@ let synth_unary(tc: *TyContext, env: *Env, op: UnaryOp, rhs: Expr): Ty = {
 }
 
 let synth_field(tc: *TyContext, env: *Env, sp: Span, base: Expr, name: string): Ty = {
+    if is_qualified_variant_field(tc, base, name) {
+        return synth_variant_ctor(tc, name)
+    }
     let bt = synth(tc, env, base)
     field_type_of(tc, bt, name)
+}
+
+// True when `base.name` is `EnumName.VariantName`: base is a known
+// enum and the field name is one of its variants. Lets the bare
+// variant constructor path handle the synth, identical in shape to
+// what `Variant` alone produces.
+let is_qualified_variant_field(tc: *TyContext, base: Expr, name: string): bool = {
+    match base {
+    | EIdent(_, base_name) -> {
+        map.contains(&tc.enums, base_name) && map.contains(&tc.variant_of, name)
+    }
+    | _ -> false
+    }
 }
 
 let field_type_of(tc: *TyContext, bt: Ty, name: string): Ty = {
