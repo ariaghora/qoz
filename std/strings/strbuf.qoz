@@ -1,9 +1,10 @@
-// std/strings/strbuf.qoz: growable byte buffer for string building.
-//
-// Pure Qoz on top of mem.realloc plus three thin runtime bridges
-// (libc memcpy, qoz_string_data for opaque string-to-pointer access,
-// qoz_string_alias to construct a string from raw bytes). All growth,
-// append, finish, truncate, and slice logic lives in this file.
+// Growable byte buffer for incremental string construction. Storage
+// is a heap-allocated *u8 grown by mem.realloc as new bytes arrive.
+// Three runtime bridges connect the buffer to the rest of the
+// language: qoz_bytes_copy moves payloads in, qoz_string_data
+// exposes the opaque byte pointer behind a string, and
+// qoz_string_alias wraps a raw byte run as a GC-tracked string at
+// finish time.
 
 import std/mem
 
@@ -50,21 +51,20 @@ let sb_truncate(b: *Strbuf, new_len: i64) = {
 
 let sb_finish(b: *Strbuf): string = string_alias(b.buf as *void, b.len)
 
-// Typed appenders. The runtime variant of Strbuf accepts an opaque
-// void* so we cast at the call boundary. Used by interpolation when
-// non-string arguments appear (`"count = {n}"` where n is i64).
+// Typed appenders. The i64 and bool variants render the value in
+// Qoz and forward to sb_append. The f64 variant forwards to a libc
+// helper that uses snprintf("%g", v). Qoz does not yet have its own
+// floating-point printer.
 
-@link_name("qoz_strbuf_append_i64")
-external let sb_append_i64_raw(b: *void, v: i64)
+let sb_append_i64(b: *Strbuf, v: i64) = sb_append(b, i64_to_string(v))
 
-@link_name("qoz_strbuf_append_bool")
-external let sb_append_bool_raw(b: *void, v: bool)
+let sb_append_bool(b: *Strbuf, v: bool) = {
+    if v { sb_append(b, "true") } else { sb_append(b, "false") }
+}
 
 @link_name("qoz_strbuf_append_f64")
 external let sb_append_f64_raw(b: *void, v: f64)
 
-let sb_append_i64(b: *Strbuf, v: i64) = sb_append_i64_raw(b as *void, v)
-let sb_append_bool(b: *Strbuf, v: bool) = sb_append_bool_raw(b as *void, v)
 let sb_append_f64(b: *Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
 
 // Allocate a fresh GC-managed buffer holding bytes [from, to) of `b`

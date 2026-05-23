@@ -149,108 +149,23 @@ qoz_string qoz_fs_list_qoz_files(qoz_string dir) {
     return (qoz_string){ out, total, out };
 }
 
-bool qoz_string_has_prefix(qoz_string s, qoz_string p) {
-    if (p.len > s.len) return false;
-    return memcmp(s.data, p.data, (size_t)p.len) == 0;
-}
-
-bool qoz_string_has_suffix(qoz_string s, qoz_string suf) {
-    if (suf.len > s.len) return false;
-    return memcmp(s.data + s.len - suf.len, suf.data, (size_t)suf.len) == 0;
-}
-
-qoz_string qoz_string_cat(qoz_string a, qoz_string b) {
-    int64_t n = (a.len < 0 ? 0 : a.len) + (b.len < 0 ? 0 : b.len);
-    char *buf = (char *)qoz_alloc(n);
-    if (a.len > 0) memcpy(buf,         a.data, (size_t)a.len);
-    if (b.len > 0) memcpy(buf + a.len, b.data, (size_t)b.len);
-    return (qoz_string){ buf, n, buf };
-}
-
-int64_t qoz_string_byte_at(qoz_string s, int64_t i) {
-    if (i < 0 || i >= s.len) return -1;
-    return (int64_t)(unsigned char)s.data[i];
-}
-
-int64_t qoz_string_index_byte(qoz_string s, int64_t byte) {
-    for (int64_t i = 0; i < s.len; i++) {
-        if ((unsigned char)s.data[i] == (unsigned char)byte) return i;
-    }
-    return -1;
-}
-
-qoz_string qoz_string_slice(qoz_string s, int64_t from, int64_t to) {
-    if (from < 0) from = 0;
-    if (to > s.len) to = s.len;
-    if (from > to) from = to;
-    return (qoz_string){ s.data + from, to - from, s.root };
-}
-
-void qoz_strbuf_init(void *bv) {
-    qoz_strbuf *b = (qoz_strbuf *)bv;
-    b->buf = NULL;
-    b->len = 0;
-    b->cap = 0;
-}
-
-static void qoz_strbuf_grow(qoz_strbuf *b, int64_t needed) {
-    int64_t new_cap = b->cap == 0 ? 64 : b->cap;
-    while (new_cap < b->len + needed) new_cap *= 2;
-    b->buf = (char *)qoz_realloc(b->buf, new_cap);
-    b->cap = new_cap;
-}
-
-void qoz_strbuf_append_str(void *bv, qoz_string s) {
-    qoz_strbuf *b = (qoz_strbuf *)bv;
-    if (s.len <= 0) return;
-    if (b->len + s.len > b->cap) qoz_strbuf_grow(b, s.len);
-    memcpy(b->buf + b->len, s.data, (size_t)s.len);
-    b->len += s.len;
-}
-
-void qoz_strbuf_append_cstr(void *bv, const char *s) {
-    qoz_string ss = { s, (int64_t)strlen(s) };
-    qoz_strbuf_append_str(bv, ss);
-}
-
-void qoz_strbuf_append_i64(void *bv, int64_t v) {
-    qoz_strbuf *b = (qoz_strbuf *)bv;
-    char tmp[32];
-    int n = snprintf(tmp, sizeof(tmp), "%" PRId64, v);
-    if (n > 0) {
-        if (b->len + n > b->cap) qoz_strbuf_grow(b, n);
-        memcpy(b->buf + b->len, tmp, (size_t)n);
-        b->len += n;
-    }
-}
-
+/* Format a double into the buffer using snprintf("%g", v). The
+ * buffer layout matches std/strings::Strbuf so a Qoz-side strbuf can
+ * be passed in directly. */
 void qoz_strbuf_append_f64(void *bv, double v) {
     qoz_strbuf *b = (qoz_strbuf *)bv;
     char tmp[64];
     int n = snprintf(tmp, sizeof(tmp), "%g", v);
     if (n > 0) {
-        if (b->len + n > b->cap) qoz_strbuf_grow(b, n);
+        int64_t new_cap = b->cap == 0 ? 64 : b->cap;
+        while (new_cap < b->len + n) new_cap *= 2;
+        if (new_cap > b->cap) {
+            b->buf = (char *)qoz_realloc(b->buf, new_cap);
+            b->cap = new_cap;
+        }
         memcpy(b->buf + b->len, tmp, (size_t)n);
         b->len += n;
     }
-}
-
-void qoz_strbuf_append_bool(void *bv, bool v) {
-    qoz_string s = v ? (qoz_string){ "true", 4 } : (qoz_string){ "false", 5 };
-    qoz_strbuf_append_str(bv, s);
-}
-
-qoz_string qoz_strbuf_finish(void *bv) {
-    qoz_strbuf *b = (qoz_strbuf *)bv;
-    return (qoz_string){ b->buf, b->len, b->buf };
-}
-
-int64_t qoz_string_parse_int(qoz_string s) {
-    char buf[64];
-    if (s.len < 0 || (size_t)s.len >= sizeof(buf)) return 0;
-    memcpy(buf, s.data, (size_t)s.len);
-    buf[s.len] = 0;
-    return (int64_t)strtoll(buf, NULL, 10);
 }
 
 void qoz_init(int *stack_anchor) {
@@ -294,6 +209,11 @@ void *qoz_realloc(void *ptr, int64_t size) {
     return p;
 }
 
+/* Byte-equality and FNV-1a hash on qoz_string. The compiler's
+ * auto-derived record eq/hash calls these directly so a record type
+ * containing string fields works without an explicit `import
+ * std/strings`. User-level `==` and `hash` on `string` go through the
+ * std/strings @operator dispatch, which calls into here as well. */
 bool qoz_string_eq(qoz_string a, qoz_string b) {
     if (a.len != b.len) return false;
     if (a.len == 0) return true;

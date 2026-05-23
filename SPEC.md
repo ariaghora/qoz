@@ -340,7 +340,7 @@ let read_two_files(): Result<string, FsError> = {
 
 ## Packages
 
-A package is a directory under the source tree. The directory name is the package name. A package may hold one or more `.qoz` files in its directory; every file in the directory is part of the same package and shares the same namespace, matching Odin's model. `std/strings/`, for example, contains both `strings.qoz` and `strbuf.qoz`, and the declarations in both files are referenced as `strings.X` from outside.
+A package is a directory under the source tree. The directory name is the package name. A package may hold one or more `.qoz` files in its directory. Every file in the directory belongs to that one package and shares the same namespace. For example, `std/strings/` contains both `strings.qoz` and `strbuf.qoz`, and the declarations in both files are referenced as `strings.X` from outside.
 
 ```
 import std/fmt

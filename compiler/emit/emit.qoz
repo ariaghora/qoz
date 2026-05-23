@@ -3982,6 +3982,18 @@ let emit_block_tail_as_value(e: *Emitter, tail: Expr) = {
 // True when `hint` is the `cstring` type. A string literal flowing into
 // a cstring-typed parameter lowers to a bare C string literal rather
 // than a qoz_string struct value, matching what the FFI expects.
+let hint_is_unsigned_int(hint: TypeExpr): bool = {
+    match hint {
+    | TENamed(_, path, _) -> {
+        if len(path) != 1 { return false }
+        let n = path[0]
+        strings.eq_raw(n, "u8") || strings.eq_raw(n, "u16")
+            || strings.eq_raw(n, "u32") || strings.eq_raw(n, "u64")
+    }
+    | _ -> false
+    }
+}
+
 let hint_is_cstring(hint: TypeExpr): bool = {
     match hint {
     | TENamed(_, path, _) -> len(path) == 1 && strings.eq_raw(path[0], "cstring")
@@ -3996,6 +4008,19 @@ let emit_value_with_hint(e: *Emitter, value: Expr, hint: TypeExpr) = {
             push(e, raw)
         } else {
             push(e, "QOZ_STR_LIT({raw})")
+        }
+        return
+    }
+    | EInt(_, text) -> {
+        // An integer literal whose hint is an unsigned type gets the
+        // `ULL` C suffix. Otherwise clang under -Werror flags any
+        // literal that exceeds INT64_MAX as "implicitly unsigned".
+        let cleaned = strip_numeric_underscores(text)
+        if hint_is_unsigned_int(hint) {
+            push(e, cleaned)
+            push(e, "ULL")
+        } else {
+            push(e, cleaned)
         }
         return
     }

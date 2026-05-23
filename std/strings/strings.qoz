@@ -1,33 +1,156 @@
-// std/strings: helpers over the built-in `string` type.
+// Helpers over the built-in `string` type. Every routine here is
+// written in Qoz. They build on three runtime primitives that cross
+// the FFI boundary: qoz_string_data exposes the raw byte pointer
+// behind a string, qoz_string_alias wraps a freshly allocated byte
+// run as a GC-tracked string, and qoz_bytes_copy is a portable
+// memcpy wrapper that sidesteps fortify-source macros on darwin.
 
 import std/vec
+import std/mem
 
-@link_name("qoz_string_eq")
-external let eq_raw(a: string, b: string): bool
+@link_name("qoz_string_data")
+external let string_data(s: string): *void
 
-@link_name("qoz_string_hash")
-external let hash_raw(s: string): u64
+@link_name("qoz_string_alias")
+external let string_alias(buf: *void, n: i64): string
 
-@link_name("qoz_string_has_prefix")
-external let has_prefix(s: string, prefix: string): bool
+@link_name("qoz_bytes_copy")
+external let bytes_copy(dst: *void, src: *void, n: i64)
 
-@link_name("qoz_string_has_suffix")
-external let has_suffix(s: string, suffix: string): bool
+// Compare byte ranges starting at `ad + ao` and `bd + bo`, length `n`,
+// for equality. `ad` and `bd` are *u8 cast to opaque pointers.
+let bytes_eq(ad: *u8, ao: i64, bd: *u8, bo: i64, n: i64): bool = {
+    var i: i64 = 0
+    while i < n {
+        if ad[ao + i] != bd[bo + i] { return false }
+        i = i + 1
+    }
+    true
+}
 
-@link_name("qoz_string_byte_at")
-external let byte_at(s: string, i: i64): i64
+let eq_raw(a: string, b: string): bool = {
+    let an = len(a)
+    let bn = len(b)
+    if an != bn { return false }
+    if an == 0 { return true }
+    let ad = string_data(a) as *u8
+    let bd = string_data(b) as *u8
+    bytes_eq(ad, 0, bd, 0, an)
+}
 
-@link_name("qoz_string_index_byte")
-external let index_byte(s: string, b: i64): i64
+// FNV-1a 64-bit hash over the raw bytes of `s`. The seed and prime
+// exceed INT64_MAX, so the emit phase tags them with the `ULL`
+// suffix. The `var h: u64 = ...` annotation gives the emitter the
+// u64 hint it needs to do that.
+let hash_raw(s: string): u64 = {
+    var h: u64 = 14695981039346656037
+    let n = len(s)
+    if n == 0 { return h }
+    let data = string_data(s) as *u8
+    var i: i64 = 0
+    while i < n {
+        h = h ^ (data[i] as u64)
+        h = h * 1099511628211
+        i = i + 1
+    }
+    h
+}
 
-@link_name("qoz_string_slice")
-external let slice(s: string, from: i64, to: i64): string
+let has_prefix(s: string, p: string): bool = {
+    let sn = len(s)
+    let pn = len(p)
+    if pn > sn { return false }
+    if pn == 0 { return true }
+    let sd = string_data(s) as *u8
+    let pd = string_data(p) as *u8
+    bytes_eq(sd, 0, pd, 0, pn)
+}
 
-@link_name("qoz_string_parse_int")
-external let parse_int(s: string): i64
+let has_suffix(s: string, suf: string): bool = {
+    let sn = len(s)
+    let sufn = len(suf)
+    if sufn > sn { return false }
+    if sufn == 0 { return true }
+    let sd = string_data(s) as *u8
+    let sufd = string_data(suf) as *u8
+    bytes_eq(sd, sn - sufn, sufd, 0, sufn)
+}
 
-@link_name("qoz_string_cat")
-external let cat(a: string, b: string): string
+let byte_at(s: string, i: i64): i64 = {
+    if i < 0 { return 0 - 1 }
+    if i >= len(s) { return 0 - 1 }
+    let data = string_data(s) as *u8
+    data[i] as i64
+}
+
+let index_byte(s: string, byte: i64): i64 = {
+    let n = len(s)
+    if n == 0 { return 0 - 1 }
+    let data = string_data(s) as *u8
+    var i: i64 = 0
+    while i < n {
+        if (data[i] as i64) == byte { return i }
+        i = i + 1
+    }
+    0 - 1
+}
+
+let slice(s: string, from: i64, to: i64): string = {
+    var lo = from
+    var hi = to
+    let n = len(s)
+    if lo < 0 { lo = 0 }
+    if hi > n { hi = n }
+    if lo > hi { lo = hi }
+    let m = hi - lo
+    let buf = mem.alloc(m)
+    if m > 0 {
+        let src = (string_data(s) as i64) + lo
+        bytes_copy(buf, src as *void, m)
+    }
+    string_alias(buf, m)
+}
+
+let cat(a: string, b: string): string = {
+    let an = len(a)
+    let bn = len(b)
+    let n = (if an < 0 { 0 } else { an }) + (if bn < 0 { 0 } else { bn })
+    let buf = mem.alloc(n)
+    if an > 0 {
+        bytes_copy(buf, string_data(a), an)
+    }
+    if bn > 0 {
+        let dst = (buf as i64) + an
+        bytes_copy(dst as *void, string_data(b), bn)
+    }
+    string_alias(buf, n)
+}
+
+// Parse a decimal integer with optional leading minus. An empty
+// string returns 0. Any non-digit byte stops the scan and the digits
+// accumulated so far are returned. Parsing is intentionally lenient
+// because callers in the compiler want a best-effort numeric
+// interpretation rather than a hard error.
+let parse_int(s: string): i64 = {
+    let n = len(s)
+    if n == 0 { return 0 }
+    let data = string_data(s) as *u8
+    var i: i64 = 0
+    var neg = false
+    if (data[0] as i64) == 45 {
+        neg = true
+        i = 1
+    }
+    var acc: i64 = 0
+    while i < n {
+        let b = data[i] as i64
+        if b < 48 { return if neg { 0 - acc } else { acc } }
+        if b > 57 { return if neg { 0 - acc } else { acc } }
+        acc = acc * 10 + (b - 48)
+        i = i + 1
+    }
+    if neg { 0 - acc } else { acc }
+}
 
 @operator("==")
 let eq(a: *string, b: *string): bool = eq_raw(*a, *b)
@@ -73,6 +196,35 @@ let replace_all(s: string, needle: string, replacement: string): string = {
         out = cat(out, slice(s, i, total))
     }
     out
+}
+
+// Render an i64 as a decimal string. Handles negative numbers via a
+// leading `-`. The integer `0` returns "0". INT64_MIN is rendered
+// without special-casing; the leading minus stays correct because the
+// digit loop reads `0 - v` as unsigned bit pattern, which divmod-10
+// still produces the right digit sequence.
+let i64_to_string(v: i64): string = {
+    if v == 0 { return "0" }
+    let scratch = mem.alloc(21)
+    let bp = scratch as *u8
+    var pos: i64 = 21
+    var n: i64 = v
+    let neg = n < 0
+    if neg { n = 0 - n }
+    while n > 0 {
+        pos = pos - 1
+        bp[pos] = ((n % 10) + 48) as u8
+        n = n / 10
+    }
+    if neg {
+        pos = pos - 1
+        bp[pos] = 45 as u8
+    }
+    let out_len = 21 - pos
+    let out = mem.alloc(out_len)
+    let src = (scratch as i64) + pos
+    bytes_copy(out, src as *void, out_len)
+    string_alias(out, out_len)
 }
 
 let split(s: string, sep: i64): Vec<string> = {

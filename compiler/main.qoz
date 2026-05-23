@@ -42,6 +42,19 @@ type Pending = {
     pkg:  string,
 }
 
+// Return the directory portion of `path`. `a/b/c.qoz` -> `a/b`. A
+// path with no separator returns `.`.
+let dir_of_path(path: string): string = {
+    var i: i64 = len(path) - 1
+    while i >= 0 {
+        if strings.byte_at(path, i) == 47 {
+            return strings.slice(path, 0, i)
+        }
+        i = i - 1
+    }
+    "."
+}
+
 let prelude_segs(path: string): Vec<string> = {
     var v: Vec<string> = vec.make()
     var cur = ""
@@ -60,11 +73,13 @@ let prelude_segs(path: string): Vec<string> = {
     v
 }
 
-// Packages are directories (Odin model). resolve_import_path returns
-// the package's directory path. The caller enumerates every .qoz file
-// in it via fs.list_qoz_files. The legacy `<dir>/<last>.qoz` probe
-// only checks that the package is actually present; the directory is
-// what gets returned.
+// A package is a directory holding one or more .qoz files that all
+// belong to that package. resolve_import_path turns the dotted
+// import segments into that directory path. The caller then
+// enumerates every .qoz file inside via fs.list_qoz_files. The
+// single-file probe `<dir>/<last>.qoz` exists only as a presence
+// check so a missing package can be reported. The returned value is
+// always the directory.
 let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
     if len(segs) < 1 { return "" }
     let last = segs[len(segs) - 1]
@@ -75,13 +90,13 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
         joined = strings.cat(joined, segs[i])
         i = i + 1
     }
-    let dir_rel    = joined
-    let legacy_rel = strings.cat(dir_rel, strings.cat("/", strings.cat(last, ".qoz")))
-    if fs.file_exists(legacy_rel) { return dir_rel }
+    let dir_rel   = joined
+    let probe_rel = strings.cat(dir_rel, strings.cat("/", strings.cat(last, ".qoz")))
+    if fs.file_exists(probe_rel) { return dir_rel }
     if len(qoz_root) > 0 {
-        let abs_dir    = strings.cat(strings.cat(qoz_root, "/"), dir_rel)
-        let abs_legacy = strings.cat(strings.cat(qoz_root, "/"), legacy_rel)
-        if fs.file_exists(abs_legacy) { return abs_dir }
+        let abs_dir   = strings.cat(strings.cat(qoz_root, "/"), dir_rel)
+        let abs_probe = strings.cat(strings.cat(qoz_root, "/"), probe_rel)
+        if fs.file_exists(abs_probe) { return abs_dir }
     }
     ""
 }
@@ -240,13 +255,26 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         os.exit(1)
     }
     let file = parsed.file
-    // First pass collects fn/extern names defined in this file.
+    // Collect fn and extern names defined anywhere in this package.
+    // A package can span several .qoz files in the same directory,
+    // and a file inside that package may call a sibling function by
+    // its bare name. The renamer prefixes such calls with the
+    // package, so it must see every sibling declaration first.
     var local_fns: Map<string, bool> = map.make()
-    for d in file.decls {
-        match d {
-        | DFn(_, n, _, _, _, _, _) -> local_fns[n] = true
-        | DExternal(_, n, _, _, _) -> local_fns[n] = true
-        | _ -> { }
+    let pkg_dir = dir_of_path(cur.path)
+    let pkg_files = list_package_files(pkg_dir)
+    for sibling in pkg_files {
+        let sib_src = fs.read_file(sibling)
+        if len(sib_src) >= 0 {
+            let sib_tokens = tokenize.run(sib_src)
+            let sib_parsed = parse.run(sib_tokens, sibling)
+            for d in sib_parsed.file.decls {
+                match d {
+                | DFn(_, n, _, _, _, _, _) -> local_fns[n] = true
+                | DExternal(_, n, _, _, _) -> local_fns[n] = true
+                | _ -> { }
+                }
+            }
         }
     }
     for d in file.decls {
