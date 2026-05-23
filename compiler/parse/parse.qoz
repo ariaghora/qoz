@@ -534,9 +534,18 @@ let parse_postfix(p: *Parser): Expr = {
                 var args: Vec<Expr> = vec.make()
                 if !is_punct(peek(p), ")") {
                     vec.push(&args, parse_expr(p))
-                    while is_punct(peek(p), ",") {
+                    // Trailing comma is allowed: `f(a, b,)` keeps the
+                    // arity at two. The loop only parses another
+                    // expression when the comma is followed by
+                    // something other than `)`.
+                    var keep_args = true
+                    while keep_args && is_punct(peek(p), ",") {
                         advance(p)
-                        vec.push(&args, parse_expr(p))
+                        if is_punct(peek(p), ")") {
+                            keep_args = false
+                        } else {
+                            vec.push(&args, parse_expr(p))
+                        }
                     }
                 }
                 expect_punct(p, ")")
