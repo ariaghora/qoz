@@ -6,6 +6,6 @@ let main() = {
     let inc = (x: i32): i32 -> x + 1
     let y = 10
     let add_y = (x: i32): i32 -> x + y
-    fmt.println("inc(5):", apply(inc, 5))
-    fmt.println("add_y(5):", apply(add_y, 5))
+    fmt.println("inc(5): {apply(inc, 5)}")
+    fmt.println("add_y(5): {apply(add_y, 5)}")
 }

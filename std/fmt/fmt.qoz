@@ -1,5 +1,23 @@
-// std/fmt: console output and string formatting.
+// std/fmt: console output.
+
+// Print a string to stdout followed by a newline. Formatting of values
+// is handled by string interpolation at the call site:
 //
-// `println(args...)` is a compiler builtin and works without an import. This
-// module will host formatting helpers as the language grows variadic
-// generics.
+//     fmt.println("counter = {count}")
+//
+// produces the same output as a printf-style call. The interpolation
+// expands at parse time to a Strbuf that builds the final string, so
+// `println` only needs to forward bytes to stdout.
+
+@link_name("qoz_print_str")
+external let print_str_raw(s: string): void
+
+@link_name("qoz_print_nl")
+external let print_nl_raw(): void
+
+let println(s: string): void = {
+    print_str_raw(s)
+    print_nl_raw()
+}
+
+let print(s: string): void = { print_str_raw(s) }

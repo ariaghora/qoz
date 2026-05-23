@@ -1,0 +1,86 @@
+// std/strings/strbuf.qoz: growable byte buffer for string building.
+//
+// Pure Qoz on top of mem.realloc plus three thin runtime bridges
+// (libc memcpy, qoz_string_data for opaque string-to-pointer access,
+// qoz_string_alias to construct a string from raw bytes). All growth,
+// append, finish, truncate, and slice logic lives in this file.
+
+import std/mem
+
+type Strbuf = { buf: *u8, len: i64, cap: i64 }
+
+@link_name("qoz_bytes_copy")
+external let bytes_copy(dst: *void, src: *void, n: i64)
+
+@link_name("qoz_string_data")
+external let string_data(s: string): *void
+
+@link_name("qoz_string_alias")
+external let string_alias(buf: *void, n: i64): string
+
+let sb_init(b: *Strbuf) = {
+    b.buf = nil as *u8
+    b.len = 0
+    b.cap = 0
+}
+
+let sb_grow(b: *Strbuf, needed: i64) = {
+    var new_cap: i64 = if b.cap == 0 { 64 } else { b.cap }
+    while new_cap < b.len + needed { new_cap = new_cap * 2 }
+    b.buf = mem.realloc(b.buf as *void, new_cap) as *u8
+    b.cap = new_cap
+}
+
+let sb_append(b: *Strbuf, s: string) = {
+    let n: i64 = len(s)
+    if n <= 0 { return }
+    if b.len + n > b.cap { sb_grow(b, n) }
+    let dst = (b.buf as *void) as i64 + b.len
+    bytes_copy(dst as *void, string_data(s), n)
+    b.len = b.len + n
+}
+
+let sb_len(b: *Strbuf): i64 = b.len
+
+let sb_truncate(b: *Strbuf, new_len: i64) = {
+    if new_len < 0 { return }
+    if new_len > b.len { return }
+    b.len = new_len
+}
+
+let sb_finish(b: *Strbuf): string = string_alias(b.buf as *void, b.len)
+
+// Typed appenders. The runtime variant of Strbuf accepts an opaque
+// void* so we cast at the call boundary. Used by interpolation when
+// non-string arguments appear (`"count = {n}"` where n is i64).
+
+@link_name("qoz_strbuf_append_i64")
+external let sb_append_i64_raw(b: *void, v: i64)
+
+@link_name("qoz_strbuf_append_bool")
+external let sb_append_bool_raw(b: *void, v: bool)
+
+@link_name("qoz_strbuf_append_f64")
+external let sb_append_f64_raw(b: *void, v: f64)
+
+let sb_append_i64(b: *Strbuf, v: i64) = sb_append_i64_raw(b as *void, v)
+let sb_append_bool(b: *Strbuf, v: bool) = sb_append_bool_raw(b as *void, v)
+let sb_append_f64(b: *Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
+
+// Allocate a fresh GC-managed buffer holding bytes [from, to) of `b`
+// and return it as a string. Independent of `b`: later appends and
+// truncates do not affect the returned string.
+let sb_slice_copy(b: *Strbuf, from: i64, to: i64): string = {
+    var lo = from
+    var hi = to
+    if lo < 0 { lo = 0 }
+    if hi > b.len { hi = b.len }
+    if lo > hi { lo = hi }
+    let n = hi - lo
+    let buf = mem.alloc(n)
+    if n > 0 {
+        let src_off = (b.buf as *void) as i64 + lo
+        bytes_copy(buf, src_off as *void, n)
+    }
+    string_alias(buf, n)
+}

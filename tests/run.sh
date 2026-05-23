@@ -85,7 +85,7 @@ else
             return 1
         fi
         bin=$(mktemp -t qozb.XXXXXX)
-        if ! clang -std=c11 -pedantic -Wall -Werror -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-const-variable -Wno-parentheses-equality -Wno-unused-value "${t}.c" -o "$bin" >/tmp/qozb_clang.log 2>&1; then
+        if ! clang -std=c11 -pedantic -Wall -Werror -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-const-variable -Wno-parentheses-equality -Wno-unused-value -Wno-overlength-strings "${t}.c" -o "$bin" >/tmp/qozb_clang.log 2>&1; then
             FAIL=$((FAIL+1))
             fails+=("$t (clang failed; see /tmp/qozb_clang.log)")
             rm -f "$bin" "${t}.c"

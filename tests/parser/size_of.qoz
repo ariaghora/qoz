@@ -3,11 +3,11 @@ import std/fmt
 type Point = { x: f64, y: f64 }
 
 let main() = {
-    fmt.println("size_of(i8)     =", size_of(i8))
-    fmt.println("size_of(i32)    =", size_of(i32))
-    fmt.println("size_of(i64)    =", size_of(i64))
-    fmt.println("size_of(f64)    =", size_of(f64))
-    fmt.println("size_of(bool)   =", size_of(bool))
-    fmt.println("size_of(Point)  =", size_of(Point))
-    fmt.println("size_of(string) =", size_of(string))
+    fmt.println("size_of(i8)     = {size_of(i8)}")
+    fmt.println("size_of(i32)    = {size_of(i32)}")
+    fmt.println("size_of(i64)    = {size_of(i64)}")
+    fmt.println("size_of(f64)    = {size_of(f64)}")
+    fmt.println("size_of(bool)   = {size_of(bool)}")
+    fmt.println("size_of(Point)  = {size_of(Point)}")
+    fmt.println("size_of(string) = {size_of(string)}")
 }

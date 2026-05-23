@@ -1,0 +1,18 @@
+// expect: 0
+// String interpolation: `"{x}"` desugars at parse time to a Strbuf
+// block that uses std/strings. Plain identifiers and dot-paths inside
+// the braces are accepted. `{{` and `}}` are escapes for literal
+// braces.
+
+import std/strings
+import std/fmt
+
+let main(): i64 = {
+    let name = "world"
+    let count: i64 = 7
+    fmt.println("hi {name}, count={count}")
+    fmt.println("braces: {{ {count} }}")
+    let s = "value is {count}"
+    fmt.println(s)
+    0
+}

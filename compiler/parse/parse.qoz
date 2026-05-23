@@ -96,7 +96,7 @@ let record_error(p: *Parser, msg: string) = {
 }
 
 let err_unexpected(p: *Parser, want: string, t: Token) = {
-    record_error(p, fmt.format("expected {} at line {} (got `{}`)", want, t.line, t.text))
+    record_error(p, "expected {want} at line {t.line} (got `{t.text}`)")
 }
 
 let expect_punct(p: *Parser, sym: string) = {
@@ -104,7 +104,7 @@ let expect_punct(p: *Parser, sym: string) = {
     if is_punct(t, sym) {
         advance(p)
     } else {
-        err_unexpected(p, fmt.format("`{}`", sym), t)
+        err_unexpected(p, "`{sym}`", t)
         if !at_eof(p) {
             advance(p)
         }
@@ -622,7 +622,7 @@ let c_escape_bytes(src: string): string = {
         else if b == 13 { out = strings.cat(out, "\\r") }
         else if b == 9  { out = strings.cat(out, "\\t") }
         else if b < 32 || b == 127 {
-            out = strings.cat(out, fmt.format("\\x{}", hex2(b)))
+            out = strings.cat(out, "\\x{hex2(b)}")
         } else {
             out = strings.cat(out, strings.slice(src, i, i + 1))
         }
@@ -633,7 +633,7 @@ let c_escape_bytes(src: string): string = {
 }
 
 let hex_digit(n: i64): string = {
-    if n < 10 { return fmt.format("{}", n) }
+    if n < 10 { return "{n}" }
     strings.slice("abcdef", n - 10, n - 9)
 }
 
@@ -641,6 +641,246 @@ let hex2(b: i64): string = {
     let hi = (b / 16) % 16
     let lo = b % 16
     strings.cat(hex_digit(hi), hex_digit(lo))
+}
+
+// `"hello {expr}"` desugars at parse time to a block that builds a
+// std/strings::Strbuf, appends each literal chunk and each interpolated
+// expression, and finishes to a string. Any complete Qoz expression is
+// accepted inside the braces. A `{` whose content is not a complete
+// expression stays a literal `{`.
+let is_interp_start_byte(b: i64): bool = {
+    if b == 95 { return true }
+    if b >= 65 && b <= 90  { return true }
+    if b >= 97 && b <= 122 { return true }
+    false
+}
+
+let is_interp_cont_byte(b: i64): bool = {
+    if b == 95 || b == 46 { return true }
+    if b >= 65 && b <= 90  { return true }
+    if b >= 97 && b <= 122 { return true }
+    if b >= 48 && b <= 57  { return true }
+    false
+}
+
+// Find the matching `}` for an opening `{` at position start-1. Body
+// is the inside of a string literal (between the outer quotes). Counts
+// nested `{}` and skips embedded string literals so braces inside a
+// nested literal do not affect depth.
+let scan_interp_end(body: string, start: i64): i64 = {
+    let n = len(body)
+    if start >= n { return -1 }
+    if !is_interp_start_byte(strings.byte_at(body, start)) { return -1 }
+    var depth: i64 = 1
+    var i = start
+    var in_str = false
+    while i < n {
+        let c = strings.byte_at(body, i)
+        if in_str {
+            if c == 92 && i + 1 < n {
+                i = i + 2
+            } else {
+                if c == 34 { in_str = false }
+                i = i + 1
+            }
+        } else {
+            if c == 34 { in_str = true }
+            else if c == 123 { depth = depth + 1 }
+            else if c == 125 {
+                depth = depth - 1
+                if depth == 0 { return i }
+            }
+            i = i + 1
+        }
+    }
+    return -1
+}
+
+// Re-tokenize the interpolation body and parse it as a single
+// expression. `text` is the substring inside the `{...}` (without the
+// braces). `span` locates the start for diagnostics.
+let build_interp_expr(text: string, span: Span): Expr = {
+    let tokens = tokenize.run(text)
+    var sub = make_parser(tokens, span.file)
+    parse_expr(&sub)
+}
+
+// True when `text` parses cleanly as a single Qoz expression with all
+// tokens consumed. Used to gate interpolation rewriting so braces
+// around invalid content stay as literal text.
+let interp_text_valid(text: string): bool = {
+    let tokens = tokenize.run(text)
+    var sub = make_parser(tokens, "")
+    let _ = parse_expr(&sub)
+    if len(sub.errors) > 0 { return false }
+    sub.pos == len(sub.tokens)
+}
+
+let build_string_lit_or_interp(raw: string, span: Span): Expr = {
+    let n = len(raw)
+    if n < 2 { return EString(span, raw) }
+    let body = strings.slice(raw, 1, n - 1)
+    let bn = len(body)
+
+    var needs_rewrite = false
+    var i: i64 = 0
+    while i < bn {
+        let b = strings.byte_at(body, i)
+        if b == 92 && i + 1 < bn { i = i + 2 }
+        else if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
+            needs_rewrite = true
+            i = bn
+        }
+        else if b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
+            needs_rewrite = true
+            i = bn
+        }
+        else if b == 123 && i + 1 < bn {
+            let end = scan_interp_end(body, i + 1)
+            if end >= 0 && interp_text_valid(strings.slice(body, i + 1, end)) {
+                needs_rewrite = true; i = bn
+            }
+            else { i = i + 1 }
+        } else { i = i + 1 }
+    }
+    if !needs_rewrite { return EString(span, raw) }
+
+    var template = "\""
+    var args: Vec<Expr> = vec.make()
+    i = 0
+    while i < bn {
+        let b = strings.byte_at(body, i)
+        if b == 92 && i + 1 < bn {
+            template = strings.cat(template, strings.slice(body, i, i + 2))
+            i = i + 2
+        } else if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
+            template = strings.cat(template, "{")
+            i = i + 2
+        } else if b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
+            template = strings.cat(template, "}")
+            i = i + 2
+        } else if b == 123 && i + 1 < bn {
+            let end = scan_interp_end(body, i + 1)
+            let ident_text = if end >= 0 { strings.slice(body, i + 1, end) } else { "" }
+            if end >= 0 && interp_text_valid(ident_text) {
+                template = strings.cat(template, "{}")
+                vec.push(&args, build_interp_expr(ident_text, span))
+                i = end + 1
+            } else {
+                template = strings.cat(template, strings.slice(body, i, i + 1))
+                i = i + 1
+            }
+        } else {
+            template = strings.cat(template, strings.slice(body, i, i + 1))
+            i = i + 1
+        }
+    }
+    template = strings.cat(template, "\"")
+
+    if len(args) == 0 { return EString(span, template) }
+
+    // Desugar interpolation into a block that uses std/strings::Strbuf
+    // directly. The block declares a fresh Strbuf, appends each
+    // literal chunk and each argument value, and yields the finished
+    // string. The check phase rewrites sb_append calls whose argument
+    // is not a string into the appropriate sb_append_i64 / _bool / _f64.
+    interp_block(template, args, span)
+}
+
+let interp_var_name(span: Span): string = {
+    strings.cat("_qoz_sb_", strings.cat("{span.line}", strings.cat("_", "{span.col}")))
+}
+
+// Split the template back into the original chunks. The template
+// contains the literal bytes plus `{}` placeholders aligned with args.
+let split_template_chunks(template: string): Vec<string> = {
+    var chunks: Vec<string> = vec.make()
+    let n = len(template)
+    if n < 2 { return chunks }
+    let body = strings.slice(template, 1, n - 1)
+    let bn = len(body)
+    var i: i64 = 0
+    var start: i64 = 0
+    while i + 1 < bn {
+        if strings.byte_at(body, i) == 123 && strings.byte_at(body, i + 1) == 125 {
+            vec.push(&chunks, strings.slice(body, start, i))
+            i = i + 2
+            start = i
+        } else {
+            i = i + 1
+        }
+    }
+    vec.push(&chunks, strings.slice(body, start, bn))
+    chunks
+}
+
+let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
+    let sb_name = interp_var_name(span)
+
+    // type Strbuf = { buf: *u8, len: i64, cap: i64 }
+    var strbuf_path: Vec<string> = vec.make()
+    vec.push(&strbuf_path, "Strbuf")
+    var no_args: Vec<TypeExpr> = vec.make()
+    let strbuf_te: TypeExpr = TENamed(span, strbuf_path, no_args)
+
+    var u8_path: Vec<string> = vec.make()
+    vec.push(&u8_path, "u8")
+    let u8_te: TypeExpr = TENamed(span, u8_path, vec.make())
+    let nil_as_u8_ptr: Expr = ECast(span, ENil(span), TEPtr(span, u8_te))
+    var fields: Vec<RecordFieldLit> = vec.make()
+    vec.push(&fields, RecordFieldLit { name: "buf", value: nil_as_u8_ptr })
+    vec.push(&fields, RecordFieldLit { name: "len", value: EInt(span, "0") })
+    vec.push(&fields, RecordFieldLit { name: "cap", value: EInt(span, "0") })
+    let init_value: Expr = ERecord(span, strbuf_te, fields)
+
+    var stmts: Vec<Stmt> = vec.make()
+    vec.push(&stmts, SVar(span, sb_name, strbuf_te, init_value))
+
+    let sb_ref: Expr = EUnary(span, UOpAddr, EIdent(span, sb_name))
+
+    let init_call: Expr = strings_call("sb_init", span, append_args1(sb_ref))
+    vec.push(&stmts, SExpr(span, init_call))
+
+    let chunks = split_template_chunks(template)
+    var idx: i64 = 0
+    while idx < len(args) {
+        let chunk = chunks[idx]
+        if len(chunk) > 0 {
+            let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(chunk, "\"")))
+            let append_lit: Expr = strings_call("sb_append", span, append_args2(sb_ref, lit_arg))
+            vec.push(&stmts, SExpr(span, append_lit))
+        }
+        let append_arg: Expr = strings_call("sb_append", span, append_args2(sb_ref, args[idx]))
+        vec.push(&stmts, SExpr(span, append_arg))
+        idx = idx + 1
+    }
+    let tail_chunk = chunks[len(args)]
+    if len(tail_chunk) > 0 {
+        let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(tail_chunk, "\"")))
+        let append_lit: Expr = strings_call("sb_append", span, append_args2(sb_ref, lit_arg))
+        vec.push(&stmts, SExpr(span, append_lit))
+    }
+    let finish_call: Expr = strings_call("sb_finish", span, append_args1(sb_ref))
+    EBlock(span, stmts, finish_call)
+}
+
+let append_args1(a: Expr): Vec<Expr> = {
+    var v: Vec<Expr> = vec.make()
+    vec.push(&v, a)
+    v
+}
+
+let append_args2(a: Expr, b: Expr): Vec<Expr> = {
+    var v: Vec<Expr> = vec.make()
+    vec.push(&v, a)
+    vec.push(&v, b)
+    v
+}
+
+let strings_call(method: string, span: Span, args: Vec<Expr>): Expr = {
+    let callee: Expr = EField(span, EIdent(span, "strings"), method)
+    var type_args: Vec<TypeExpr> = vec.make()
+    ECall(span, callee, type_args, args)
 }
 
 let parse_atom(p: *Parser): Expr = {
@@ -652,20 +892,20 @@ let parse_atom(p: *Parser): Expr = {
         advance(p)
         let name_tok = peek(p)
         if !is_ident(name_tok) {
-            record_error(p, fmt.format("expected directive name after `#`, got `{}`", name_tok.text))
+            record_error(p, "expected directive name after `#`, got `{name_tok.text}`")
             return ENil(span)
         }
         advance(p)
         expect_punct(p, "(")
         let arg_tok = peek(p)
         if !is_str_lit(arg_tok) {
-            record_error(p, fmt.format("#{} expects a string literal path", name_tok.text))
+            record_error(p, "#{name_tok.text} expects a string literal path")
             return ENil(span)
         }
         advance(p)
         expect_punct(p, ")")
         if !strings.eq_raw(name_tok.text, "load_string") {
-            record_error(p, fmt.format("unknown directive `#{}` in expression position; supported: #load_string", name_tok.text))
+            record_error(p, "unknown directive `#{name_tok.text}` in expression position; supported: #load_string")
             return ENil(span)
         }
         // arg_tok.text includes surrounding quotes; strip them.
@@ -676,7 +916,7 @@ let parse_atom(p: *Parser): Expr = {
         }
         let bytes = fs.read_file(raw_path)
         if len(bytes) < 0 {
-            record_error(p, fmt.format("#load_string: cannot read `{}`", raw_path))
+            record_error(p, "#load_string: cannot read `{raw_path}`")
             return ENil(span)
         }
         return EString(span, c_escape_bytes(bytes))
@@ -691,7 +931,7 @@ let parse_atom(p: *Parser): Expr = {
     }
     if is_str_lit(t) {
         advance(p)
-        return EString(span, t.text)
+        return build_string_lit_or_interp(t.text, span)
     }
     if is_char_lit(t) {
         advance(p)
@@ -1009,12 +1249,13 @@ let parse_block(p: *Parser): Expr = {
                 expect_punct(p, ")")
                 expect_punct(p, "=")
                 let value = parse_expr(p)
-                let tmp = strings.cat("_qoz_tup_", fmt.format("{}", len(stmts)))
+                let n = len(stmts)
+                let tmp = "_qoz_tup_{n}"
                 vec.push(&stmts, SLet(stmt_span, tmp, TEUnit(stmt_span), value))
                 var bi: i64 = 0
                 for bname in binds {
                     if !strings.eq_raw(bname, "_") {
-                        let field = fmt.format("_{}", bi)
+                        let field = "_{bi}"
                         let fld_expr: Expr = EField(stmt_span, EIdent(stmt_span, tmp), field)
                         vec.push(&stmts, SLet(stmt_span, bname, TEUnit(stmt_span), fld_expr))
                     }

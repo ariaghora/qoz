@@ -3,12 +3,183 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:unicode"
 
 Parse_Error :: struct {
     file:    string,
     line:    int,
     column:  int,
     message: string,
+}
+
+// String interpolation: `"hello {name}"` desugars at parse time to
+// `fmt.format("hello {}", name)`. The interpolated expression is a
+// dotted identifier path (`x`, `e.out`, `tc.errors`); anything more
+// complex must be bound to a `let` first. A `{` not followed by an
+// identifier and matching `}` is treated as a literal `{` character, so
+// strings without interpolation are unaffected.
+build_string_lit_or_interp :: proc(p: ^Parser, raw: string, span: Span) -> Expr {
+    if len(raw) < 2 {
+        out := new(Expr_String_Lit); out.span = span; out.text = raw
+        return out
+    }
+    body := raw[1:len(raw)-1]
+
+    needs_rewrite := false
+    i := 0
+    for i < len(body) {
+        if body[i] == '\\' && i + 1 < len(body) {
+            i += 2
+            continue
+        }
+        if body[i] == '{' && i + 1 < len(body) && body[i+1] == '{' {
+            needs_rewrite = true
+            break
+        }
+        if body[i] == '}' && i + 1 < len(body) && body[i+1] == '}' {
+            needs_rewrite = true
+            break
+        }
+        if body[i] == '{' && i + 1 < len(body) && is_interp_start(body[i+1]) {
+            j := scan_balanced_end(body, i + 1)
+            if j >= 0 {
+                if build_interp_expr(body[i+1:j], span) != nil {
+                    needs_rewrite = true
+                    break
+                }
+            }
+        }
+        i += 1
+    }
+    if !needs_rewrite {
+        out := new(Expr_String_Lit); out.span = span; out.text = raw
+        return out
+    }
+
+    template := strings.builder_make(context.allocator)
+    strings.write_byte(&template, '"')
+    args := make([dynamic]Expr, context.allocator)
+
+    i = 0
+    for i < len(body) {
+        if body[i] == '\\' && i + 1 < len(body) {
+            strings.write_byte(&template, body[i])
+            strings.write_byte(&template, body[i+1])
+            i += 2
+            continue
+        }
+        if body[i] == '{' && i + 1 < len(body) && body[i+1] == '{' {
+            strings.write_byte(&template, '{')
+            i += 2
+            continue
+        }
+        if body[i] == '}' && i + 1 < len(body) && body[i+1] == '}' {
+            strings.write_byte(&template, '}')
+            i += 2
+            continue
+        }
+        if body[i] == '{' && i + 1 < len(body) && is_interp_start(body[i+1]) {
+            j := scan_balanced_end(body, i + 1)
+            if j >= 0 {
+                ie := build_interp_expr(body[i+1:j], span)
+                if ie != nil {
+                    strings.write_string(&template, "{}")
+                    append(&args, ie)
+                    i = j + 1
+                    continue
+                }
+            }
+        }
+        strings.write_byte(&template, body[i])
+        i += 1
+    }
+    strings.write_byte(&template, '"')
+
+    tpl_lit := new(Expr_String_Lit)
+    tpl_lit.span = span
+    tpl_lit.text = strings.to_string(template)
+
+    if len(args) == 0 {
+        return tpl_lit
+    }
+
+    callee := new(Expr_Path)
+    callee.span = span
+    segs := make([]string, 2, context.allocator)
+    segs[0] = "fmt"
+    segs[1] = "format"
+    callee.segs = segs
+
+    final_args := make([]Expr, 1 + len(args), context.allocator)
+    final_args[0] = tpl_lit
+    for a, k in args do final_args[k+1] = a
+
+    call := new(Expr_Call)
+    call.span = span
+    call.callee = callee
+    call.args = final_args
+    return call
+}
+
+// Walk from `start` (just past the opening `{`) until a matching `}`
+// at depth 0. Counts nested `{}` and skips embedded string literals so
+// braces inside `"..."` do not affect depth. Returns -1 if no match.
+scan_balanced_end :: proc(body: string, start: int) -> int {
+    n := len(body)
+    if start >= n do return -1
+    if !is_interp_start(body[start]) do return -1
+    depth := 1
+    i := start
+    in_str := false
+    for i < n {
+        c := body[i]
+        if in_str {
+            if c == '\\' && i + 1 < n {
+                i += 2
+                continue
+            }
+            if c == '"' do in_str = false
+            i += 1
+            continue
+        }
+        if c == '"' {
+            in_str = true
+        } else if c == '{' {
+            depth += 1
+        } else if c == '}' {
+            depth -= 1
+            if depth == 0 do return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+is_interp_start :: proc(b: byte) -> bool {
+    if b == '_' do return true
+    return unicode.is_alpha(rune(b))
+}
+
+is_interp_cont :: proc(b: byte) -> bool {
+    if b == '_' || b == '.' do return true
+    return unicode.is_alpha(rune(b)) || unicode.is_number(rune(b))
+}
+
+// `text` is the substring between `{` and `}` in an interpolated
+// string literal. Re-tokenise and parse it as a single expression so
+// the interpolation supports any Qoz expression, not just dotted
+// identifier paths. Returns nil if the content is not a complete
+// expression (so the caller can treat the braces as literal text).
+build_interp_expr :: proc(text: string, span: Span) -> Expr {
+    src := strings.clone(text, context.allocator)
+    toks, terr := tokenize(span.file, src, context.allocator)
+    _ = terr
+    sub := Parser{ file = span.file, tokens = toks[:], pos = 0, errors = make([dynamic]Parse_Error, context.allocator) }
+    expr, ok := parse_expr(&sub)
+    if !ok do return nil
+    if len(sub.errors) > 0 do return nil
+    if sub.pos < len(sub.tokens) && sub.tokens[sub.pos].kind != .EOF do return nil
+    return expr
 }
 
 Parser :: struct {
@@ -971,8 +1142,7 @@ parse_primary :: proc(p: ^Parser) -> (Expr, bool) {
         return out, true
     case .Lit_String:
         p.pos += 1
-        out := new(Expr_String_Lit); out.span = span; out.text = tok.source
-        return out, true
+        return build_string_lit_or_interp(p, tok.source, span), true
     case .Lit_Char:
         p.pos += 1
         out := new(Expr_Char_Lit); out.span = span; out.text = tok.source

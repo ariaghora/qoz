@@ -17,7 +17,7 @@ Qoz is a statically typed, garbage-collected systems language that compiles to C
 - Identifiers: `[A-Za-z_][A-Za-z0-9_]*`. Type names conventionally start uppercase.
 - Integer literals: decimal `42`, hex `0xff`, binary `0b1010`, octal `0o755`. Untyped by default, coerce to context. Underscores `_` may appear between digits and are ignored: `1_000_000`, `0xff_ff`.
 - Float literals: `1.0`, `3.14`, `1e9`, `2.5e-3`. Underscores are ignored as in integer literals.
-- String literals: `"hello\n"`. UTF-8 bytes.
+- String literals: `"hello\n"`. UTF-8 bytes. Interpolation: `"hello {name}"` evaluates the identifier (or dotted path like `e.out`) between `{` and `}` and inserts its string form. Only identifier paths are allowed inside the braces; bind a more complex expression to a `let` first. Literal `{` and `}` are written `{{` and `}}`. Interpolation desugars at parse time to `fmt.format("hello {}", name)`; the result has type `string`.
 - Character literals: `'a'`, `'\n'`. A single byte.
 - Boolean literals: `true`, `false`.
 - Comments: `// line` and `/* block */`. Block comments nest.

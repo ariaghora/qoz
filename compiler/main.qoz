@@ -60,6 +60,11 @@ let prelude_segs(path: string): Vec<string> = {
     v
 }
 
+// Packages are directories (Odin model). resolve_import_path returns
+// the package's directory path. The caller enumerates every .qoz file
+// in it via fs.list_qoz_files. The legacy `<dir>/<last>.qoz` probe
+// only checks that the package is actually present; the directory is
+// what gets returned.
 let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
     if len(segs) < 1 { return "" }
     let last = segs[len(segs) - 1]
@@ -70,25 +75,42 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
         joined = strings.cat(joined, segs[i])
         i = i + 1
     }
-    let rel = strings.cat(strings.cat(joined, "/"), strings.cat(last, ".qoz"))
-    if fs.file_exists(rel) { return rel }
+    let dir_rel    = joined
+    let legacy_rel = strings.cat(dir_rel, strings.cat("/", strings.cat(last, ".qoz")))
+    if fs.file_exists(legacy_rel) { return dir_rel }
     if len(qoz_root) > 0 {
-        let abs = strings.cat(strings.cat(qoz_root, "/"), rel)
-        if fs.file_exists(abs) { return abs }
+        let abs_dir    = strings.cat(strings.cat(qoz_root, "/"), dir_rel)
+        let abs_legacy = strings.cat(strings.cat(qoz_root, "/"), legacy_rel)
+        if fs.file_exists(abs_legacy) { return abs_dir }
     }
-    // Stage A unpacks the embedded stdlib into $TMPDIR/qoz-stage-a-stdlib
-    // on demand. Probe that location too so `import std/X` works even
-    // when no QOZ_ROOT is configured and no on-disk std/ tree exists.
     if len(segs) >= 2 && strings.eq_raw(segs[0], "std") {
         var tmp = os.getenv("TMPDIR")
         if len(tmp) == 0 { tmp = "/tmp" }
         if strings.byte_at(tmp, len(tmp) - 1) == 47 {
             tmp = strings.slice(tmp, 0, len(tmp) - 1)
         }
-        let cached = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", rel))
-        if fs.file_exists(cached) { return cached }
+        let cached_legacy = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", legacy_rel))
+        let cached_dir    = strings.cat(tmp, strings.cat("/qoz-stage-a-stdlib/", dir_rel))
+        if fs.file_exists(cached_legacy) { return cached_dir }
     }
     ""
+}
+
+// Enumerate every .qoz file in a package directory. Returned paths
+// are joined with the directory prefix; order matches list_qoz_files
+// (sorted by filename).
+let list_package_files(dir: string): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    let raw = fs.list_qoz_files(dir)
+    if len(raw) == 0 { return out }
+    let parts = strings.split(raw, 10)
+    for name in parts {
+        if len(name) > 0 {
+            let full = strings.cat(strings.cat(dir, "/"), name)
+            vec.push(&out, full)
+        }
+    }
+    out
 }
 
 let rename_with_pkg(d: Decl, pkg: string, local_fns: Map<string, bool>): Decl = {
@@ -189,9 +211,14 @@ let load_all(entry: string, qoz_root: string): Loaded = {
     vec.push(&prelude_paths, "std/option")
     vec.push(&prelude_paths, "std/result")
     for pp in prelude_paths {
-        let resolved = resolve_import_path(prelude_segs(pp), qoz_root)
-        if !strings.eq_raw(resolved, "") && !map.contains(&visited, resolved) {
-            vec.push(&queue, Pending { path: resolved, pkg: "" })
+        let resolved_dir = resolve_import_path(prelude_segs(pp), qoz_root)
+        if !strings.eq_raw(resolved_dir, "") {
+            let files = list_package_files(resolved_dir)
+            for fpath in files {
+                if !map.contains(&visited, fpath) {
+                    vec.push(&queue, Pending { path: fpath, pkg: "" })
+                }
+            }
         }
     }
     vec.push(&queue, Pending { path: entry, pkg: "" })
@@ -210,7 +237,7 @@ let load_all(entry: string, qoz_root: string): Loaded = {
 let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<Decl>, sources: *Vec<string>, qoz_root: string) = {
     let src = fs.read_file(cur.path)
     if len(src) < 0 {
-        fmt.println(fmt.format("could not read {}", cur.path))
+        fmt.println("could not read {cur.path}")
         os.exit(1)
     }
     vec.push(sources, src)
@@ -235,17 +262,20 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     for d in file.decls {
         match d {
         | DImport(_, ipath, alias) -> {
-            let resolved = resolve_import_path(ipath, qoz_root)
-            if strings.eq_raw(resolved, "") {
-                fmt.println(fmt.format("could not resolve import {}", ipath[len(ipath) - 1]))
+            let resolved_dir = resolve_import_path(ipath, qoz_root)
+            if strings.eq_raw(resolved_dir, "") {
+                fmt.println("could not resolve import {ipath[len(ipath) - 1]}")
                 os.exit(1)
             }
             var pkg = alias
             if strings.eq_raw(pkg, "") {
                 pkg = ipath[len(ipath) - 1]
             }
-            if !map.contains(visited, resolved) {
-                vec.push(queue, Pending { path: resolved, pkg: pkg })
+            let files = list_package_files(resolved_dir)
+            for fpath in files {
+                if !map.contains(visited, fpath) {
+                    vec.push(queue, Pending { path: fpath, pkg: pkg })
+                }
             }
         }
         | _ -> { }
@@ -264,7 +294,7 @@ let main() = {
     let qoz_root = os.getenv("QOZ_ROOT")
     let loaded = load_all(path, qoz_root)
     let file = loaded.file
-    fmt.println(fmt.format("{} decls (after import resolution)", len(file.decls)))
+    fmt.println("{len(file.decls)} decls (after import resolution)")
     var tc = check.make_ctx()
     check.register_file(&tc, file)
     check.validate_signatures(&tc, file)
@@ -274,11 +304,11 @@ let main() = {
     if len(tc.errors) > 0 {
         os.exit(1)
     }
-    let c_source = emit.emit_program(inferred)
+    let c_source = emit.emit_program(inferred, tc.expr_types)
     let _keep_alive = loaded.sources
     let out_path = strings.cat(path, ".c")
     let ok = fs.write_file(out_path, c_source)
     if ok {
-        fmt.println(fmt.format("wrote {}", out_path))
+        fmt.println("wrote {out_path}")
     }
 }

@@ -54,6 +54,27 @@ _Noreturn void qoz_panic(qoz_string msg);
 qoz_string qoz_fs_read_file(qoz_string path);
 bool       qoz_fs_write_file(qoz_string path, qoz_string content);
 bool       qoz_fs_file_exists(qoz_string path);
+/* List every regular file in `dir` whose name ends in ".qoz", sorted
+ * by filename. Returns a single string with the filenames separated by
+ * newlines (no trailing newline). Returns an empty string if the
+ * directory cannot be opened. */
+qoz_string qoz_fs_list_qoz_files(qoz_string dir);
+
+/* Opaque-pointer access to a string's internal data pointer. Used by
+ * Qoz code that needs to memcpy string bytes into a raw buffer (e.g.
+ * std/strings/Strbuf::sb_append). */
+void      *qoz_string_data(qoz_string s);
+
+/* Construct a string that aliases the bytes at `buf` for `n` bytes.
+ * The `root` field of the returned qoz_string is `buf`, so the GC
+ * keeps the allocation reachable as long as the string is reachable.
+ * `buf` must point at a GC-managed allocation. */
+qoz_string qoz_string_alias(void *buf, int64_t n);
+
+/* Copy `n` bytes from `src` to `dst`. Wrapper over libc memcpy so Qoz
+ * can call it portably; on darwin memcpy is a fortify-source macro and
+ * cannot be extern-declared by Qoz directly. */
+void       qoz_bytes_copy(void *dst, void *src, int64_t n);
 
 /* Print primitives. The generated code emits a sequence of these per
  * `fmt.println(args...)` call: one print per argument, separators in between,
@@ -67,16 +88,19 @@ void qoz_print_f64(double v);
 void qoz_print_bool(bool v);
 void qoz_print_sep(void);
 void qoz_print_nl(void);
+/* Print a string followed by a newline and flush stdout. Backs the
+ * `fmt.println` stdlib function. */
+void qoz_print_line(qoz_string s);
 
 /* Format builder */
 typedef struct { char *buf; int64_t len; int64_t cap; } qoz_strbuf;
-void       qoz_strbuf_init(qoz_strbuf *b);
-void       qoz_strbuf_append_str(qoz_strbuf *b, qoz_string s);
-void       qoz_strbuf_append_cstr(qoz_strbuf *b, const char *s);
-void       qoz_strbuf_append_i64(qoz_strbuf *b, int64_t v);
-void       qoz_strbuf_append_f64(qoz_strbuf *b, double v);
-void       qoz_strbuf_append_bool(qoz_strbuf *b, bool v);
-qoz_string qoz_strbuf_finish(qoz_strbuf *b);
+void       qoz_strbuf_init(void *b);
+void       qoz_strbuf_append_str(void *b, qoz_string s);
+void       qoz_strbuf_append_cstr(void *b, const char *s);
+void       qoz_strbuf_append_i64(void *b, int64_t v);
+void       qoz_strbuf_append_f64(void *b, double v);
+void       qoz_strbuf_append_bool(void *b, bool v);
+qoz_string qoz_strbuf_finish(void *b);
 
 #define QOZ_STR_LIT(s) ((qoz_string){ (s), (int64_t)(sizeof(s) - 1) })
 

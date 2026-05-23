@@ -167,3 +167,16 @@ type File = {
     path:  string,
     decls: Vec<Decl>,
 }
+let span_of_expr(e: Expr): Span = {
+    match e {
+    | ENil(sp)
+    | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
+    | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
+    | EArrayLit(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
+    | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
+    | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)
+    | EIf(sp, _, _, _) | EClosure(sp, _, _, _)
+    | EFor(sp, _, _, _, _) -> sp
+    }
+}

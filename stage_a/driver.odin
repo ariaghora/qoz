@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 
 main :: proc() {
@@ -148,7 +149,7 @@ load_project :: proc(entry_path: string, allocator := context.allocator) -> (^Fi
 
         for d in f.decls {
             if imp, is_imp := d.(^Decl_Import); is_imp {
-                resolved, found := resolve_import(imp.path)
+                resolved_dir, found := resolve_import(imp.path)
                 if !found {
                     append(&all_errors, Parse_Error{
                         file = cur.path, line = imp.span.line, column = imp.span.column,
@@ -158,7 +159,11 @@ load_project :: proc(entry_path: string, allocator := context.allocator) -> (^Fi
                 }
                 pkg_name := imp.alias
                 if pkg_name == "" do pkg_name = imp.path[len(imp.path)-1]
-                if !visited[resolved] do append(&queue, Pending{path = resolved, pkg = pkg_name})
+                files := list_package_files(resolved_dir, context.temp_allocator)
+                for fp in files {
+                    abs_fp, _ := filepath.abs(fp, context.temp_allocator)
+                    if !visited[abs_fp] do append(&queue, Pending{path = strings.clone(fp, allocator), pkg = pkg_name})
+                }
             }
             if cur.pkg != "" {
                 if fn, is_fn := d.(^Decl_Fn); is_fn {
@@ -183,17 +188,22 @@ load_project :: proc(entry_path: string, allocator := context.allocator) -> (^Fi
     return aggregated, all_errors[:]
 }
 
+// Packages are directories (Odin's model). `resolve_import` returns
+// the package's directory if it can be located on disk; the caller is
+// expected to enumerate every .qoz file in it. The unpacked-stdlib
+// fallback is used when no on-disk std/ tree exists.
 resolve_import :: proc(imp_path: []string) -> (string, bool) {
     if len(imp_path) < 1 do return "", false
 
     parts := make([dynamic]string, context.temp_allocator)
     for p in imp_path do append(&parts, p)
-    last := imp_path[len(imp_path)-1]
-    append(&parts, fmt.tprintf("%s.qoz", last))
-    rel, _ := filepath.join(parts[:], context.temp_allocator)
+    dir_rel, _ := filepath.join(parts[:], context.temp_allocator)
 
-    if _, err := os.stat(rel, context.temp_allocator); err == nil {
-        abs, _ := filepath.abs(rel, context.temp_allocator)
+    last := imp_path[len(imp_path)-1]
+    legacy_rel, _ := filepath.join({dir_rel, fmt.tprintf("%s.qoz", last)}, context.temp_allocator)
+
+    if _, err := os.stat(legacy_rel, context.temp_allocator); err == nil {
+        abs, _ := filepath.abs(dir_rel, context.temp_allocator)
         return strings.clone(abs), true
     }
 
@@ -202,9 +212,10 @@ resolve_import :: proc(imp_path: []string) -> (string, bool) {
     // is absent.
     if len(imp_path) == 2 && imp_path[0] == "std" {
         root := ensure_stdlib_dir()
-        cand, _ := filepath.join({root, rel}, context.temp_allocator)
-        if _, err := os.stat(cand, context.temp_allocator); err == nil {
-            abs, _ := filepath.abs(cand, context.temp_allocator)
+        cand_legacy, _ := filepath.join({root, legacy_rel}, context.temp_allocator)
+        if _, err := os.stat(cand_legacy, context.temp_allocator); err == nil {
+            cand_dir, _ := filepath.join({root, dir_rel}, context.temp_allocator)
+            abs, _ := filepath.abs(cand_dir, context.temp_allocator)
             return strings.clone(abs), true
         }
     }
@@ -213,17 +224,37 @@ resolve_import :: proc(imp_path: []string) -> (string, bool) {
     abs_exe, _ := filepath.abs(exe_path, context.temp_allocator)
     exe_dir := filepath.dir(abs_exe, context.temp_allocator)
     candidates := []string{
-        filepath.join({exe_dir, rel}, context.temp_allocator) or_else "",
-        filepath.join({exe_dir, "..", rel}, context.temp_allocator) or_else "",
+        filepath.join({exe_dir, legacy_rel}, context.temp_allocator) or_else "",
+        filepath.join({exe_dir, "..", legacy_rel}, context.temp_allocator) or_else "",
     }
     for c in candidates {
         if c == "" do continue
         if _, err := os.stat(c, context.temp_allocator); err == nil {
-            abs, _ := filepath.abs(c, context.temp_allocator)
+            cand_dir := filepath.dir(c, context.temp_allocator)
+            abs, _ := filepath.abs(cand_dir, context.temp_allocator)
             return strings.clone(abs), true
         }
     }
     return "", false
+}
+
+// Enumerate every .qoz file in a package directory. The order is
+// stable across runs so codegen output remains deterministic.
+list_package_files :: proc(dir: string, allocator := context.allocator) -> []string {
+    fd, oerr := os.open(dir, os.O_RDONLY)
+    if oerr != nil do return {}
+    defer os.close(fd)
+    entries, rerr := os.read_dir(fd, -1, context.temp_allocator)
+    if rerr != nil do return {}
+    out := make([dynamic]string, allocator)
+    for e in entries {
+        if e.type == .Directory do continue
+        if !strings.has_suffix(e.name, ".qoz") do continue
+        joined, _ := filepath.join({dir, e.name}, allocator)
+        append(&out, joined)
+    }
+    slice.sort(out[:])
+    return out[:]
 }
 
 print_parse_errors :: proc(errs: []Parse_Error) {
@@ -264,25 +295,29 @@ runtime_dir_cache: string = ""
 
 // The standard library .qoz sources are baked in so the driver can
 // resolve `import std/X` without a configured QOZ_ROOT. ensure_stdlib_dir
-// unpacks them on first use to $TMPDIR/qoz-stage-a-stdlib/std/X/X.qoz.
+// unpacks them on first use to $TMPDIR/qoz-stage-a-stdlib/std/X/.
+// Each package is a directory; multiple .qoz files in the directory
+// belong to the same package (Odin model).
 @(private)
-std_fmt_qoz     := #load("../std/fmt/fmt.qoz")
+std_fmt_qoz             := #load("../std/fmt/fmt.qoz")
 @(private)
-std_fs_qoz      := #load("../std/fs/fs.qoz")
+std_fs_qoz              := #load("../std/fs/fs.qoz")
 @(private)
-std_map_qoz     := #load("../std/map/map.qoz")
+std_map_qoz             := #load("../std/map/map.qoz")
 @(private)
-std_mem_qoz     := #load("../std/mem/mem.qoz")
+std_mem_qoz             := #load("../std/mem/mem.qoz")
 @(private)
-std_option_qoz  := #load("../std/option/option.qoz")
+std_option_qoz          := #load("../std/option/option.qoz")
 @(private)
-std_os_qoz      := #load("../std/os/os.qoz")
+std_os_qoz              := #load("../std/os/os.qoz")
 @(private)
-std_result_qoz  := #load("../std/result/result.qoz")
+std_result_qoz          := #load("../std/result/result.qoz")
 @(private)
-std_strings_qoz := #load("../std/strings/strings.qoz")
+std_strings_qoz         := #load("../std/strings/strings.qoz")
 @(private)
-std_vec_qoz     := #load("../std/vec/vec.qoz")
+std_strings_strbuf_qoz  := #load("../std/strings/strbuf.qoz")
+@(private)
+std_vec_qoz             := #load("../std/vec/vec.qoz")
 
 @(private)
 stdlib_dir_cache: string = ""
@@ -293,18 +328,16 @@ ensure_stdlib_dir :: proc() -> string {
     if tmp_root == "" do tmp_root = "/tmp"
     root, _ := filepath.join({tmp_root, "qoz-stage-a-stdlib"}, context.allocator)
 
-    write_one :: proc(root: string, pkg: string, data: []byte) {
+    write_file :: proc(root: string, pkg: string, fname: string, data: []byte) {
         pkg_dir, _ := filepath.join({root, "std", pkg}, context.temp_allocator)
         if _, err := os.stat(pkg_dir, context.temp_allocator); err != nil {
-            // Create std/ first then std/PKG so make_directory does not
-            // fail on a missing parent.
             std_dir, _ := filepath.join({root, "std"}, context.temp_allocator)
             if _, e2 := os.stat(std_dir, context.temp_allocator); e2 != nil {
                 _ = os.make_directory(std_dir)
             }
             _ = os.make_directory(pkg_dir)
         }
-        path, _ := filepath.join({pkg_dir, fmt.tprintf("%s.qoz", pkg)}, context.temp_allocator)
+        path, _ := filepath.join({pkg_dir, fname}, context.temp_allocator)
         existing, read_err := os.read_entire_file(path, context.temp_allocator)
         if read_err == nil && len(existing) == len(data) {
             same := true
@@ -317,15 +350,16 @@ ensure_stdlib_dir :: proc() -> string {
     if _, err := os.stat(root, context.temp_allocator); err != nil {
         _ = os.make_directory(root)
     }
-    write_one(root, "fmt",     std_fmt_qoz)
-    write_one(root, "fs",      std_fs_qoz)
-    write_one(root, "map",     std_map_qoz)
-    write_one(root, "mem",     std_mem_qoz)
-    write_one(root, "option",  std_option_qoz)
-    write_one(root, "os",      std_os_qoz)
-    write_one(root, "result",  std_result_qoz)
-    write_one(root, "strings", std_strings_qoz)
-    write_one(root, "vec",     std_vec_qoz)
+    write_file(root, "fmt",     "fmt.qoz",     std_fmt_qoz)
+    write_file(root, "fs",      "fs.qoz",      std_fs_qoz)
+    write_file(root, "map",     "map.qoz",     std_map_qoz)
+    write_file(root, "mem",     "mem.qoz",     std_mem_qoz)
+    write_file(root, "option",  "option.qoz",  std_option_qoz)
+    write_file(root, "os",      "os.qoz",      std_os_qoz)
+    write_file(root, "result",  "result.qoz",  std_result_qoz)
+    write_file(root, "strings", "strings.qoz", std_strings_qoz)
+    write_file(root, "strings", "strbuf.qoz",  std_strings_strbuf_qoz)
+    write_file(root, "vec",     "vec.qoz",     std_vec_qoz)
 
     stdlib_dir_cache = root
     return root
@@ -401,6 +435,7 @@ compile_and_link :: proc(c_source: string, out_name: string) -> bool {
     cmd := []string{
         "clang",
         "-std=c11",
+        "-pedantic",
         "-O3",
         "-Wall",
         "-Werror",
@@ -420,7 +455,17 @@ compile_and_link :: proc(c_source: string, out_name: string) -> bool {
         "-Wno-unused-function",
         "-Wno-unused-variable",
         "-Wno-unused-but-set-variable",
+        "-Wno-unused-const-variable",
+        "-Wno-unused-value",
         "-Wno-parentheses-equality",
+        // The embedded runtime sources are emitted as C string literals
+        // (via #load_string in Stage B's emit.qoz). Their content
+        // exceeds the C99-guaranteed minimum literal size, but every
+        // C compiler in practice supports far longer literals. The
+        // warning is about portability to compilers that only meet the
+        // minimum; the rest of the emitted C still compiles under
+        // -std=c11 -pedantic.
+        "-Wno-overlength-strings",
         tmp_c,
         "-o", out_name,
     }

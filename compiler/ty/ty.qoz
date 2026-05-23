@@ -29,6 +29,7 @@ type Ty =
     | TyAdt(string, Vec<Ty>)
     | TyRecord(string, Vec<Ty>)
     | TyFn(Vec<Ty>, Ty)
+    | TyTuple(Vec<Ty>)
     | TyVar(i64, string)
 
 let ty_int_(width: i64, is_signed: bool): Ty = TyInt(IntInfo { width: width, is_signed: is_signed, untyped: false })
@@ -52,6 +53,7 @@ let ty_ptr_(inner: Ty): Ty = TyPtr(inner)
 let ty_adt_(name: string, args: Vec<Ty>): Ty = TyAdt(name, args)
 let ty_record_(name: string, args: Vec<Ty>): Ty = TyRecord(name, args)
 let ty_fn_(params: Vec<Ty>, ret: Ty): Ty = TyFn(params, ret)
+let ty_tuple_(elems: Vec<Ty>): Ty = TyTuple(elems)
 
 let ty_var_(name: string): Ty = TyVar(0, name)
 
@@ -100,6 +102,12 @@ let ty_eq(a: Ty, b: Ty): bool = {
         | _            -> false
         }
     }
+    | TyTuple(ae) -> {
+        match b {
+        | TyTuple(be) -> ty_args_eq(ae, be)
+        | _           -> false
+        }
+    }
     | TyVar(_, an) -> {
         match b {
         | TyVar(_, bn) -> strings.eq_raw(an, bn)
@@ -127,7 +135,16 @@ let ty_to_type_expr_at(t: Ty, sp: Span): TypeExpr = {
     | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
     | TyAdt(name, args) -> named_with_args(sp, name, args)
     | TyRecord(name, args) -> named_with_args(sp, name, args)
-    | TyFn(_, _) -> single_path_te(sp, "?fn")
+    | TyFn(fparams, ret) -> {
+        var pte: Vec<TypeExpr> = vec.make()
+        for p in fparams { vec.push(&pte, ty_to_type_expr_at(p, sp)) }
+        TEFn(sp, pte, ty_to_type_expr_at(ret, sp))
+    }
+    | TyTuple(elems) -> {
+        var ete: Vec<TypeExpr> = vec.make()
+        for el in elems { vec.push(&ete, ty_to_type_expr_at(el, sp)) }
+        TETuple(sp, ete)
+    }
     | TyVar(_, name) -> single_path_te(sp, name)
     }
 }

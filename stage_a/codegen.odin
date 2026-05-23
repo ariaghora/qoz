@@ -68,6 +68,12 @@ Codegen :: struct {
     current_mangled: string,                   // mangled name of the body currently being emitted, "" for entry/main
     current_origin:  Span,                     // span to attribute new fn-instantiation registrations to
 
+    // Statements queued for emission just before the current C
+    // statement. Sub-emits append to this when they need to hoist a
+    // complex sub-expression (match in value position, closure
+    // construction, etc.) out of expression position into a temp.
+    pending_prologue: [dynamic]string,
+
     errors:     [dynamic]string,
 }
 
@@ -99,6 +105,7 @@ codegen_file :: proc(f: File, tc: ^Ty_Context, allocator := context.allocator) -
         derive_hash_for      = make(map[string]Ty, allocator),
         derive_eq_for        = make(map[string]Ty, allocator),
         origin_spans         = make(map[string]Span, allocator),
+        pending_prologue     = make([dynamic]string, allocator),
         errors     = make([dynamic]string, allocator),
     }
     context.allocator = allocator
@@ -184,6 +191,92 @@ cg_emit :: proc(cg: ^Codegen, s: string) {
     strings.write_string(&cg.sb, s)
 }
 
+// Statement-scope hoisting. Inside open/close, expressions may push
+// hoisted C statements into cg.pending_prologue. On close, those
+// statements are written into cg.sb before the bytes captured between
+// open and close, so a hoisted match-as-value lands on the line above
+// the C statement that consumes its result temporary.
+Stmt_Scope :: struct {
+    start: int,
+    saved: [dynamic]string,
+}
+
+cg_open_statement_scope :: proc(cg: ^Codegen) -> Stmt_Scope {
+    saved := cg.pending_prologue
+    cg.pending_prologue = make([dynamic]string)
+    return Stmt_Scope{ start = len(cg.sb.buf), saved = saved }
+}
+
+cg_close_statement_scope :: proc(cg: ^Codegen, s: Stmt_Scope) {
+    captured := strings.clone(string(cg.sb.buf[s.start:]))
+    resize(&cg.sb.buf, s.start)
+    for p in cg.pending_prologue {
+        strings.write_string(&cg.sb, p)
+    }
+    delete(cg.pending_prologue)
+    cg.pending_prologue = s.saved
+    strings.write_string(&cg.sb, captured)
+    delete(captured)
+}
+
+// Split a long quoted C string literal into adjacent shorter quoted
+// literals so each fits in C99's 4095-character minimum-required
+// support. The C language concatenates adjacent string literals at
+// translation phase 6, so "ab" "cd" is equivalent to "abcd". Escape
+// sequences are kept intact: a backslash and its trailing payload are
+// emitted as one unit, never split across chunks.
+chunk_c_string_literal :: proc(text: string) -> string {
+    chunk_target :: 3500
+    if len(text) <= chunk_target + 2 do return text
+    if len(text) < 2 || text[0] != '"' || text[len(text)-1] != '"' do return text
+    inner := text[1:len(text)-1]
+    sb := strings.builder_make(context.temp_allocator)
+    strings.write_byte(&sb, '"')
+    cur := 0
+    for i := 0; i < len(inner); {
+        c := inner[i]
+        unit_end := i + 1
+        if c == '\\' && i + 1 < len(inner) {
+            nx := inner[i+1]
+            unit_end = i + 2
+            if nx == 'x' {
+                j := i + 2
+                for j < len(inner) && j < i + 4 && is_hex_byte(inner[j]) do j += 1
+                unit_end = j
+            } else if nx >= '0' && nx <= '7' {
+                j := i + 2
+                for j < len(inner) && j < i + 4 && inner[j] >= '0' && inner[j] <= '7' do j += 1
+                unit_end = j
+            }
+        }
+        unit_len := unit_end - i
+        if cur + unit_len > chunk_target && cur > 0 {
+            strings.write_string(&sb, "\" \"")
+            cur = 0
+        }
+        for k := i; k < unit_end; k += 1 do strings.write_byte(&sb, inner[k])
+        cur += unit_len
+        i = unit_end
+    }
+    strings.write_byte(&sb, '"')
+    return strings.clone(strings.to_string(sb))
+}
+
+is_hex_byte :: proc(b: byte) -> bool {
+    return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
+}
+
+// Capture sub-emit bytes without writing them to cg.sb. The caller
+// receives the captured C text and may decide whether to splice it
+// into the prologue or back into the main stream.
+cg_capture_emit :: proc(cg: ^Codegen, emit: proc(cg: ^Codegen, ctx: rawptr), ctx: rawptr) -> string {
+    start := len(cg.sb.buf)
+    emit(cg, ctx)
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    return captured
+}
+
 cg_emitf :: proc(cg: ^Codegen, format: string, args: ..any) {
     fmt.sbprintf(&cg.sb, format, ..args)
 }
@@ -209,6 +302,20 @@ cg_current_origin :: proc(cg: ^Codegen) -> (Span, bool) {
 }
 
 // --- Type spelling ---
+
+type_expr_is_void :: proc(t: ^Type_Expr) -> bool {
+    if t == nil do return true
+    switch v in t^ {
+    case ^Type_Unit:
+        return true
+    case ^Type_Named:
+        if len(v.path) != 1 do return false
+        return v.path[0] == "void" || v.path[0] == "unit"
+    case ^Type_Ptr, ^Type_Fn, ^Type_Tuple:
+        return false
+    }
+    return false
+}
 
 c_type_of_type_expr :: proc(cg: ^Codegen, t: ^Type_Expr) -> string {
     if t == nil do return "void"
@@ -642,7 +749,7 @@ cg_emit_one_generic_body :: proc(cg: ^Codegen, fn: ^Decl_Fn, mangled: string, ty
     }
     cg_emit_shadow_prologue(cg, fn.params)
     cg.cur_ret = fn.ret
-    cg.in_return_ctx = fn.ret != nil
+    cg.in_return_ctx = fn.ret != nil && !type_expr_is_void(fn.ret)
     cg_block_inline(cg, fn.body)
     cg.indent_lvl -= 1
     cg_emit_indent(cg); cg_emit(cg, "}\n\n")
@@ -1089,9 +1196,13 @@ cg_external :: proc(cg: ^Codegen, d: ^Decl_External) {
     cg_emit(cg, " ")
     cg_emit(cg, d.symbol)
     cg_emit(cg, "(")
-    for p, i in d.params {
-        if i > 0 do cg_emit(cg, ", ")
-        cg_emit(cg, c_type_of_type_expr(cg, p.type))
+    if len(d.params) == 0 {
+        cg_emit(cg, "void")
+    } else {
+        for p, i in d.params {
+            if i > 0 do cg_emit(cg, ", ")
+            cg_emit(cg, c_type_of_type_expr(cg, p.type))
+        }
     }
     cg_emit(cg, ");\n")
 }
@@ -1144,7 +1255,7 @@ cg_fn :: proc(cg: ^Codegen, d: ^Decl_Fn) {
     cg_emit_shadow_prologue(cg, d.params)
 
     cg.cur_ret = d.ret
-    cg.in_return_ctx = d.ret != nil
+    cg.in_return_ctx = d.ret != nil && !type_expr_is_void(d.ret)
     cg_block_inline(cg, d.body)
     cg.indent_lvl -= 1
     cg_emit_indent(cg); cg_emit(cg, "}\n\n")
@@ -1204,10 +1315,12 @@ cg_block_inline :: proc(cg: ^Codegen, b: ^Expr_Block) {
         if cg.in_return_ctx && len(defers) > 0 {
             t := infer_expr_c_type(cg, b.tail)
             tmp := fmt.tprintf("_qoz_ret_%d", next_tmp_id(cg))
+            scope := cg_open_statement_scope(cg)
             cg_emit_indent(cg)
             cg_emitf(cg, "%s %s = ", t, tmp)
             cg_expr(cg, b.tail)
             cg_emit(cg, ";\n")
+            cg_close_statement_scope(cg, scope)
             flush_defers(cg, defers)
             cg_emit_indent(cg)
             cg_emitf(cg, "return %s;\n", tmp)
@@ -1223,6 +1336,12 @@ cg_block_inline :: proc(cg: ^Codegen, b: ^Expr_Block) {
 }
 
 cg_stmt :: proc(cg: ^Codegen, s: Stmt) {
+    scope := cg_open_statement_scope(cg)
+    defer cg_close_statement_scope(cg, scope)
+    cg_stmt_inner(cg, s)
+}
+
+cg_stmt_inner :: proc(cg: ^Codegen, s: Stmt) {
     switch v in s {
     case ^Stmt_Let:
         cg_let_stmt(cg, v.name, v.type, v.value, false)
@@ -1331,14 +1450,18 @@ cg_emit_tail_as_statement :: proc(cg: ^Codegen, e: Expr) {
         return
     }
     if _, is_return := e.(^Expr_Return); is_return {
+        scope := cg_open_statement_scope(cg)
         cg_emit_indent(cg)
         cg_expr(cg, e)
         cg_emit(cg, ";\n")
+        cg_close_statement_scope(cg, scope)
         return
     }
+    scope := cg_open_statement_scope(cg)
     cg_emit_indent(cg)
     cg_expr(cg, e)
     cg_emit(cg, ";\n")
+    cg_close_statement_scope(cg, scope)
 }
 
 cg_while_stmt :: proc(cg: ^Codegen, w: ^Expr_While) {
@@ -1599,11 +1722,13 @@ cg_tail_expr :: proc(cg: ^Codegen, e: Expr) {
             cg_emit(cg, ";\n")
             return
         }
+        scope := cg_open_statement_scope(cg)
         cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
         cg_emit_indent(cg)
         cg_emit(cg, "return ")
         cg_expr(cg, e)
         cg_emit(cg, ";\n")
+        cg_close_statement_scope(cg, scope)
         return
     }
     if m, is_match := e.(^Expr_Match); is_match {
@@ -1618,9 +1743,11 @@ cg_tail_expr :: proc(cg: ^Codegen, e: Expr) {
         cg_for_stmt(cg, fr)
         return
     }
+    scope := cg_open_statement_scope(cg)
     cg_emit_indent(cg)
     cg_expr(cg, e)
     cg_emit(cg, ";\n")
+    cg_close_statement_scope(cg, scope)
 }
 
 // --- Type inference (minimal, codegen-only) ---
@@ -1743,10 +1870,13 @@ cg_expr :: proc(cg: ^Codegen, e: Expr) {
     case ^Expr_Float_Lit:
         cg_emit(cg, v.text)
     case ^Expr_String_Lit:
+        chunked := chunk_c_string_literal(v.text)
         if cg.tc != nil && cg.tc.cstring_literals[v] {
-            cg_emit(cg, v.text)
+            cg_emit(cg, chunked)
         } else {
-            cg_emitf(cg, "QOZ_STR_LIT(%s)", v.text)
+            cg_emit(cg, "QOZ_STR_LIT(")
+            cg_emit(cg, chunked)
+            cg_emit(cg, ")")
         }
     case ^Expr_Char_Lit:
         cg_emit(cg, v.text)
@@ -1942,15 +2072,48 @@ cg_emit_block_as_expr :: proc(cg: ^Codegen, b: ^Expr_Block) {
         cg_emit(cg, "(void)0")
         return
     }
-    cg_emit(cg, "({ ")
+    // Declare a result temp at the enclosing scope, run the block's
+    // statements inside a fresh C compound to keep its locals
+    // properly scoped, and assign the tail expression into the temp
+    // before the compound closes. The expression site reads the temp.
+    result_c := "int64_t"
+    has_tail := b.tail != nil
+    if has_tail {
+        if cg.tc != nil {
+            if t, has := cg.tc.expr_types[b]; has && !ty_is_error(t) {
+                result_c = ty_to_c_type(cg, t)
+            }
+        }
+    }
+    tmp_res := fmt.tprintf("_qoz_bv_%d", next_tmp_id(cg))
+    start := len(cg.sb.buf)
+    if has_tail {
+        cg_emitf(cg, "%s %s;\n", result_c, tmp_res)
+        cg_emit_indent(cg)
+    }
+    cg_emit(cg, "{\n")
+    cg.indent_lvl += 1
     for s in b.stmts {
         cg_stmt(cg, s)
     }
-    if b.tail != nil {
+    if has_tail {
+        tail_scope := cg_open_statement_scope(cg)
+        cg_emit_indent(cg)
+        cg_emitf(cg, "%s = ", tmp_res)
         cg_expr(cg, b.tail)
-        cg_emit(cg, "; ")
+        cg_emit(cg, ";\n")
+        cg_close_statement_scope(cg, tail_scope)
     }
-    cg_emit(cg, "})")
+    cg.indent_lvl -= 1
+    cg_emit_indent(cg); cg_emit(cg, "}\n")
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    append(&cg.pending_prologue, captured)
+    if has_tail {
+        cg_emit(cg, tmp_res)
+    } else {
+        cg_emit(cg, "(void)0")
+    }
 }
 
 cg_emit_try :: proc(cg: ^Codegen, t: ^Expr_Try) {
@@ -1981,16 +2144,22 @@ cg_emit_try :: proc(cg: ^Codegen, t: ^Expr_Try) {
     }
 
     tmp := fmt.tprintf("_qoz_try_%d", next_tmp_id(cg))
-    cg_emit(cg, "({ ")
+    // Hoist the Result temp and the Err-bail into pending_prologue so
+    // the `?` operator reads as a plain field access in expression
+    // position.
+    start := len(cg.sb.buf)
     cg_emitf(cg, "qoz_%s *%s = ", inner_prefix, tmp)
     cg_expr(cg, t.value)
     cg_emit(cg, "; ")
     cg_emitf(cg, "if (%s->tag == qoz_%s_Err) ", tmp, inner_prefix)
     cg_emit(cg, "{ ")
+    cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard); ")
     cg_emitf(cg, "return qoz_make_%s_Err(%s->payload.Err.f0); ", outer_prefix, tmp)
-    cg_emit(cg, "} ")
-    cg_emitf(cg, "%s->payload.Ok.f0; ", tmp)
-    cg_emit(cg, "})")
+    cg_emit(cg, "}\n")
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    append(&cg.pending_prologue, captured)
+    cg_emitf(cg, "%s->payload.Ok.f0", tmp)
 }
 
 discover_late_bound_binary :: proc(cg: ^Codegen, v: ^Expr_Binary, ty_subst: map[int]Ty) {
@@ -2423,14 +2592,19 @@ cg_emit_array_lit :: proc(cg: ^Codegen, v: ^Expr_Array_Lit) {
     make_mangled := mangle_generic("vec_make", elem_args, cg)
     push_mangled := mangle_generic("vec_push", elem_args, cg)
     tmp := fmt.tprintf("_qoz_arr_%d", next_tmp_id(cg))
-    cg_emit(cg, "({ ")
-    cg_emitf(cg, "%s %s = %s(); ", vec_c, tmp, make_mangled)
+    // Hoist the make + per-element pushes into pending_prologue and
+    // surface only the resulting Vec value as a plain identifier.
+    start := len(cg.sb.buf)
+    cg_emitf(cg, "%s %s = %s();\n", vec_c, tmp, make_mangled)
     for el in v.elems {
-        cg_emitf(cg, "%s(&%s, ", push_mangled, tmp)
+        cg_emit_indent(cg); cg_emitf(cg, "%s(&%s, ", push_mangled, tmp)
         cg_expr(cg, el)
-        cg_emit(cg, "); ")
+        cg_emit(cg, ");\n")
     }
-    cg_emitf(cg, "%s; })", tmp)
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    append(&cg.pending_prologue, captured)
+    cg_emit(cg, tmp)
 }
 
 cg_emit_size_of :: proc(cg: ^Codegen, arg: Expr) {
@@ -2493,16 +2667,22 @@ cg_emit_record_literal :: proc(cg: ^Codegen, r: ^Expr_Record) {
         return
     }
     if r.base != nil {
-        cg_emit(cg, "({ ")
-        cg_emitf(cg, "qoz_%s _qr = ", base_name)
+        // Hoist the base copy and field updates so the record-update
+        // expression resolves to the result temp at the use site.
+        tmp_rec := fmt.tprintf("_qoz_rec_%d", next_tmp_id(cg))
+        start := len(cg.sb.buf)
+        cg_emitf(cg, "qoz_%s %s = ", base_name, tmp_rec)
         cg_expr(cg, r.base)
-        cg_emit(cg, "; ")
+        cg_emit(cg, ";\n")
         for fld in r.fields {
-            cg_emitf(cg, "_qr.%s = ", fld.name)
+            cg_emit_indent(cg); cg_emitf(cg, "%s.%s = ", tmp_rec, fld.name)
             cg_expr(cg, fld.value)
-            cg_emit(cg, "; ")
+            cg_emit(cg, ";\n")
         }
-        cg_emit(cg, "_qr; })")
+        captured := strings.clone(string(cg.sb.buf[start:]))
+        resize(&cg.sb.buf, start)
+        append(&cg.pending_prologue, captured)
+        cg_emit(cg, tmp_rec)
         return
     }
     cg_emit(cg, "((")
@@ -2527,21 +2707,33 @@ cg_emit_closure_value :: proc(cg: ^Codegen, ce: ^Expr_Closure) {
     info := cg.closures[id]
     sig := cg.closure_sigs[info.sig_index]
 
-    cg_emit(cg, "((")
-    cg_emit(cg, sig.name)
-    cg_emit(cg, "){ .env = ")
-    if len(info.captures) > 0 {
-        cg_emit(cg, "({ ")
-        cg_emitf(cg, "%s *e = qoz_alloc(sizeof(%s)); ", info.env_name, info.env_name)
-        for c in info.captures {
-            cg_emitf(cg, "e->%s = %s; ", c.name, c.name)
-        }
-        cg_emit(cg, "(void*)e; })")
-    } else {
-        cg_emit(cg, "NULL")
+    if len(info.captures) == 0 {
+        cg_emit(cg, "((")
+        cg_emit(cg, sig.name)
+        cg_emit(cg, "){ .env = NULL")
+        cg_emitf(cg, ", .fn = %s ", info.fn_name)
+        cg_emit(cg, "})")
+        return
     }
-    cg_emitf(cg, ", .fn = %s ", info.fn_name)
-    cg_emit(cg, "})")
+
+    // Hoist the env allocation and per-capture writes; build the
+    // closure struct in pending_prologue and read it as a plain temp
+    // at the use site.
+    tmp_clo := fmt.tprintf("_qoz_clo_%d", next_tmp_id(cg))
+    env_tmp := fmt.tprintf("_qoz_env_%d", next_tmp_id(cg))
+    start := len(cg.sb.buf)
+    cg_emitf(cg, "%s *%s = qoz_alloc(sizeof(%s));\n", info.env_name, env_tmp, info.env_name)
+    for c in info.captures {
+        cg_emit_indent(cg); cg_emitf(cg, "%s->%s = %s;\n", env_tmp, c.name, c.name)
+    }
+    cg_emit_indent(cg)
+    cg_emitf(cg, "%s %s = (%s)", sig.name, tmp_clo, sig.name)
+    cg_emit(cg, "{ ")
+    cg_emitf(cg, ".env = (void*)%s, .fn = %s };\n", env_tmp, info.fn_name)
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    append(&cg.pending_prologue, captured)
+    cg_emit(cg, tmp_clo)
 }
 
 cg_emit_operator_binary_call :: proc(cg: ^Codegen, v: ^Expr_Binary, disp: Index_Dispatch) {
@@ -2617,10 +2809,11 @@ cg_new :: proc(cg: ^Codegen, n: ^Expr_New) {
 
 cg_call :: proc(cg: ^Codegen, call: ^Expr_Call) {
     if path, is_path := call.callee.(^Expr_Path); is_path {
-        if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "println" {
-            cg_fmt_println(cg, call.args)
-            return
-        }
+        // Stage A's parser desugars string interpolation to a synthetic
+        // `fmt.format(template, args...)` call. The user-facing language
+        // has no `fmt.format`, so this builtin only fires for compiler-
+        // generated calls. Stage B's parser desugars interpolation
+        // directly to a Strbuf block and never produces `fmt.format`.
         if len(path.segs) == 2 && path.segs[0] == "fmt" && path.segs[1] == "format" {
             cg_fmt_format(cg, call.args)
             return
@@ -2656,10 +2849,6 @@ cg_call :: proc(cg: ^Codegen, call: ^Expr_Call) {
         }
     }
     if id, is_id := call.callee.(^Expr_Ident); is_id {
-        if id.name == "println" {
-            cg_fmt_println(cg, call.args)
-            return
-        }
         if id.name == "size_of" && len(call.args) == 1 {
             cg_emit_size_of(cg, call.args[0])
             return
@@ -2848,9 +3037,11 @@ cg_emit_arm_body_statement :: proc(cg: ^Codegen, arm: Match_Arm) {
         cg_block_body(cg, blk)
         cg_emit(cg, "\n")
     } else {
+        scope := cg_open_statement_scope(cg)
         cg_emit_indent(cg)
         cg_expr(cg, arm.body)
         cg_emit(cg, ";\n")
+        cg_close_statement_scope(cg, scope)
     }
 }
 
@@ -2871,13 +3062,15 @@ cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
     tmp_scrut := fmt.tprintf("_qoz_ms_%d", next_tmp_id(cg))
     scrut_c := infer_expr_c_type(cg, m.scrutinee)
 
-    cg_emit(cg, "({ ")
+    // Capture the match's lowered C statements (scrutinee temp,
+    // optional push_root, result temp declaration, switch, pop_root)
+    // into pending_prologue so the enclosing C statement consumes just
+    // the result temporary in expression position.
+    start := len(cg.sb.buf)
+
     cg_emitf(cg, "%s %s = ", scrut_c, tmp_scrut)
     cg_expr(cg, m.scrutinee)
     cg_emit(cg, "; ")
-    // The statement-expression spans a single C expression so the
-    // function-scope cleanup attribute can't restore the shadow stack
-    // around tmp_scrut. Push explicitly on entry and pop on exit.
     pushed_scrut := cg_c_type_is_pointer(scrut_c)
     if pushed_scrut {
         cg_emitf(cg, "qoz_gc_push_root(&%s); ", tmp_scrut)
@@ -2905,20 +3098,28 @@ cg_emit_match_as_expression :: proc(cg: ^Codegen, m: ^Expr_Match) {
     if pushed_scrut {
         cg_emit(cg, "qoz_gc_pop_roots(1); ")
     }
-    cg_emitf(cg, "%s; ", tmp_res)
-    cg_emit(cg, "})")
+    cg_emit(cg, "\n")
+
+    captured := strings.clone(string(cg.sb.buf[start:]))
+    resize(&cg.sb.buf, start)
+    append(&cg.pending_prologue, captured)
+
+    cg_emit(cg, tmp_res)
 }
 
 cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: Match_Arm, result_tmp: string) {
     if _, is_wild := arm.pat.(^Pat_Wild); is_wild {
         cg_emit(cg, "default: { ")
+        scope := cg_open_statement_scope(cg)
         cg_emitf(cg, "%s = ", result_tmp)
         if blk, is_blk := arm.body.(^Expr_Block); is_blk {
             cg_emit_block_as_expr(cg, blk)
         } else {
             cg_expr(cg, arm.body)
         }
-        cg_emit(cg, "; break; } ")
+        cg_emit(cg, "; ")
+        cg_close_statement_scope(cg, scope)
+        cg_emit(cg, "break; } ")
         return
     }
     pat, ok := arm.pat.(^Pat_Variant)
@@ -2949,13 +3150,16 @@ cg_match_arm_expression :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, ar
         cg_emit_variant_bindings(cg, scrut, enum_name, variant_decl, pat)
     }
 
+    scope := cg_open_statement_scope(cg)
     cg_emitf(cg, "%s = ", result_tmp)
     if blk, is_blk := arm.body.(^Expr_Block); is_blk {
         cg_emit_block_as_expr(cg, blk)
     } else {
         cg_expr(cg, arm.body)
     }
-    cg_emit(cg, "; qoz_gc_shadow_set_top(_qoz_arm_g); break; } ")
+    cg_emit(cg, "; ")
+    cg_close_statement_scope(cg, scope)
+    cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_arm_g); break; } ")
 
     clear(&cg.locals)
     for k, val in saved_locals do cg.locals[k] = val
@@ -2979,7 +3183,7 @@ cg_match_as_return :: proc(cg: ^Codegen, m: ^Expr_Match) {
     }
     cg.indent_lvl -= 1
     cg_emit_indent(cg); cg_emit(cg, "}\n")
-    cg_emit_indent(cg); cg_emit(cg, "__builtin_unreachable();\n")
+    cg_emit_indent(cg); cg_emit(cg, "qoz_panic(QOZ_STR_LIT(\"unreachable: non-exhaustive match\"));\n")
 }
 
 cg_match_scrutinee_tag :: proc(cg: ^Codegen, scrut: Expr) {
@@ -3021,21 +3225,30 @@ enum_of_scrutinee :: proc(cg: ^Codegen, scrut: Expr) -> string {
     return ""
 }
 
+// Emit `qoz_gc_shadow_set_top(...); return <body>;` with a statement
+// scope so any prologue hoisted from <body> (a match-as-value, a
+// record-update, a block-as-value) lands above the return rather than
+// vanishing into expression position.
+cg_emit_arm_return :: proc(cg: ^Codegen, body: Expr) {
+    scope := cg_open_statement_scope(cg)
+    cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
+    cg_emit_indent(cg); cg_emit(cg, "return ")
+    if blk, is_blk := body.(^Expr_Block); is_blk {
+        cg_emit_block_as_expr(cg, blk)
+    } else {
+        cg_expr(cg, body)
+    }
+    cg_emit(cg, ";\n")
+    cg_close_statement_scope(cg, scope)
+}
+
 cg_match_arm_return :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: Match_Arm) {
     if _, is_wild := arm.pat.(^Pat_Wild); is_wild {
         cg_emit_indent(cg)
         cg_emit(cg, "default: ")
         cg_emit(cg, "{\n")
         cg.indent_lvl += 1
-        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
-        cg_emit_indent(cg)
-        cg_emit(cg, "return ")
-        if blk, is_blk := arm.body.(^Expr_Block); is_blk {
-            cg_emit_block_as_expr(cg, blk)
-        } else {
-            cg_expr(cg, arm.body)
-        }
-        cg_emit(cg, ";\n")
+        cg_emit_arm_return(cg, arm.body)
         cg.indent_lvl -= 1
         cg_emit_indent(cg); cg_emit(cg, "}\n")
         return
@@ -3073,17 +3286,11 @@ cg_match_arm_return :: proc(cg: ^Codegen, scrut: Expr, enum_name: string, arm: M
         cg_expr(cg, arm.guard)
         cg_emit(cg, ") {\n")
         cg.indent_lvl += 1
-        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
-        cg_emit_indent(cg); cg_emit(cg, "return ")
-        cg_expr(cg, arm.body)
-        cg_emit(cg, ";\n")
+        cg_emit_arm_return(cg, arm.body)
         cg.indent_lvl -= 1
         cg_emit_indent(cg); cg_emit(cg, "} else { break; }\n")
     } else {
-        cg_emit_indent(cg); cg_emit(cg, "qoz_gc_shadow_set_top(_qoz_shadow_guard);\n")
-        cg_emit_indent(cg); cg_emit(cg, "return ")
-        cg_expr(cg, arm.body)
-        cg_emit(cg, ";\n")
+        cg_emit_arm_return(cg, arm.body)
     }
 
     clear(&cg.locals)
@@ -3214,17 +3421,27 @@ cg_fmt_format :: proc(cg: ^Codegen, args: []Expr) {
     }
 
     sb := fmt.tprintf("_qoz_sb_%d", next_tmp_id(cg))
-    cg_emit(cg, "({ ")
-    cg_emitf(cg, "qoz_strbuf %s; qoz_strbuf_init(&%s); ", sb, sb)
+    tmp_str := fmt.tprintf("_qoz_fmt_%d", next_tmp_id(cg))
+    // Hoist the strbuf init, per-segment appends, and finish call;
+    // expose only the finished qoz_string as a temp in expression
+    // position.
+    cap_start := len(cg.sb.buf)
+    cg_emitf(cg, "qoz_strbuf %s;\n", sb)
+    cg_emit_indent(cg); cg_emitf(cg, "qoz_strbuf_init(&%s);\n", sb)
     for seg, idx in segments {
         if len(seg) > 0 {
-            cg_emitf(cg, "qoz_strbuf_append_str(&%s, QOZ_STR_LIT(\"%s\")); ", sb, seg)
+            cg_emit_indent(cg); cg_emitf(cg, "qoz_strbuf_append_str(&%s, QOZ_STR_LIT(\"%s\"));\n", sb, seg)
         }
         if idx < arg_count {
-            cg_fmt_append_arg(cg, sb, args[idx+1])
+            cg_emit_indent(cg); cg_fmt_append_arg(cg, sb, args[idx+1])
+            cg_emit(cg, "\n")
         }
     }
-    cg_emitf(cg, "qoz_strbuf_finish(&%s); })", sb)
+    cg_emit_indent(cg); cg_emitf(cg, "qoz_string %s = qoz_strbuf_finish(&%s);\n", tmp_str, sb)
+    captured := strings.clone(string(cg.sb.buf[cap_start:]))
+    resize(&cg.sb.buf, cap_start)
+    append(&cg.pending_prologue, captured)
+    cg_emit(cg, tmp_str)
 }
 
 cg_fmt_append_arg :: proc(cg: ^Codegen, sb: string, e: Expr) {
@@ -3702,6 +3919,7 @@ cg_emit_closure_fn_bodies :: proc(cg: ^Codegen) {
             cg.locals[cap.name] = cap.c_type
         }
 
+        ret_scope := cg_open_statement_scope(cg)
         cg_emit_indent(cg)
         cg_emit(cg, "return ")
         if len(info.captures) > 0 {
@@ -3710,6 +3928,7 @@ cg_emit_closure_fn_bodies :: proc(cg: ^Codegen) {
             cg_expr(cg, info.body)
         }
         cg_emit(cg, ";\n")
+        cg_close_statement_scope(cg, ret_scope)
 
         cg.locals = saved_locals
         cg.indent_lvl = 0

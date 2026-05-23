@@ -16,9 +16,9 @@ let area_of(s: Shape): f64 = {
 }
 
 let main() = {
-    fmt.println("circle 2:", area_of(Circle(2.0)))
-    fmt.println("square 3:", area_of(Square(3.0)))
-    fmt.println("origin :", area_of(Origin))
+    fmt.println("circle 2: {area_of(Circle(2.0))}")
+    fmt.println("square 3: {area_of(Square(3.0))}")
+    fmt.println("origin : {area_of(Origin)}")
 
     let labels: Vec<string> = ["a", "b", "c"]
     var s: i64 = 0
@@ -27,5 +27,5 @@ let main() = {
     | Square(_) -> 2
     | Origin    -> 3
     }
-    fmt.println("total:", total)
+    fmt.println("total: {total}")
 }
