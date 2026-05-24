@@ -1,0 +1,5 @@
+// Negative: calling an undefined function is rejected.
+
+let main(): i64 = {
+    nope(42)
+}

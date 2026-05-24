@@ -1292,11 +1292,14 @@ let emit_expr(e: *Emitter, ex: Expr) = {
             }
         }
         push(e, unary_c_op(op))
-        // Wrap a binary operand in parens so the C unary operator does
-        // not steal precedence: `!(a == b)` must not lower to `!a == b`,
-        // which clang would reinterpret as `(!a) == b`.
+        // Parenthesise the operand when omitting parens would change
+        // the C parse. A binary operand needs parens so `!(a == b)`
+        // does not become `!a == b`. A unary operand needs them so
+        // `-(-x)` and `!(!x)` do not collapse to `--x` / `!!x` which
+        // clang reads as predecrement / nested logical-not (the
+        // latter is harmless but the former is not).
         match rhs {
-        | EBinary(_, _, _, _) -> {
+        | EBinary(_, _, _, _) | EUnary(_, _, _) | EAssign(_, _, _, _) | ECast(_, _, _) -> {
             push(e, "(")
             emit_expr(e, rhs)
             push(e, ")")
@@ -1390,7 +1393,22 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | ETuple(sp, elems)            -> emit_tuple_lit(e, sp, elems)
     | ERecord(_, te, fields)       -> emit_record_lit_with_hint(e, te, fields, te)
     | EClosure(sp, cps, ret, body) -> emit_closure_lifted(e, sp, cps, ret, body)
-    | EIf(_, c, t, f)              -> { push(e, "("); emit_expr(e, c); push(e, " ? "); emit_expr(e, t); push(e, " : "); emit_expr(e, f); push(e, ")") }
+    | EIf(sp, c, t, f)             -> {
+        // Bare `if` with no else parses with a nil else branch. A nil
+        // ternary arm forces clang to pick a type which usually fails;
+        // reject the value-position use and direct the user to a
+        // statement-position pattern instead.
+        if is_nil_expr(f) {
+            let _ = emit_die(sp, "if without else cannot appear in value position; wrap in a block or add an else branch")
+        }
+        push(e, "(")
+        emit_expr(e, c)
+        push(e, " ? ")
+        emit_expr(e, t)
+        push(e, " : ")
+        emit_expr(e, f)
+        push(e, ")")
+    }
     | EMatch(span, scrut, arms)    -> {
         let saved = e.match_hint
         e.match_hint = TEUnit(Span { file: "", line: 0, col: 0 })

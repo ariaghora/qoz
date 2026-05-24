@@ -1,0 +1,6 @@
+// Negative: while condition must be bool.
+
+let main(): i64 = {
+    while 1 { }
+    0
+}

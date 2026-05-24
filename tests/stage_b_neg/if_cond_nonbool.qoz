@@ -1,0 +1,5 @@
+// Negative: if condition must be bool.
+
+let main(): i64 = {
+    if 42 { 1 } else { 0 }
+}

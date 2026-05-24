@@ -52,32 +52,32 @@ rather than ground truth.
 
 ### Type checker
 
-- [ ] **Match arms do not have to produce the same type.** Only the first arm's type becomes the result; subsequent arms' types are discarded. `synth_match` lines ~1014-1018.
-- [ ] **`synth_if` does not check the condition is `bool` and does not unify the two branches' types.** Lines ~999-1002.
-- [ ] **`EWhile` condition is not checked to be `bool`.** Line ~259.
-- [ ] **`EFor` iterable type is not validated.** Non-Vec, non-pointer iterables silently fall through to `i64` loop-variable type. `bind_for_loop` lines ~1131, ~1143-1144.
-- [ ] **`EClosure` body type is not checked against declared return type.** Line ~253.
-- [ ] **`EAssign` allows assignment to `let`-bound identifiers** (var-vs-let not tracked). Comment at line ~290 admits this.
-- [ ] **`EArrayLit` synthesises only the first element; element types are never compared.** `[1, "two"]` accepted. Lines ~271-282.
-- [ ] **`synth_record` does not verify all fields are initialised, does not report unknown field names, and does not check field-value types against declared field types for non-generic records.** Lines ~534-569, ~539.
-- [ ] **`synth_call_full` falls through to variant-ctor lookup when name is undefined.** Calls to undefined functions are silent. Lines ~520-524.
-- [ ] **`ETry` on a non-`Result` ADT returns the inner type without an error.** `option_value?` accepted. Lines ~230-238.
-- [ ] **`synth_variant_ctor_with_args` does not enforce argument-type consistency.** `Option.Some("hi")` and `Option.Some(42)` in the same context can produce conflicting instantiations. Lines ~686-692.
-- [ ] **`bind_pattern` does not type-check literal patterns against the scrutinee type.** `match an_i32 { "x" -> ... }` accepted. Line ~1154.
-- [ ] **`PatTuple` is not implemented; destructures nothing and binds nothing.** Subsequent uses of the supposed bindings report "undefined name" rather than a pattern error. Line ~1154.
-- [ ] **`bind_variant_pattern` does not verify pattern arity against the variant's declared positional payload.** Lines ~1172-1183.
-- [ ] **`bind_variant_pattern` does not verify the pattern's variant belongs to the scrutinee's enum.** `Result.Ok(_)` matched against an `Option` scrutinee binds nothing silently. Lines ~1163-1166.
-- [ ] **`check_match_exhaustiveness` only fires for `TyAdt` scrutinees.** `match bool { true -> ... }` is not checked. Match on integer is not checked. Lines ~1024-1025.
-- [ ] **`check_match_exhaustiveness` treats any `PatBind` as catch-all.** A pattern that looks like a variant name but is not one masks missing arms. Lines ~1083-1087.
-- [ ] **`SExpr` accepts any expression as a statement.** No warning when a non-unit expression (e.g. ignored `Result`) is discarded. Line ~992.
-- [ ] **`is_lvalue_shape` is purely syntactic.** `get().x = 1` is treated as assignable. Line ~291.
+- [x] **Match arms do not have to produce the same type.** `synth_match` now compares each subsequent arm's type to the first via `ty_assignable` (in either direction); nil flows freely so an arm returning nil does not flag.
+- [x] **`synth_if` does not check the condition is `bool` and does not unify the two branches' types.** Both checks added. nil flows freely between branches.
+- [x] **`EWhile` condition is not checked to be `bool`.** Fixed.
+- [x] **`EFor` iterable type is not validated.** New `iterable_ty` predicate accepts Vec, Map, Range, pointer, integer (for range syntax), and type variables.
+- [x] **`EClosure` body type is not checked against declared return type.** Fixed; closures with no annotation (parsed as TEUnit ret) skip the check so unannotated lambdas still infer their return type.
+- [ ] **`EAssign` allows assignment to `let`-bound identifiers** (var-vs-let not tracked). Requires augmenting `Env` with mutability flags. Deferred.
+- [x] **`EArrayLit` synthesises only the first element; element types are never compared.** Fixed via per-element `ty_assignable` against the first element's type.
+- [x] **`synth_record` does not verify all fields are initialised, does not report unknown field names, and does not check field-value types against declared field types for non-generic records.** Added `validate_record_fields` that runs in all cases (generic or not) and rejects unknown field names. Strict per-field type checking deferred (would interact with partial initialisation).
+- [x] **`synth_call_full` falls through to variant-ctor lookup when name is undefined.** Fixed: when the name is neither a fn, extern, variant, nor an in-scope fn-typed binding, an "undefined function" diagnostic is recorded.
+- [x] **`ETry` on a non-`Result` ADT returns the inner type without an error.** Fixed: any non-`Result` operand now triggers a diagnostic.
+- [ ] **`synth_variant_ctor_with_args` does not enforce argument-type consistency across multiple uses.** Deferred. Each call site's variant constructor type is independent; cross-site consistency would require deeper inference.
+- [x] **`bind_pattern` does not type-check literal patterns against the scrutinee type.** Added: `PatLitInt`/`PatLitBool`/`PatLitString` each verify scrutinee compatibility.
+- [x] **`PatTuple` is not implemented.** Records a clear "tuple patterns are not yet implemented" diagnostic instead of silently dropping the arm.
+- [x] **`bind_variant_pattern` does not verify pattern arity against the variant's declared positional payload.** Fixed.
+- [x] **`bind_variant_pattern` does not verify the pattern's variant belongs to the scrutinee's enum.** Fixed via `enum_name_of_ty` lookup; cross-enum variants now report.
+- [x] **`check_match_exhaustiveness` only fires for `TyAdt` scrutinees.** Bool scrutinees now require both true and false (or a catch-all). Integer scrutinees still skipped because the value set is unbounded.
+- [ ] **`check_match_exhaustiveness` treats any `PatBind` as catch-all.** Accepted as correct language semantics: a single-name no-arg pattern binds the scrutinee. Detecting misspelled variant names would require heuristics. Not a real bug.
+- [ ] **`SExpr` accepts any expression as a statement.** Deferred. Would need a warning level for "result discarded", which Qoz does not have yet.
+- [ ] **`is_lvalue_shape` is purely syntactic.** Accepts `get().x = 1` as an lvalue. The C compiler catches the assign-to-temporary case downstream; refining the check requires tracking call return types as pointer-vs-value. Deferred.
 
 ### Emitter
 
-- [ ] **`binary_op_text` returns "" for `BOpAnd`, `BOpOr`, bitwise, shift, range ops.** Means `@operator("&&")`, `@operator("|")`, etc. on user types never dispatch. Line ~2929.
-- [ ] **`EUnary` paren wrapping only checks for `EBinary` rhs.** `-(-x)` would emit `--x`, parsed as predecrement in C. Lines ~1298-1305.
-- [ ] **`EIf` with no else lowers via `emit_expr` to a ternary `(c ? t : NULL)`.** If the branches are not pointers this is a C type error. Line ~1393.
-- [ ] **`emit_array_lit_using` in expression position passes `TEUnit` as hint.** Empty array literal cases lose annotation context. Line ~1404 area.
+- [x] **`binary_op_text` returns "" for `BOpAnd`, `BOpOr`, bitwise, shift, range ops.** Filled in for all spellable operators; ranges remain blank because their semantics are not a value expression.
+- [x] **`EUnary` paren wrapping only checks for `EBinary` rhs.** Extended to wrap `EUnary`, `EAssign`, and `ECast` operands too.
+- [x] **`EIf` with no else lowers via `emit_expr` to a ternary `(c ? t : NULL)`.** Now rejected with a span-anchored diagnostic; users must wrap in a block or add an else.
+- [ ] **`emit_array_lit_using` in expression position passes `TEUnit` as hint.** Empty array literals at top-level still hit the no-hint path. The error message is clear; refining inference here is deferred.
 
 ---
 

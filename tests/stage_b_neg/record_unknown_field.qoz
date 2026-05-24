@@ -1,0 +1,8 @@
+// Negative: record literal with an unknown field name is rejected.
+
+type Pair = { x: i64, y: i64 }
+
+let main(): i64 = {
+    let p = Pair { x: 1, y: 2, z: 3 }
+    p.x
+}

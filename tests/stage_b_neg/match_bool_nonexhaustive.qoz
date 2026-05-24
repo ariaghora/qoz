@@ -1,0 +1,8 @@
+// Negative: bool match must cover both true and false.
+
+let main(): i64 = {
+    let b = true
+    match b {
+    | true -> 1
+    }
+}

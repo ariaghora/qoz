@@ -1,0 +1,12 @@
+// Negative: match arms must agree on a single type.
+
+type Color = | Red | Green
+
+let main(): i64 = {
+    let c = Color.Red
+    let x = match c {
+    | Red   -> 1
+    | Green -> "green"
+    }
+    0
+}

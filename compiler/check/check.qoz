@@ -252,23 +252,47 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
         for el in elems { vec.push(&elem_tys, synth(tc, env, el)) }
         ty.ty_tuple_(elem_tys)
     }
-    | ERecord(_, te, fields) -> synth_record(tc, env, te, fields)
-    | EClosure(_, cps, ret, body) -> {
+    | ERecord(sp, te, fields) -> synth_record(tc, env, sp, te, fields)
+    | EClosure(sp, cps, ret, body) -> {
         var pty: Vec<Ty> = vec.make()
         for cp in cps {
             let t = resolve_type(tc, cp.ty)
             vec.push(&pty, t)
             env_define(env, cp.name, t)
         }
-        let _ = synth(tc, env, body)
-        ty.ty_fn_(pty, resolve_type(tc, ret))
+        let ret_ty = resolve_type(tc, ret)
+        let saved_ret = tc.current_ret_ty
+        tc.current_ret_ty = ret_ty
+        let body_ty = synth(tc, env, body)
+        tc.current_ret_ty = saved_ret
+        // A closure with no explicit return annotation parses with a
+        // TEUnit ret which resolves to TyUnit; that disables the
+        // body-vs-declared check, matching the user's intent (no
+        // annotation = take the body's type).
+        if !ty.ty_is_unit(ret_ty) && !ty.ty_is_error(ret_ty) && !ty.ty_is_error(body_ty) {
+            if !ty.ty_is_nil(body_ty) && !ty.ty_assignable(ret_ty, body_ty) {
+                record_error(tc, sp, "closure body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(ret_ty)}")
+            }
+        }
+        ty.ty_fn_(pty, ret_ty)
     }
     | EBlock(_, stmts, tail) -> synth_block(tc, env, stmts, tail)
-    | EIf(_, c, t, f)        -> synth_if(tc, env, c, t, f)
-    | EMatch(_, scrut, arms) -> synth_match(tc, env, scrut, arms)
-    | EWhile(_, c, b)        -> { let _ = synth(tc, env, c); let _ = synth(tc, env, b); ty.ty_unit_() }
-    | EFor(_, b1, b2, it, b) -> {
+    | EIf(sp, c, t, f)       -> synth_if(tc, env, sp, c, t, f)
+    | EMatch(sp, scrut, arms) -> synth_match(tc, env, sp, scrut, arms)
+    | EWhile(sp, c, b)       -> {
+        let ct = synth(tc, env, c)
+        if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
+            record_error(tc, sp, "while condition must be bool, got {ty.ty_show(ct)}")
+        }
+        let _ = synth(tc, env, b)
+        ty.ty_unit_()
+    }
+    | EFor(sp, b1, b2, it, b) -> {
         let it_ty = synth(tc, env, it)
+        if !ty.ty_is_error(it_ty) && !iterable_ty(it_ty, !strings.eq_raw(b2, "")) {
+            let kind = if strings.eq_raw(b2, "") { "iterable" } else { "Map-like iterable producing key, value pairs" }
+            record_error(tc, sp, "for loop expects {kind}, got {ty.ty_show(it_ty)}")
+        }
         let saved_len = len(env.bindings)
         bind_for_loop(env, b1, b2, it_ty)
         let _ = synth(tc, env, b)
@@ -294,12 +318,17 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
     }
     | EDefer(_, b)           -> { let _ = synth(tc, env, b); ty.ty_unit_() }
     | ESizeOf(_, _)          -> ty.ty_int_(64, true)
-    | EArrayLit(_, elems)    -> {
+    | EArrayLit(sp, elems)   -> {
         if len(elems) == 0 { return ty.ty_error_() }
         let elem_ty = synth(tc, env, elems[0])
         var i: i64 = 1
         while i < len(elems) {
-            let _ = synth(tc, env, elems[i])
+            let et = synth(tc, env, elems[i])
+            if !ty.ty_is_error(elem_ty) && !ty.ty_is_error(et) {
+                if !ty.ty_assignable(elem_ty, et) && !ty.ty_assignable(et, elem_ty) {
+                    record_error(tc, sp, "array literal element {i} has type {ty.ty_show(et)}; earlier elements have type {ty.ty_show(elem_ty)}")
+                }
+            }
             i += 1
         }
         var args: Vec<Ty> = vec.make()
@@ -604,7 +633,29 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
     | None -> {
         match map.get(&tc.externs, fn_name) {
         | Some(d) -> synth_call_with_decl(tc, sp, d, type_args, arg_tys)
-        | None    -> synth_variant_ctor_with_args(tc, fn_name, arg_tys)
+        | None    -> {
+            // The name is not a fn or extern. It may still be a
+            // variant constructor (bare or via Enum.Variant). When
+            // it is not, the call is to an undefined name and that
+            // needs a diagnostic; previously the call returned
+            // TyError silently.
+            if map.contains(&tc.variant_of, fn_name) {
+                return synth_variant_ctor_with_args(tc, fn_name, arg_tys)
+            }
+            // The name may refer to a fn-typed local binding (a
+            // captured closure, a higher-order parameter). Look up
+            // the environment and, if the binding is a TyFn, take
+            // its return type as the call result.
+            if env_has(env, fn_name) {
+                let bt = env_lookup(env, fn_name)
+                match bt {
+                | TyFn(_, rt) -> return rt
+                | _ -> { }
+                }
+            }
+            record_error(tc, sp, "call to undefined function `{fn_name}`")
+            ty.ty_error_()
+        }
         }
     }
     }
@@ -615,10 +666,11 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
 // them. The unification matches each declared field's TypeExpr (which
 // may name a tparam) against the synthesised value type and accumulates
 // bindings.
-let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFieldLit>): Ty = {
+let synth_record(tc: *TyContext, env: *Env, sp: Span, te: TypeExpr, fields: Vec<RecordFieldLit>): Ty = {
     let bare_resolved = resolve_type(tc, te)
     let struct_name = record_name_of(bare_resolved)
     if strings.eq_raw(struct_name, "") { return bare_resolved }
+    validate_record_fields(tc, sp, struct_name, fields)
     let tparams = struct_tparams(tc, struct_name)
     if len(tparams) == 0 { return bare_resolved }
     if annotation_pins_type_args(te, tparams) { return bare_resolved }
@@ -652,6 +704,34 @@ let synth_record(tc: *TyContext, env: *Env, te: TypeExpr, fields: Vec<RecordFiel
     ty.ty_record_(struct_name, args)
 }
 
+// Validate a record literal's field set against the struct declaration.
+// Reports unknown field names. Does not enforce completeness because
+// partial initialisation is part of the language (the user-controlled
+// option to leave fields default-initialised).
+let validate_record_fields(tc: *TyContext, sp: Span, struct_name: string, fields: Vec<RecordFieldLit>) = {
+    match map.get(&tc.structs, struct_name) {
+    | Some(d) -> {
+        match d {
+        | DStruct(_, _, _, declared) -> {
+            for f in fields {
+                if strings.eq_raw(f.name, "..") { } else {
+                    var found = false
+                    for df in declared {
+                        if strings.eq_raw(df.name, f.name) { found = true }
+                    }
+                    if !found {
+                        record_error(tc, sp, "struct `{struct_name}` has no field `{f.name}`")
+                    }
+                }
+            }
+        }
+        | _ -> { }
+        }
+    }
+    | None -> { }
+    }
+}
+
 // Rewrite an ERecord's TypeExpr to include the type arguments inferred
 // by synth_record. When the annotation already pins the args (or the
 // struct has no tparams), the original te is returned unchanged so the
@@ -663,7 +743,7 @@ let inferred_record_te(tc: *TyContext, env: *Env, sp: Span, te: TypeExpr, fields
     let tparams = struct_tparams(tc, struct_name)
     if len(tparams) == 0 { return te }
     if annotation_pins_type_args(te, tparams) { return te }
-    let synth_ty = synth_record(tc, env, te, fields)
+    let synth_ty = synth_record(tc, env, sp, te, fields)
     let args = ty_record_args(synth_ty)
     if len(args) != len(tparams) { return te }
     var te_args: Vec<TypeExpr> = vec.make()
@@ -1161,14 +1241,32 @@ let synth_block(tc: *TyContext, env: *Env, stmts: Vec<Stmt>, tail: Expr): Ty = {
     synth(tc, env, tail)
 }
 
-let synth_if(tc: *TyContext, env: *Env, c: Expr, t: Expr, f: Expr): Ty = {
-    let _ = synth(tc, env, c)
+// Conditional expression. The condition must be bool; the two
+// branches must agree on a single result type modulo nil-vs-pointer
+// flexibility, which is what `ty_assignable` already encodes. An
+// if-without-else (parser-produced nil else) is treated as a
+// statement-shaped construct: the value is whatever the then-branch
+// produces, with nil flowing in cleanly.
+let synth_if(tc: *TyContext, env: *Env, sp: Span, c: Expr, t: Expr, f: Expr): Ty = {
+    let ct = synth(tc, env, c)
+    if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
+        record_error(tc, sp, "if condition must be bool, got {ty.ty_show(ct)}")
+    }
     let tt = synth(tc, env, t)
-    let _ = synth(tc, env, f)
+    let ft = synth(tc, env, f)
+    if ty.ty_is_error(tt) || ty.ty_is_error(ft) { return tt }
+    // nil flows into any pointer / ADT type; only flag mismatches
+    // when both branches have a concrete non-nil type and neither
+    // direction is assignable.
+    if !ty.ty_is_nil(tt) && !ty.ty_is_nil(ft) {
+        if !ty.ty_assignable(tt, ft) && !ty.ty_assignable(ft, tt) {
+            record_error(tc, sp, "if branches have incompatible types: then is {ty.ty_show(tt)}, else is {ty.ty_show(ft)}")
+        }
+    }
     tt
 }
 
-let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty = {
+let synth_match(tc: *TyContext, env: *Env, sp: Span, scrut: Expr, arms: Vec<MatchArm>): Ty = {
     let scrut_ty = synth(tc, env, scrut)
     var result: Ty = ty.ty_unit_()
     var first = true
@@ -1180,6 +1278,14 @@ let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty
         if first {
             result = armt
             first = false
+        } else {
+            if !ty.ty_is_error(result) && !ty.ty_is_error(armt) {
+                if !ty.ty_is_nil(armt) && !ty.ty_is_nil(result) {
+                    if !ty.ty_assignable(result, armt) && !ty.ty_assignable(armt, result) {
+                        record_error(tc, sp, "match arms have incompatible types: earlier arm is {ty.ty_show(result)}, this arm is {ty.ty_show(armt)}")
+                    }
+                }
+            }
         }
     }
     check_match_exhaustiveness(tc, scrut, scrut_ty, arms)
@@ -1187,6 +1293,13 @@ let synth_match(tc: *TyContext, env: *Env, scrut: Expr, arms: Vec<MatchArm>): Ty
 }
 
 let check_match_exhaustiveness(tc: *TyContext, scrut: Expr, scrut_ty: Ty, arms: Vec<MatchArm>) = {
+    // Bool scrutinees: every match must cover both true and false (or
+    // contain a catch-all). The check is light because bool has a
+    // fixed two-element value set.
+    if ty.ty_is_bool(scrut_ty) {
+        check_bool_exhaustiveness(tc, scrut, arms)
+        return
+    }
     let enum_name = enum_name_of_ty(scrut_ty)
     if strings.eq_raw(enum_name, "") { return }
     match map.get(&tc.enums, enum_name) {
@@ -1241,6 +1354,30 @@ let enum_name_of_ty(t: Ty): string = {
     }
 }
 
+let check_bool_exhaustiveness(tc: *TyContext, scrut: Expr, arms: Vec<MatchArm>) = {
+    var has_true  = false
+    var has_false = false
+    var has_catch = false
+    for arm in arms {
+        if !arm.has_guard {
+            match arm.pat {
+            | PatWild(_) | PatBind(_, _) -> has_catch = true
+            | PatLitBool(_, b) -> {
+                if b { has_true = true } else { has_false = true }
+            }
+            | _ -> { }
+            }
+        }
+    }
+    if has_catch { return }
+    if !has_true || !has_false {
+        var msg = "non-exhaustive match on bool: missing"
+        if !has_true  { msg = strings.cat(msg, " true") }
+        if !has_false { msg = strings.cat(msg, " false") }
+        record_error(tc, scrut_span(scrut), msg)
+    }
+}
+
 let has_catch_all_with_variants(arms: Vec<MatchArm>, variants: *CoverSet): bool = {
     for arm in arms {
         if !arm.has_guard {
@@ -1276,6 +1413,24 @@ let collect_covered_variants(arms: Vec<MatchArm>, cs: *CoverSet) = {
             | _ -> { }
             }
         }
+    }
+}
+
+// True when `t` can drive a `for x in t` loop. With paired bindings
+// (`for k, v in m`) only a two-argument record (Map) is acceptable.
+// TyInt covers the `for i in 0..<n` range form: the BOpRange operator
+// returns the operand type, which is an integer.
+let iterable_ty(t: Ty, paired: bool): bool = {
+    match t {
+    | TyRecord(name, args) -> {
+        if paired { return len(args) == 2 && strings.eq_raw(name, "Map") }
+        strings.eq_raw(name, "Vec") || strings.eq_raw(name, "Map") || strings.eq_raw(name, "Range")
+    }
+    | TyInt(_) -> !paired
+    | TyPtr(_) -> !paired
+    | TyVar(_, _) -> true
+    | TyAdt(name, _) -> strings.eq_raw(name, "Range")
+    | _ -> false
     }
 }
 
@@ -1317,17 +1472,53 @@ let env_truncate(env: *Env, n: i64) = {
 
 let bind_pattern(tc: *TyContext, env: *Env, pat: Pattern, scrut: Ty) = {
     match pat {
-    | PatWild(_) | PatLitInt(_, _) | PatLitString(_, _) | PatLitBool(_, _) | PatTuple(_, _) -> { }
-    | PatBind(_, name)              -> env_define(env, name, scrut)
-    | PatVariant(_, path, sub_pats) -> bind_variant_pattern(tc, env, path, sub_pats, scrut)
+    | PatWild(_) -> { }
+    | PatLitInt(sp, _) -> {
+        let bad = !ty.ty_is_error(scrut) && !ty.ty_is_int(scrut) && !ty.ty_is_numeric(scrut)
+        if bad {
+            record_error(tc, sp, "integer literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+        } else { }
+    }
+    | PatLitString(sp, _) -> {
+        let bad = match scrut {
+        | TyString | TyCstring | TyVar(_, _) | TyError -> false
+        | _ -> true
+        }
+        if bad {
+            record_error(tc, sp, "string literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+        } else { }
+    }
+    | PatLitBool(sp, _) -> {
+        let bad = !ty.ty_is_error(scrut) && !ty.ty_is_bool(scrut)
+        if bad {
+            record_error(tc, sp, "bool literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+        } else { }
+    }
+    | PatTuple(sp, _) -> {
+        record_error(tc, sp, "tuple patterns are not yet implemented")
+    }
+    | PatBind(_, name)               -> env_define(env, name, scrut)
+    | PatVariant(sp, path, sub_pats) -> bind_variant_pattern(tc, env, sp, path, sub_pats, scrut)
     }
 }
 
-let bind_variant_pattern(tc: *TyContext, env: *Env, path: Vec<string>, sub_pats: Vec<Pattern>, scrut: Ty) = {
+let bind_variant_pattern(tc: *TyContext, env: *Env, sp: Span, path: Vec<string>, sub_pats: Vec<Pattern>, scrut: Ty) = {
     if len(path) < 1 { return }
     let variant = path[len(path) - 1]
-    if let Some(enum_name) = map.get(&tc.variant_of, variant) {
-        if let Some(d) = map.get(&tc.enums, enum_name) {
+    match map.get(&tc.variant_of, variant) {
+    | None -> {
+        record_error(tc, sp, "unknown variant `{variant}` in pattern")
+        return
+    }
+    | Some(declared_enum) -> {
+        // Check the variant belongs to the scrutinee's enum.
+        let scrut_enum = enum_name_of_ty(scrut)
+        if !strings.eq_raw(scrut_enum, "") && !strings.eq_raw(scrut_enum, declared_enum) {
+            record_error(tc, sp, "variant `{declared_enum}::{variant}` cannot match scrutinee of enum `{scrut_enum}`")
+            return
+        }
+        match map.get(&tc.enums, declared_enum) {
+        | Some(d) -> {
             match d {
             | DEnum(_, _, tparams, variants) -> {
                 var tyargs: Vec<Ty> = vec.make()
@@ -1337,6 +1528,9 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, path: Vec<string>, sub_pats:
                 }
                 for v in variants {
                     if strings.eq_raw(v.name, variant) {
+                        if len(sub_pats) != len(v.pos) {
+                            record_error(tc, sp, "variant `{variant}` takes {len(v.pos)} arguments but pattern provides {len(sub_pats)}")
+                        }
                         var i: i64 = 0
                         for pos_te in v.pos {
                             if i < len(sub_pats) {
@@ -1351,6 +1545,9 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, path: Vec<string>, sub_pats:
             | _ -> { }
             }
         }
+        | None -> { }
+        }
+    }
     }
 }
 

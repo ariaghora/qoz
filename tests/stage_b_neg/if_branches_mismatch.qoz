@@ -1,0 +1,6 @@
+// Negative: if branches must agree on a single type.
+
+let main(): i64 = {
+    let x = if true { 1 } else { "two" }
+    0
+}
