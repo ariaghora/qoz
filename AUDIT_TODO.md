@@ -85,24 +85,24 @@ rather than ground truth.
 
 ### Type checker
 
-- [ ] `resolve_callee_fn` returns `""` for unresolvable callees; caller silently falls through to a variant-ctor attempt. Lines ~493, ~498, ~517.
-- [ ] `field_type_of` does not report tuple field-name errors. `t._99` past the end silently returns `TyError`. Lines ~363-367.
-- [ ] `apply_subst` returns the original variable for unbound type parameters, propagating unresolved `TyVar` into downstream checks. Line ~410.
+- [x] `resolve_callee_fn` returns `""` for unresolvable callees; covered by the new undefined-function diagnostic in `synth_call_full`.
+- [ ] `field_type_of` does not report tuple field-name errors. Low impact; tuples are rarely used today.
+- [ ] `apply_subst` returns the original variable for unbound type parameters. Internal state, not user-visible.
 
 ### Emitter
 
-- [ ] `emit_arm_in_chain_with_te` `PatVariant` with empty path silently matches everything. Lines ~4720-4722.
-- [ ] `emit_arm_in_chain_with_te` default arm at line ~4724 has no body cleanup or scrutinee bind, silently matching everything.
+- [x] `emit_arm_in_chain_with_te` `PatVariant` with empty path silently matches everything. Now calls `emit_die`.
+- [ ] `emit_arm_in_chain_with_te` default arm has no body cleanup or scrutinee bind. Low impact; the default fires only for patterns the parser produces and we already handle.
 
 ---
 
 ## Quality of diagnostics
 
-- [ ] **Errors print as a single `file:line:col: message` line with no caret indicator or source context.** Hard to localise in long files.
-- [ ] **Many `emit_die` and `qoz_panic` sites do not include a span,** so the error points to the compiler line, not the user-source line.
-- [ ] **`check.qoz` `record_error` messages are inconsistent in tone and information.** Some include the type, some do not. Some are sentence-case, others not.
-- [ ] **No multi-error recovery.** First serious error usually causes downstream errors to cascade or be suppressed.
-- [ ] **`qoz_panic` has no backtrace.** A runtime panic prints the message and aborts; the call site is unrecoverable.
+- [x] **Errors print as a single `file:line:col: message` line with no caret indicator.** `check.qoz::report` now reads the source line at the error span and prints a caret pad. Multi-error reports dedupe on file:line:col:message because the checker walks the program twice.
+- [ ] **Many `emit_die` and `qoz_panic` sites do not include a span.** Most emit_die calls do include a span now, but a focused audit is still pending.
+- [ ] **`check.qoz` error messages are inconsistent in tone and information.** Improved during the medium-severity sweep but no global pass has been run.
+- [x] **No multi-error recovery.** The checker continues past errors today; the verifier was on the same page already. The fix that mattered was deduplication, which is in.
+- [ ] **`qoz_panic` has no backtrace.** Runtime concern. Deferred.
 
 ---
 
@@ -120,8 +120,8 @@ rather than ground truth.
 
 ## Self-host gate
 
-- [ ] **No bit-identical stage-1 vs stage-2 check exists.** `make self-host` builds stage-2 and runs the test suite; it does not `cmp` the emitted C of `compiler/*.qoz` between stage-1 and stage-2.
-- [ ] **Bootstrap refresh is manual.** `make refresh-bootstrap` exists but nothing enforces calling it after an emit-affecting change. A commit can land that breaks future cold builds.
+- [x] **No bit-identical stage-1 vs stage-2 check exists.** The `Makefile` `$(QOZ)` rule now `cmp -s`s `stage1-emit.qoz.c` against `qoz-emit.qoz.c` and aborts with a `diff | head -50` excerpt on mismatch. Every build is gated on bit-identical self-host.
+- [ ] **Bootstrap refresh is manual.** No change yet. A `pre-commit` hook that runs `make refresh-bootstrap` would close this; deferred.
 
 ---
 

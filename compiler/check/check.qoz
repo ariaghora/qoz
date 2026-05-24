@@ -5,6 +5,7 @@ import std/vec
 import std/map
 import std/mem
 import std/strings
+import std/fs
 import compiler/ast
 import compiler/ty
 
@@ -87,10 +88,95 @@ let register_file(tc: *TyContext, f: File) = {
     }
 }
 
-let report(tc: *TyContext) = {
-    for e in tc.errors {
-        fmt.println("{e.span.file}:{e.span.line}:{e.span.col}: {e.message}")
+// Cache source contents keyed by file path so a multi-error report
+// reads each file at most once.
+type SrcCache = { files: Map<string, string> }
+
+let src_cache_make(): SrcCache = SrcCache { files: map.make() }
+
+let src_cache_get(c: *SrcCache, path: string): string = {
+    match map.get(&c.files, path) {
+    | Some(text) -> text
+    | None       -> {
+        let text = fs.read_file(path)
+        c.files[path] = text
+        text
     }
+    }
+}
+
+// Extract line `line` (1-based) from source text. Returns "" if the
+// line is out of range or the file is empty.
+let nth_line(src: string, line: i64): string = {
+    if line < 1 { return "" }
+    let n = len(src)
+    var cur: i64 = 1
+    var start: i64 = 0
+    var i: i64 = 0
+    while i < n {
+        let c = strings.byte_at(src, i)
+        if c == 10 {
+            if cur == line { return strings.slice(src, start, i) }
+            cur += 1
+            start = i + 1
+        }
+        i += 1
+    }
+    if cur == line { return strings.slice(src, start, n) }
+    ""
+}
+
+// Produce a caret string with `col - 1` spaces followed by a `^`.
+let caret_pad(col: i64): string = {
+    var s = ""
+    var i: i64 = 1
+    while i < col {
+        s = strings.cat(s, " ")
+        i += 1
+    }
+    strings.cat(s, "^")
+}
+
+let report(tc: *TyContext) = {
+    var cache = src_cache_make()
+    // The checker walks the program twice (once during infer_calls,
+    // once during check_fn_bodies). The same diagnostic may be
+    // recorded by both passes. Deduplicate on file:line:col:message
+    // so the user sees each error once.
+    var seen: Map<string, bool> = map.make()
+    for e in tc.errors {
+        let key = strings.cat(
+            strings.cat(strings.cat(e.span.file, ":"), strings.cat(i64_to_string_local(e.span.line), ":")),
+            strings.cat(strings.cat(i64_to_string_local(e.span.col), ":"), e.message))
+        if map.contains(&seen, key) { } else {
+            seen[key] = true
+            fmt.println("{e.span.file}:{e.span.line}:{e.span.col}: {e.message}")
+            let src = src_cache_get(&cache, e.span.file)
+            if len(src) > 0 {
+                let line = nth_line(src, e.span.line)
+                if len(line) > 0 {
+                    fmt.println("    {line}")
+                    fmt.println("    {caret_pad(e.span.col)}")
+                }
+            }
+        }
+    }
+}
+
+let i64_to_string_local(v: i64): string = {
+    if v == 0 { return "0" }
+    var s = ""
+    var n = v
+    var neg = false
+    if n < 0 { neg = true; n = 0 - n }
+    while n > 0 {
+        let d = n % 10
+        let digit = strings.slice("0123456789", d, d + 1)
+        s = strings.cat(digit, s)
+        n = n / 10
+    }
+    if neg { s = strings.cat("-", s) }
+    s
 }
 
 let summary(tc: *TyContext) = {

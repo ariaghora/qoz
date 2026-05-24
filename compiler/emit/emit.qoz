@@ -4738,7 +4738,10 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
     | PatLitString(_, text) -> {
         push(e, " && qoz_string_eq({scrut_tmp}, QOZ_STR_LIT({text}))) {{ ")
     }
-    | PatVariant(_, path, sub_pats) -> {
+    | PatVariant(psp, path, sub_pats) -> {
+        if len(path) == 0 {
+            let _ = emit_die(psp, "variant pattern has no name")
+        }
         if len(path) > 0 {
             let vname = path[len(path) - 1]
             push(e, " && {scrut_tmp}->tag == qoz_{enum_name}_{vname}) {{ ")

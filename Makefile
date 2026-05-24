@@ -73,7 +73,12 @@ qoz-emit.qoz.c: $(STAGE1)
 	QOZ_ROOT=$(CURDIR) ./$(STAGE1) emit compiler/main.qoz
 	mv compiler/main.qoz.c qoz-emit.qoz.c
 
-$(QOZ): qoz-emit.qoz.c
+$(QOZ): qoz-emit.qoz.c stage1-emit.qoz.c
+	@if ! cmp -s stage1-emit.qoz.c qoz-emit.qoz.c; then \
+	    echo "self-host gate failed: stage1 and qoz produce different C output for compiler/main.qoz"; \
+	    diff stage1-emit.qoz.c qoz-emit.qoz.c | head -50; \
+	    exit 1; \
+	fi
 	$(CC) $(CFLAGS) $(WARN) qoz-emit.qoz.c -o $@
 	@rm -f $(STAGE0) $(STAGE1) stage1-emit.qoz.c qoz-emit.qoz.c
 
