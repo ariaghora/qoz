@@ -1,0 +1,18 @@
+// expect: 42
+// Field access on the return value of a function that returns *T.
+// The receiver is pointer-typed; field_access_op must emit `->`
+// rather than `.` for the access.
+
+import std/mem
+
+type Cell = { v: i64 }
+
+let make_cell(v: i64): *Cell = {
+    let c = mem.alloc(size_of(Cell)) as *Cell
+    c.v = v
+    c
+}
+
+let main(): i64 = {
+    make_cell(42).v
+}

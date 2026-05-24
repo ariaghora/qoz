@@ -298,7 +298,20 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         }
         | _ -> { }
         }
-        vec.push(aggregated_decls, rename_with_pkg(d, cur.pkg, local_fns))
+        // Skip the placeholder DConst("<error>") that the parser
+        // emits as a recovery sentinel for unparseable top-level
+        // input. Letting it through pollutes the symbol table and
+        // produces follow-on diagnostics about a fake name.
+        if !is_error_placeholder(d) {
+            vec.push(aggregated_decls, rename_with_pkg(d, cur.pkg, local_fns))
+        }
+    }
+}
+
+let is_error_placeholder(d: Decl): bool = {
+    match d {
+    | DConst(_, name, _, _) -> strings.eq_raw(name, "<error>")
+    | _                     -> false
     }
 }
 

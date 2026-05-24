@@ -3,6 +3,9 @@
 import std/strings
 import std/vec
 import std/map
+import std/fmt
+import std/os
+
 
 type TokenKind =
     | TokIdent
@@ -29,6 +32,15 @@ type Lexer = {
 }
 
 let make_lexer(src: string): Lexer = Lexer { src: src, pos: 0, line: 1, col: 1 }
+
+// Report a malformed-token error and exit non-zero. The tokenizer
+// has no recovery channel beyond keeping the bytes as-is, which
+// downstream consumers cannot reliably distinguish from a well-formed
+// token; aborting here produces a clear, locatable diagnostic.
+let lex_die(l: *Lexer, msg: string) = {
+    fmt.println("tokenize error at line {l.line} col {l.col}: {msg}")
+    os.exit(1)
+}
 
 let lex_at(l: *Lexer): i64 = strings.byte_at(l.src, l.pos)
 
@@ -83,6 +95,7 @@ let skip_whitespace_and_comments(l: *Lexer) = {
                     lex_advance(l)
                 }
             }
+            if depth > 0 { lex_die(l, "unterminated /* block comment */ at end of file") }
             changed = true
         }
     }
@@ -134,23 +147,29 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
             let n = strings.byte_at(l.src, l.pos + 1)
             if n == 120 || n == 88 {
                 lex_advance(l); lex_advance(l)
+                let body_start = l.pos
                 while l.pos < len(l.src) && (is_hex_digit(lex_at(l)) || lex_at(l) == 95) {
                     lex_advance(l)
                 }
+                if l.pos == body_start { lex_die(l, "hex literal `0x` has no digits") }
                 return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
             if n == 98 || n == 66 {
                 lex_advance(l); lex_advance(l)
+                let body_start = l.pos
                 while l.pos < len(l.src) && (is_bin_digit(lex_at(l)) || lex_at(l) == 95) {
                     lex_advance(l)
                 }
+                if l.pos == body_start { lex_die(l, "binary literal `0b` has no digits") }
                 return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
             if n == 111 || n == 79 {
                 lex_advance(l); lex_advance(l)
+                let body_start = l.pos
                 while l.pos < len(l.src) && (is_oct_digit(lex_at(l)) || lex_at(l) == 95) {
                     lex_advance(l)
                 }
+                if l.pos == body_start { lex_die(l, "octal literal `0o` has no digits") }
                 return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
         }
@@ -171,9 +190,11 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
             if l.pos < len(l.src) && (lex_at(l) == 43 || lex_at(l) == 45) {
                 lex_advance(l)
             }
+            let exp_start = l.pos
             while l.pos < len(l.src) && is_digit(lex_at(l)) {
                 lex_advance(l)
             }
+            if l.pos == exp_start { lex_die(l, "float exponent has no digits") }
         }
         let kind: TokenKind = if is_float { TokFloat } else { TokInt }
         return Token { kind: kind, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
@@ -213,9 +234,10 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
             }
             lex_advance(l)
         }
-        if l.pos < len(l.src) {
-            lex_advance(l)
+        if l.pos >= len(l.src) {
+            lex_die(l, "unterminated string literal")
         }
+        lex_advance(l)
         return Token { kind: TokString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
@@ -223,6 +245,11 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
         lex_advance(l)
         if l.pos < len(l.src) {
             let n = lex_at(l)
+            // `<<` is recognised as a two-char shift token. `>>` is
+            // intentionally NOT: the parser uses adjacent `>` tokens
+            // to disambiguate nested generic args (`Vec<Map<K,V>>`)
+            // from a shift expression. parse_shift's
+            // is_double_gt_adjacent re-pairs the two tokens.
             let two_char =
                 (c == 61 && n == 61) ||
                 (c == 33 && n == 61) ||
