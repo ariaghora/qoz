@@ -1,0 +1,8 @@
+// Negative: a range expression outside the for-loop iter position
+// is rejected by the emitter. Earlier this silently lowered to a
+// boolean comparison.
+
+let main(): i64 = {
+    let r = 0..<10
+    0
+}

@@ -195,7 +195,11 @@ let resolve_type(tc: *TyContext, te: TypeExpr): Ty = {
     match te {
     | TEUnit(_)                  -> ty.ty_unit_()
     | TEPtr(_, inner)            -> ty.ty_ptr_(resolve_type(tc, inner))
-    | TETuple(_, _)              -> ty.ty_error_()
+    | TETuple(_, elems)          -> {
+        var resolved: Vec<Ty> = vec.make()
+        for el in elems { vec.push(&resolved, resolve_type(tc, el)) }
+        ty.ty_tuple_(resolved)
+    }
     | TENamed(span, path, args)  -> resolve_named(tc, span, path, args)
     | TEFn(_, params, ret)       -> {
         var resolved: Vec<Ty> = vec.make()

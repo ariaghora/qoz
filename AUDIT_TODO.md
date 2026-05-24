@@ -32,7 +32,7 @@ rather than ground truth.
 - [x] **`synth_ident` returns `TyError` for fn/extern names without recording an error.** Fixed. Bare fn / extern references now synthesise to their `TyFn` signature.
 - [x] **`is_qualified_variant_field` accepts `OptionA.VariantOfOptionB` because it does not check the variant belongs to the named enum.** Fixed by comparing `variant_of[name]` against the enum name.
 - [x] **`EPath` is unimplemented and silent.** Implemented `synth_path`: validates segs[0] is a known enum, segs[1] is one of its variants, then synthesises the variant constructor.
-- [ ] **`TETuple` resolves to `TyError`.** Not yet fixed. Needs a `TyTuple` representation that flows through `ty_assignable` and `ty_show`.
+- [x] **`TETuple` resolves to `TyError`.** Fixed. `resolve_type(TETuple(_, elems))` now produces `TyTuple` by recursively resolving each element. `ty_eq` and `ty_show` already handled `TyTuple`, so a `let p: (i32, i32) = ...` annotation now type-checks rather than disabling downstream checks.
 - [ ] **`ty_assignable(TyError, _)` returns true.** Not yet fixed. Acceptable for error recovery as long as every other place that returns `TyError` records an error first. After this batch many do; remaining sites will be audited.
 
 ### Emitter (`compiler/emit/emit.qoz`)
