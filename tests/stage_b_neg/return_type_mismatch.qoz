@@ -1,0 +1,9 @@
+// Negative: return value type must match the declared return type.
+
+let f(): i64 = {
+    return "hello"
+}
+
+let main(): i64 = {
+    f()
+}

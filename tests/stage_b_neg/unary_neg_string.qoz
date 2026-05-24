@@ -1,0 +1,6 @@
+// Negative: unary `-` requires a numeric operand.
+
+let main(): i64 = {
+    let x = -"hello"
+    0
+}

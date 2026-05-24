@@ -1,0 +1,6 @@
+// Negative: arithmetic operator requires numeric operands.
+
+let main(): i64 = {
+    let x = 1 + "two"
+    0
+}

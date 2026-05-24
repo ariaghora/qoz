@@ -57,6 +57,38 @@ let ty_tuple_(elems: Vec<Ty>): Ty = TyTuple(elems)
 
 let ty_var_(name: string): Ty = TyVar(0, name)
 
+let ty_is_error(t: Ty): bool = { match t { | TyError -> true | _ -> false } }
+
+let ty_is_unit(t: Ty): bool = { match t { | TyUnit -> true | _ -> false } }
+
+let ty_is_nil(t: Ty): bool = { match t { | TyNil -> true | _ -> false } }
+
+// Integer / float / bool predicates. Type variables are accepted as
+// "possibly integer / float / bool" because they stand for a type
+// the generic has not been instantiated to yet. The check is rerun
+// per instantiation, which catches a real mismatch then. Operator
+// overloads on user records also rely on the check being permissive
+// here.
+let ty_is_int(t: Ty): bool = { match t { | TyInt(_) -> true | TyVar(_, _) -> true | _ -> false } }
+
+let ty_is_float(t: Ty): bool = { match t { | TyFloat(_) -> true | TyVar(_, _) -> true | _ -> false } }
+
+let ty_is_bool(t: Ty): bool = { match t { | TyBool -> true | TyVar(_, _) -> true | _ -> false } }
+
+// Numeric for arithmetic and comparison: integer (any width), float
+// (any width), and char (treated as an i8 for ordering and equality).
+// User records that overload `+`, `<`, etc. also pass here because
+// the dispatch is resolved later in emit; rejecting the record now
+// would block valid overloaded code.
+let ty_is_numeric(t: Ty): bool = {
+    match t {
+    | TyInt(_) | TyFloat(_) | TyChar | TyVar(_, _) | TyRecord(_, _) -> true
+    | _ -> false
+    }
+}
+
+let ty_is_ptr(t: Ty): bool = { match t { | TyPtr(_) -> true | _ -> false } }
+
 let ty_eq(a: Ty, b: Ty): bool = {
     match a {
     | TyInt(ai) -> {

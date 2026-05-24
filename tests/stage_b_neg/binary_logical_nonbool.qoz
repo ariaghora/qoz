@@ -1,0 +1,6 @@
+// Negative: logical && requires bool operands.
+
+let main(): i64 = {
+    let x = 1 && 2
+    0
+}

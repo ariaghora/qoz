@@ -17,23 +17,23 @@ rather than ground truth.
 
 ### Type checker (`compiler/check/check.qoz`)
 
-- [ ] **`synth_unary` on `UOpNeg` returns the operand type without verifying it is numeric.** `-"hello"` and `-some_struct` type-check. Line ~324.
-- [ ] **`synth_unary` on `UOpNot` does not require `bool`.** `!42` returns `TyBool`. Line ~325.
-- [ ] **`synth_unary` on `UOpDeref` of a non-pointer returns `TyError` without `record_error`.** Silent. Lines ~326-331.
-- [ ] **`synth_binary` discards the rhs type.** `let _ = synth(tc, env, r)`. No operand-type compatibility check for any binary op. `1 + "x"`, `vec_a < vec_b` accepted. Line ~951.
-- [ ] **`BOpAnd` / `BOpOr` do not require `bool` operands.** Always return `TyBool`. Lines ~959-960.
-- [ ] **`BOpShl` / `BOpShr` accept any lhs.** Return `lt` unverified. Lines ~969-970.
-- [ ] **`synth_index` does not check the index is an integer.** `arr["hello"]` type-checks. Line ~438.
-- [ ] **`synth_index` for unindexable bases returns `TyError` silently** (no `record_error`). Lines ~445-447.
-- [ ] **`synth_field` returns `TyError` for unknown field names without an error.** `point.zzz` accepted. Line ~341.
-- [ ] **`EReturn` does not check the value against the enclosing function's return type.** Line ~268.
-- [ ] **`check_fn_bodies` does not verify the body tail type matches the declared return type.** Lines ~1547-1557.
-- [ ] **`ECast` performs no validation between source and target types and does not even synthesise the inner value.** Line ~224.
-- [ ] **`synth_ident` returns `TyError` for fn/extern names without recording an error.** Lines ~935-940.
-- [ ] **`is_qualified_variant_field` accepts `OptionA.VariantOfOptionB` because it does not check the variant belongs to the named enum.** Lines ~348-355.
-- [ ] **`EPath` is unimplemented and silent.** Returns `TyError`, no error. Line ~217.
-- [ ] **`TETuple` resolves to `TyError`, which makes `ty_assignable(TyError, _)` true and disables checking on tuple-typed bindings.** Line ~107.
-- [ ] **`ty_assignable(TyError, _)` returns true.** Means one missed check poisons every downstream check. `compiler/ty/ty.qoz:358`. Fix candidate: return false (strict mode) and propagate the original error context separately.
+- [x] **`synth_unary` on `UOpNeg` returns the operand type without verifying it is numeric.** Fixed in this batch. Records error on non-numeric, returns `TyError`.
+- [x] **`synth_unary` on `UOpNot` does not require `bool`.** Fixed. Records error and returns `TyError`.
+- [x] **`synth_unary` on `UOpDeref` of a non-pointer returns `TyError` without `record_error`.** Fixed. Records error.
+- [x] **`synth_binary` discards the rhs type.** Rewritten. Each operator group validates its own operand types; `==` / `!=` requires assignability; ordering requires numeric; logical requires bool; arithmetic requires numeric and compatible; bitwise / shift / range require integers.
+- [x] **`BOpAnd` / `BOpOr` do not require `bool` operands.** Fixed in the same rewrite.
+- [x] **`BOpShl` / `BOpShr` accept any lhs.** Fixed.
+- [x] **`synth_index` does not check the index is an integer.** Fixed. Pointer / Vec require int index; Map requires key assignable to declared K.
+- [x] **`synth_index` for unindexable bases returns `TyError` silently.** Fixed. Records error.
+- [x] **`synth_field` returns `TyError` for unknown field names without an error.** Fixed. Records error.
+- [x] **`EReturn` does not check the value against the enclosing function's return type.** Fixed via `tc.current_ret_ty` thread; unit-returning functions skip the check (bare `return` desugars to `return nil`).
+- [ ] **`check_fn_bodies` does not verify the body tail type matches the declared return type.** Intentionally deferred. Detecting early-return-only functions whose tail is unreachable requires control-flow analysis. The EReturn check above covers the common case.
+- [x] **`ECast` performs no validation between source and target types and does not even synthesise the inner value.** The inner value is now synthesised so its type is recorded for the emit walk. Cast-validity rules remain permissive: a cast is a programmer assertion.
+- [x] **`synth_ident` returns `TyError` for fn/extern names without recording an error.** Fixed. Bare fn / extern references now synthesise to their `TyFn` signature.
+- [x] **`is_qualified_variant_field` accepts `OptionA.VariantOfOptionB` because it does not check the variant belongs to the named enum.** Fixed by comparing `variant_of[name]` against the enum name.
+- [x] **`EPath` is unimplemented and silent.** Implemented `synth_path`: validates segs[0] is a known enum, segs[1] is one of its variants, then synthesises the variant constructor.
+- [ ] **`TETuple` resolves to `TyError`.** Not yet fixed. Needs a `TyTuple` representation that flows through `ty_assignable` and `ty_show`.
+- [ ] **`ty_assignable(TyError, _)` returns true.** Not yet fixed. Acceptable for error recovery as long as every other place that returns `TyError` records an error first. After this batch many do; remaining sites will be audited.
 
 ### Emitter (`compiler/emit/emit.qoz`)
 

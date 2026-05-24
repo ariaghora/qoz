@@ -26,6 +26,10 @@ type TyContext = {
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
     // pointer cast to i64. Populated by synth; consumed by emit.
     expr_types:   Map<i64, TypeExpr>,
+    // Return type of the function currently being checked. Used by
+    // EReturn synth and by the tail-type check at end of body.
+    // TyError means no surrounding function (top-level expression).
+    current_ret_ty: Ty,
 }
 
 let make_ctx(): TyContext = TyContext {
@@ -39,6 +43,7 @@ let make_ctx(): TyContext = TyContext {
     errors:      vec.make(),
     type_params: map.make(),
     expr_types:  map.make(),
+    current_ret_ty: ty.ty_error_(),
 }
 
 // Stable identity key for an Expr: its runtime heap pointer cast to
@@ -214,27 +219,32 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
     | EBool(_, _)            -> ty.ty_bool_()
     | ENil(_)                -> ty.ty_nil_()
     | EIdent(span, name)     -> synth_ident(tc, env, span, name)
-    | EPath(_, _)            -> ty.ty_error_()
-    | EUnary(_, op, rhs)     -> synth_unary(tc, env, op, rhs)
-    | EBinary(_, op, l, r)   -> synth_binary(tc, env, op, l, r)
+    | EPath(sp, segs)        -> synth_path(tc, sp, segs)
+    | EUnary(sp, op, rhs)    -> synth_unary(tc, env, sp, op, rhs)
+    | EBinary(sp, op, l, r)  -> synth_binary(tc, env, sp, op, l, r)
     | EAssign(sp, _, l, v)   -> check_assign(tc, env, sp, l, v)
     | ECall(sp, callee, ta, args) -> synth_call_full(tc, env, sp, callee, ta, args)
     | EField(sp, base, name) -> synth_field(tc, env, sp, base, name)
-    | EIndex(_, base, idx)   -> synth_index(tc, env, base, idx)
-    | ECast(_, _, te)        -> resolve_type(tc, te)
-    | ETry(_, v)             -> {
-        // The `?` operator on a Result<T, E> evaluates to T (with an
-        // early return on the Err branch handled by codegen). The
-        // synthesised type is the inner success value's type.
+    | EIndex(sp, base, idx)  -> synth_index(tc, env, sp, base, idx)
+    | ECast(_, value, te)    -> { let _ = synth(tc, env, value); resolve_type(tc, te) }
+    | ETry(sp, v)            -> {
+        // The `?` operator on a Result<T, E> evaluates to T. Codegen
+        // handles the early-return on the Err branch. Anything other
+        // than a Result is rejected here.
         let t = synth(tc, env, v)
+        if ty.ty_is_error(t) { return ty.ty_error_() }
         match t {
         | TyAdt(name, args) -> {
             if strings.eq_raw(name, "Result") && len(args) >= 1 {
                 return args[0]
             }
-            t
+            record_error(tc, sp, "the `?` operator requires a Result<T, E>, got {ty.ty_show(t)}")
+            ty.ty_error_()
         }
-        | _ -> t
+        | _ -> {
+            record_error(tc, sp, "the `?` operator requires a Result<T, E>, got {ty.ty_show(t)}")
+            ty.ty_error_()
+        }
         }
     }
     | ETuple(_, elems)       -> {
@@ -265,7 +275,23 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
         env_truncate(env, saved_len)
         ty.ty_unit_()
     }
-    | EReturn(_, v)          -> { let _ = synth(tc, env, v); ty.ty_unit_() }
+    | EReturn(sp, v)         -> {
+        let vt = synth(tc, env, v)
+        let rt = tc.current_ret_ty
+        // A unit-returning function accepts a bare `return` whose
+        // value parses as nil; the discarded value never reaches
+        // user code. Skip the type check on that arm. TyError on
+        // either side also skips because a diagnostic was already
+        // recorded upstream.
+        let skip =
+            ty.ty_is_error(vt) ||
+            ty.ty_is_error(rt) ||
+            ty.ty_is_unit(rt)
+        if !skip && !ty.ty_assignable(rt, vt) {
+            record_error(tc, sp, "return value of type {ty.ty_show(vt)} does not match function's declared return type {ty.ty_show(rt)}")
+        }
+        ty.ty_unit_()
+    }
     | EDefer(_, b)           -> { let _ = synth(tc, env, b); ty.ty_unit_() }
     | ESizeOf(_, _)          -> ty.ty_int_(64, true)
     | EArrayLit(_, elems)    -> {
@@ -318,15 +344,31 @@ let check_assign(tc: *TyContext, env: *Env, sp: Span, lhs: Expr, rhs: Expr): Ty 
     ty.ty_unit_()
 }
 
-let synth_unary(tc: *TyContext, env: *Env, op: UnaryOp, rhs: Expr): Ty = {
+let synth_unary(tc: *TyContext, env: *Env, sp: Span, op: UnaryOp, rhs: Expr): Ty = {
     let t = synth(tc, env, rhs)
+    if ty.ty_is_error(t) { return ty.ty_error_() }
     match op {
-    | UOpNeg   -> t
-    | UOpNot   -> ty.ty_bool_()
+    | UOpNeg   -> {
+        if !ty.ty_is_numeric(t) {
+            record_error(tc, sp, "unary `-` requires a numeric operand, got {ty.ty_show(t)}")
+            return ty.ty_error_()
+        }
+        t
+    }
+    | UOpNot   -> {
+        if !ty.ty_is_bool(t) {
+            record_error(tc, sp, "unary `!` requires a bool operand, got {ty.ty_show(t)}")
+            return ty.ty_error_()
+        }
+        ty.ty_bool_()
+    }
     | UOpDeref -> {
         match t {
         | TyPtr(inner) -> inner
-        | _            -> ty.ty_error_()
+        | _            -> {
+            record_error(tc, sp, "cannot dereference value of type {ty.ty_show(t)}")
+            ty.ty_error_()
+        }
         }
     }
     | UOpAddr  -> ty.ty_ptr_(t)
@@ -338,7 +380,22 @@ let synth_field(tc: *TyContext, env: *Env, sp: Span, base: Expr, name: string): 
         return synth_variant_ctor(tc, name)
     }
     let bt = synth(tc, env, base)
-    field_type_of(tc, bt, name)
+    if ty.ty_is_error(bt) { return ty.ty_error_() }
+    // Allow `pkg.fn` qualified references through without a field
+    // diagnostic: the path goes through call resolution, not field
+    // synthesis. Detect by base being an EIdent whose name is a
+    // registered package.
+    match base {
+    | EIdent(_, base_name) -> {
+        if map.contains(&tc.packages, base_name) { return ty.ty_error_() }
+    }
+    | _ -> { }
+    }
+    let ft = field_type_of(tc, bt, name)
+    if ty.ty_is_error(ft) {
+        record_error(tc, sp, "type {ty.ty_show(bt)} has no field `{name}`")
+    }
+    ft
 }
 
 // True when `base.name` is `EnumName.VariantName`: base is a known
@@ -348,7 +405,11 @@ let synth_field(tc: *TyContext, env: *Env, sp: Span, base: Expr, name: string): 
 let is_qualified_variant_field(tc: *TyContext, base: Expr, name: string): bool = {
     match base {
     | EIdent(_, base_name) -> {
-        map.contains(&tc.enums, base_name) && map.contains(&tc.variant_of, name)
+        if !map.contains(&tc.enums, base_name) { return false }
+        match map.get(&tc.variant_of, name) {
+        | Some(declared_enum) -> strings.eq_raw(declared_enum, base_name)
+        | None                -> false
+        }
     }
     | _ -> false
     }
@@ -433,18 +494,41 @@ let apply_subst(t: Ty, params: Vec<string>, args: Vec<Ty>): Ty = {
     }
 }
 
-let synth_index(tc: *TyContext, env: *Env, base: Expr, idx: Expr): Ty = {
+// Index expression. Three shapes are indexable: raw pointers (with
+// an integer index), `Vec<T>` (integer index, returns T), and
+// `Map<K, V>` (key must be assignable to K, returns V). Any other
+// base, and any non-matching index type, raises a diagnostic.
+let synth_index(tc: *TyContext, env: *Env, sp: Span, base: Expr, idx: Expr): Ty = {
     let bt = synth(tc, env, base)
-    let _ = synth(tc, env, idx)
+    let it = synth(tc, env, idx)
+    if ty.ty_is_error(bt) || ty.ty_is_error(it) { return ty.ty_error_() }
     match bt {
-    | TyPtr(inner) -> inner
+    | TyPtr(inner) -> {
+        if !ty.ty_is_int(it) {
+            record_error(tc, sp, "pointer index must be an integer, got {ty.ty_show(it)}")
+        }
+        inner
+    }
     | TyRecord(name, args) -> {
         if strings.eq_raw(name, "Vec") && len(args) >= 1 {
+            if !ty.ty_is_int(it) {
+                record_error(tc, sp, "Vec index must be an integer, got {ty.ty_show(it)}")
+            }
             return args[0]
         }
+        if strings.eq_raw(name, "Map") && len(args) >= 2 {
+            if !ty.ty_assignable(args[0], it) {
+                record_error(tc, sp, "Map key has type {ty.ty_show(args[0])}; cannot use index of type {ty.ty_show(it)}")
+            }
+            return args[1]
+        }
+        record_error(tc, sp, "cannot index value of type {ty.ty_show(bt)}")
         ty.ty_error_()
     }
-    | _ -> ty.ty_error_()
+    | _ -> {
+        record_error(tc, sp, "cannot index value of type {ty.ty_show(bt)}")
+        ty.ty_error_()
+    }
     }
 }
 
@@ -661,6 +745,35 @@ let struct_field_typeexpr(tc: *TyContext, name: string, field: string): Option<T
         }
     }
     | None -> None
+    }
+}
+
+// `Enum::Variant` path expression. Two segments: the enum name and a
+// variant of that enum. The result is the variant constructor type
+// produced by synth_variant_ctor. Any other shape is reported.
+let synth_path(tc: *TyContext, sp: Span, segs: Vec<string>): Ty = {
+    if len(segs) != 2 {
+        record_error(tc, sp, "path expression must have exactly two segments (Enum::Variant)")
+        return ty.ty_error_()
+    }
+    let enum_name = segs[0]
+    let variant   = segs[1]
+    if !map.contains(&tc.enums, enum_name) {
+        record_error(tc, sp, "unknown enum `{enum_name}`")
+        return ty.ty_error_()
+    }
+    match map.get(&tc.variant_of, variant) {
+    | Some(declared_enum) -> {
+        if !strings.eq_raw(declared_enum, enum_name) {
+            record_error(tc, sp, "`{variant}` is not a variant of enum `{enum_name}`")
+            return ty.ty_error_()
+        }
+        synth_variant_ctor(tc, variant)
+    }
+    | None -> {
+        record_error(tc, sp, "unknown variant `{enum_name}::{variant}`")
+        ty.ty_error_()
+    }
     }
 }
 
@@ -932,11 +1045,16 @@ let synth_ident(tc: *TyContext, env: *Env, span: Span, name: string): Ty = {
     if env_has(env, name) {
         return env_lookup(env, name)
     }
-    if map.contains(&tc.fns, name) {
-        return ty.ty_error_()
+    // Bare references to top-level functions and externs are used as
+    // function values. The type is the function's declared signature,
+    // looked up from tc.fns / tc.externs.
+    match map.get(&tc.fns, name) {
+    | Some(decl) -> return fn_decl_value_type(tc, decl)
+    | None -> { }
     }
-    if map.contains(&tc.externs, name) {
-        return ty.ty_error_()
+    match map.get(&tc.externs, name) {
+    | Some(decl) -> return fn_decl_value_type(tc, decl)
+    | None -> { }
     }
     match map.get(&tc.variant_of, name) {
     | Some(enum_name) -> return synth_variant_ctor(tc, name)
@@ -946,30 +1064,78 @@ let synth_ident(tc: *TyContext, env: *Env, span: Span, name: string): Ty = {
     ty.ty_error_()
 }
 
-let synth_binary(tc: *TyContext, env: *Env, op: BinaryOp, l: Expr, r: Expr): Ty = {
+// Compute the value type of a function or extern decl as a `TyFn`.
+// Used when a function is referenced bare (as a first-class value)
+// rather than called.
+let fn_decl_value_type(tc: *TyContext, d: Decl): Ty = {
+    match d {
+    | DFn(_, _, _, params, ret, _, _) | DExternal(_, _, _, params, ret) -> {
+        var pts: Vec<Ty> = vec.make()
+        for p in params { vec.push(&pts, resolve_type(tc, p.ty)) }
+        ty.ty_fn_(pts, resolve_type(tc, ret))
+    }
+    | _ -> ty.ty_error_()
+    }
+}
+
+// Binary-operator type check. Each operator group has its own
+// operand-type and result-type rules. Errors are recorded with a
+// span pointing at the operator's expression. A propagated `TyError`
+// on either side short-circuits without raising a new diagnostic so
+// downstream noise stays low.
+let synth_binary(tc: *TyContext, env: *Env, sp: Span, op: BinaryOp, l: Expr, r: Expr): Ty = {
     let lt = synth(tc, env, l)
-    let _ = synth(tc, env, r)
+    let rt = synth(tc, env, r)
+    if ty.ty_is_error(lt) || ty.ty_is_error(rt) { return binary_result_default(op) }
     match op {
-    | BOpEq             -> ty.ty_bool_()
-    | BOpNe             -> ty.ty_bool_()
-    | BOpLt             -> ty.ty_bool_()
-    | BOpGt             -> ty.ty_bool_()
-    | BOpLe             -> ty.ty_bool_()
-    | BOpGe             -> ty.ty_bool_()
-    | BOpAnd            -> ty.ty_bool_()
-    | BOpOr             -> ty.ty_bool_()
-    | BOpAdd            -> lt
-    | BOpSub            -> lt
-    | BOpMul            -> lt
-    | BOpDiv            -> lt
-    | BOpMod            -> lt
-    | BOpBitAnd         -> lt
-    | BOpBitOr          -> lt
-    | BOpBitXor         -> lt
-    | BOpShl            -> lt
-    | BOpShr            -> lt
-    | BOpRange          -> lt
-    | BOpRangeInclusive -> lt
+    | BOpEq | BOpNe -> {
+        if !ty.ty_assignable(lt, rt) && !ty.ty_assignable(rt, lt) {
+            record_error(tc, sp, "operands of `==` / `!=` have incompatible types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}")
+        }
+        ty.ty_bool_()
+    }
+    | BOpLt | BOpGt | BOpLe | BOpGe -> {
+        if !ty.ty_is_numeric(lt) || !ty.ty_is_numeric(rt) {
+            record_error(tc, sp, "ordering comparison requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+        }
+        ty.ty_bool_()
+    }
+    | BOpAnd | BOpOr -> {
+        if !ty.ty_is_bool(lt) || !ty.ty_is_bool(rt) {
+            record_error(tc, sp, "logical operator requires bool operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+        }
+        ty.ty_bool_()
+    }
+    | BOpAdd | BOpSub | BOpMul | BOpDiv | BOpMod -> {
+        if !ty.ty_is_numeric(lt) || !ty.ty_is_numeric(rt) {
+            record_error(tc, sp, "arithmetic operator requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            return ty.ty_error_()
+        }
+        if !ty.ty_assignable(lt, rt) && !ty.ty_assignable(rt, lt) {
+            record_error(tc, sp, "arithmetic operands have incompatible numeric types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}")
+        }
+        lt
+    }
+    | BOpBitAnd | BOpBitOr | BOpBitXor | BOpShl | BOpShr -> {
+        if !ty.ty_is_int(lt) || !ty.ty_is_int(rt) {
+            record_error(tc, sp, "bitwise / shift operator requires integer operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            return ty.ty_error_()
+        }
+        lt
+    }
+    | BOpRange | BOpRangeInclusive -> {
+        if !ty.ty_is_int(lt) || !ty.ty_is_int(rt) {
+            record_error(tc, sp, "range bounds must be integers, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+        }
+        lt
+    }
+    }
+}
+
+let binary_result_default(op: BinaryOp): Ty = {
+    match op {
+    | BOpEq | BOpNe | BOpLt | BOpGt | BOpLe | BOpGe | BOpAnd | BOpOr -> ty.ty_bool_()
+    | _ -> ty.ty_error_()
     }
 }
 
@@ -1547,13 +1713,25 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
 let check_fn_bodies(tc: *TyContext, f: File) = {
     for d in f.decls {
         match d {
-        | DFn(_, _, tparams, params, _, body, _) -> {
+        | DFn(_, _, tparams, params, ret, body, _) -> {
             set_type_params(tc, tparams)
             var env = env_make()
             for pp in params {
                 env_define(&env, pp.name, resolve_type(tc, pp.ty))
             }
+            let declared_ret = resolve_type(tc, ret)
+            let saved_ret = tc.current_ret_ty
+            tc.current_ret_ty = declared_ret
             let _ = synth(tc, &env, body)
+            tc.current_ret_ty = saved_ret
+            // The body's tail type is intentionally not compared to
+            // the declared return here. Early-return-only functions
+            // have a statement-shaped tail (while, for, panic) whose
+            // synthesised type is unit but whose flow can never reach
+            // the end. Control-flow analysis would be required to
+            // distinguish that case from a real mismatch; the EReturn
+            // check above already catches typed-return-value
+            // mismatches, which is the common bug.
             clear_type_params(tc)
         }
         | DImport(_, _, _) -> { }

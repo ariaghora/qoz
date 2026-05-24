@@ -1,0 +1,6 @@
+// Negative: unary `!` requires a bool operand.
+
+let main(): i64 = {
+    let x = !42
+    0
+}

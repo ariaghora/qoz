@@ -1,0 +1,10 @@
+// Negative: Vec index must be an integer.
+
+import std/vec
+
+let main(): i64 = {
+    var v: Vec<i64> = vec.make()
+    vec.push(&v, 42)
+    let x = v["not an int"]
+    0
+}

@@ -1,0 +1,8 @@
+// Negative: accessing an unknown field reports an error.
+
+type Pair = { x: i64, y: i64 }
+
+let main(): i64 = {
+    let p = Pair { x: 1, y: 2 }
+    p.z
+}
