@@ -3272,8 +3272,14 @@ let emit_fn(e: *Emitter, name: string, params: Vec<FnParam>, ret: TypeExpr, body
         push(e, ")")
     }
     push(e, " {{\n    int64_t _qoz_shadow_guard = qoz_gc_shadow_top();\n    ")
+    // Push this function's name onto the runtime frame tracker so
+    // qoz_panic produces a Qoz-level backtrace. The pop runs through
+    // the return-restore path on every exit.
+    push(e, "qoz_frame_push(\"")
+    push(e, name)
+    push(e, "\");\n    ")
     let saved_ret = e.current_return_restore
-    e.current_return_restore = "qoz_gc_shadow_set_top(_qoz_shadow_guard); "
+    e.current_return_restore = "qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); "
     // Match-scrutinee names (_qoz_ms_N / _qoz_mv_N / _qoz_mm_N) live in
     // the C function's body scope. A per-function counter keeps the
     // names unique within that scope. The counter is restored after
@@ -4811,7 +4817,9 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
             push(e, ") {{ ")
         }
     }
-    | _ -> push(e, ") {{ ")
+    | PatTuple(psp, _) -> {
+        let _ = emit_die(psp, "tuple patterns in match arms are not yet supported")
+    }
     }
     if arm.has_guard {
         push(e, "if (")
@@ -5127,7 +5135,7 @@ let match_body_hint(e: *Emitter, enum_name: string, body: Expr): TypeExpr = {
 
 let emit_main(e: *Emitter, ret: TypeExpr, body: Expr) = {
     let kind = main_return_kind(ret)
-    push(e, "int main(int argc, char **argv) {{\n    qoz_set_argv(argc, argv);\n    int qoz_stack_anchor;\n    qoz_init(&qoz_stack_anchor);\n    ")
+    push(e, "int main(int argc, char **argv) {{\n    qoz_set_argv(argc, argv);\n    int qoz_stack_anchor;\n    qoz_init(&qoz_stack_anchor);\n    qoz_frame_push(\"main\");\n    ")
     match body {
     | EBlock(_, stmts, tail) -> {
         for s in stmts {

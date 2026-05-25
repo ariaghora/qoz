@@ -380,15 +380,11 @@ let same_constructor_assignable(param: Ty, arg: Ty): bool = {
 let ty_assignable(param: Ty, arg: Ty): bool = {
     if ty_eq(param, arg) { return true }
     if arg_passes_to_param(param, arg) { return true }
-    // A type variable on either side acts as a wildcard. This matches
-    // how the inference pipeline treats unconstrained type parameters
-    // before they are pinned to a concrete instantiation.
-    match arg { | TyVar(_, _) -> return true | _ -> { } }
-    match param { | TyVar(_, _) -> return true | _ -> { } }
-    if same_constructor_assignable(param, arg) { return true }
-    match param {
-    | TyError -> true
-    | TyVar(_, _) -> true
-    | _ -> false
-    }
+    // A type variable acts as a wildcard for generics not yet
+    // instantiated. TyError acts as a wildcard so a single upstream
+    // diagnostic does not cascade into a second one at every
+    // downstream check. Each side is consulted independently.
+    match arg   { | TyVar(_, _) | TyError -> return true | _ -> { } }
+    match param { | TyVar(_, _) | TyError -> return true | _ -> { } }
+    same_constructor_assignable(param, arg)
 }

@@ -24,10 +24,44 @@ qoz_string qoz_os_arg(int64_t i) {
 
 void qoz_os_exit(int64_t code) { exit((int)code); }
 
+/* Qoz call-frame tracker. Each entered Qoz function pushes a static
+ * string describing its name; the runtime keeps the names in a
+ * fixed-size array. qoz_panic walks the array to produce a Qoz-level
+ * backtrace. The implementation is portable C11 with no platform
+ * extensions. */
+#define QOZ_FRAME_CAP 1024
+static const char *qoz_frame_stack[QOZ_FRAME_CAP];
+static int64_t qoz_frame_top = 0;
+
+void qoz_frame_push(const char *name) {
+    if (qoz_frame_top < QOZ_FRAME_CAP) {
+        qoz_frame_stack[qoz_frame_top] = name;
+    }
+    qoz_frame_top++;
+}
+
+void qoz_frame_pop(void) {
+    if (qoz_frame_top > 0) qoz_frame_top--;
+}
+
 void qoz_panic(qoz_string msg) {
     fputs("qoz: panic: ", stderr);
     if (msg.len > 0) fwrite(msg.data, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
+    if (qoz_frame_top > 0) {
+        fputs("backtrace (most recent call first):\n", stderr);
+        int64_t shown = qoz_frame_top;
+        if (shown > QOZ_FRAME_CAP) shown = QOZ_FRAME_CAP;
+        for (int64_t i = shown - 1; i >= 0; i--) {
+            const char *n = qoz_frame_stack[i];
+            if (n == NULL) n = "<unknown>";
+            fprintf(stderr, "  at %s\n", n);
+        }
+        if (qoz_frame_top > QOZ_FRAME_CAP) {
+            fprintf(stderr, "  ... %" PRId64 " more frames truncated\n",
+                    qoz_frame_top - QOZ_FRAME_CAP);
+        }
+    }
     fflush(stderr);
     abort();
 }
@@ -190,7 +224,7 @@ void *qoz_alloc(int64_t size) {
      * (typically an arithmetic underflow); fail loudly rather than
      * silently producing a huge size_t and returning NULL. */
     if (size < 0) {
-        qoz_panic((qoz_string){"qoz_alloc: negative size", 23, NULL});
+        qoz_panic((qoz_string){"qoz_alloc: negative size", 24, NULL});
     }
     return qoz_gc_alloc(size, NULL);
 }

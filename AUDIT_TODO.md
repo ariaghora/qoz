@@ -105,7 +105,7 @@ rather than ground truth.
 - [ ] **Many `emit_die` and `qoz_panic` sites do not include a span.** Most emit_die calls do include a span now, but a focused audit is still pending.
 - [ ] **`check.qoz` error messages are inconsistent in tone and information.** Improved during the medium-severity sweep but no global pass has been run.
 - [x] **No multi-error recovery.** The checker continues past errors today; the verifier was on the same page already. The fix that mattered was deduplication, which is in.
-- [ ] **`qoz_panic` has no backtrace.** Runtime concern. Deferred.
+- [x] **`qoz_panic` has no backtrace.** Closed. Added `qoz_frame_push` / `qoz_frame_pop` to the runtime (portable C11, no platform extensions). `emit_fn` emits `qoz_frame_push("<name>")` at function entry and the return-restore path now includes `qoz_frame_pop()`. `emit_main` pushes `"main"`. qoz_panic prints the frame stack on abort.
 
 ---
 
