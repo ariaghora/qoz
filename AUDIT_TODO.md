@@ -95,14 +95,14 @@ rather than ground truth.
 ### Emitter
 
 - [x] `emit_arm_in_chain_with_te` `PatVariant` with empty path silently matches everything. Now calls `emit_die`.
-- [ ] `emit_arm_in_chain_with_te` default arm has no body cleanup or scrutinee bind. Low impact; the default fires only for patterns the parser produces and we already handle.
+- [x] `emit_arm_in_chain_with_te` default arm has no body cleanup or scrutinee bind. Closed. The default catch-all was replaced with an explicit `PatTuple` arm that calls `emit_die`. Every Pattern variant is now handled or rejected explicitly; a new Pattern variant added later will fail to compile rather than silently match everything.
 
 ---
 
 ## Quality of diagnostics
 
 - [x] **Errors print as a single `file:line:col: message` line with no caret indicator.** `check.qoz::report` now reads the source line at the error span and prints a caret pad. Multi-error reports dedupe on file:line:col:message because the checker walks the program twice.
-- [ ] **Many `emit_die` and `qoz_panic` sites do not include a span.** Most emit_die calls do include a span now, but a focused audit is still pending.
+- [x] **Many `emit_die` and `qoz_panic` sites do not include a span.** Closed. Audited every `emit_die` call in `compiler/emit/emit.qoz` (41 sites): each one passes a `Span` as the first argument (either `sp`, `psp`, or `span_of_expr(...)`). The runtime `qoz_panic` is invoked from C with constructed messages that name the failing primitive (e.g. "qoz_alloc: negative size"); the Qoz-level backtrace from `qoz_frame_push` / `qoz_frame_pop` supplies the call-site context.
 - [x] **`check.qoz` error messages are inconsistent in tone and information.** Closed via a global review during this audit pass. Messages are uniformly declarative, include the offending type via `ty_show` where relevant, and surround code references with backticks. No sentence-case versus lowercase mix remains.
 - [x] **No multi-error recovery.** The checker continues past errors today; the verifier was on the same page already. The fix that mattered was deduplication, which is in.
 - [x] **`qoz_panic` has no backtrace.** Closed. Added `qoz_frame_push` / `qoz_frame_pop` to the runtime (portable C11, no platform extensions). `emit_fn` emits `qoz_frame_push("<name>")` at function entry and the return-restore path now includes `qoz_frame_pop()`. `emit_main` pushes `"main"`. qoz_panic prints the frame stack on abort.
