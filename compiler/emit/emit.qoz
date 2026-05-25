@@ -3032,23 +3032,39 @@ let emit_hash_builtin(e: *Emitter, arg: ast.Expr) = {
 
 // Built-in `len(x)` dispatch based on the operand's static type.
 let emit_len_builtin(e: *Emitter, arg: ast.Expr) = {
-    let ct = infer_expr_ctype(e, arg)
+    // `len(&x)` reads `x.len`, not `&x->len`. `&x->len` parses in C
+    // as `&(x->len)` because `->` binds tighter than unary `&`, which
+    // yields a pointer to the int field instead of the length. Peel
+    // off a leading address-of so the field access goes through the
+    // value, and the resulting `(*p).len` becomes `p->len` only when
+    // `p` is already a pointer that the user passed in directly.
+    let unwrapped = peel_addr_of(arg)
+    let ct = infer_expr_ctype(e, unwrapped)
     if strings.eq_raw(ct, "qoz_string") {
         push(e, "(")
-        emit_expr(e, arg)
+        emit_expr(e, unwrapped)
         push(e, ").len")
         return
     }
     push(e, "(")
-    let op = field_access_op(e, arg)
+    let op = field_access_op(e, unwrapped)
     if strings.eq_raw(op, "->") {
-        emit_expr(e, arg)
+        emit_expr(e, unwrapped)
         push(e, "->len")
     } else {
-        emit_expr(e, arg)
+        emit_expr(e, unwrapped)
         push(e, ".len")
     }
     push(e, ")")
+}
+
+let peel_addr_of(e: ast.Expr): ast.Expr = {
+    match e {
+    | EUnary(_, op, inner) -> {
+        match op { | UOpAddr -> inner | _ -> e }
+    }
+    | _ -> e
+    }
 }
 
 let emit_call(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>) = {
@@ -5739,9 +5755,9 @@ let emit_main(e: *Emitter, ret: ast.TypeExpr, body: ast.Expr) = {
             push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
             return
         }
-        emit_main_tail(e, kind, tail)
+        emit_main_tail(e, kind, ret, tail)
     }
-    | _ -> emit_main_tail(e, kind, body)
+    | _ -> emit_main_tail(e, kind, ret, body)
     }
 }
 
@@ -5778,7 +5794,7 @@ let main_return_kind(ret: ast.TypeExpr): MainRetKind = {
     }
 }
 
-let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: ast.Expr) = {
+let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.Expr) = {
     match kind {
     | MainRetUnit -> {
         // For unit-returning main, control-flow tails (for/while/if-as-stmt)
@@ -5824,7 +5840,7 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, tail: ast.Expr) = {
         let saved = open_statement_scope(e)
         push(e, ctype)
         push(e, " qoz_main_result = ")
-        emit_expr(e, tail)
+        emit_value_with_hint(e, tail, ret)
         push(e, ";\n    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
         close_statement_scope(e, saved)
     }

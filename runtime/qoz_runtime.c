@@ -80,11 +80,15 @@ void qoz_panic(qoz_string msg) {
 }
 
 qoz_string qoz_os_getenv(qoz_string name) {
-    char buf[1024];
-    if (name.len < 0 || (size_t)name.len >= sizeof(buf)) return (qoz_string){ NULL, 0 };
-    memcpy(buf, name.data, (size_t)name.len);
+    if (name.len < 0) return (qoz_string){ NULL, 0 };
+    char *buf = (char *)malloc((size_t)name.len + 1);
+    if (!buf) {
+        qoz_panic((qoz_string){"qoz_os_getenv: malloc failed", 28, NULL});
+    }
+    if (name.len > 0) memcpy(buf, name.data, (size_t)name.len);
     buf[name.len] = 0;
     const char *v = getenv(buf);
+    free(buf);
     if (!v) return (qoz_string){ NULL, 0 };
     return (qoz_string){ v, (int64_t)strlen(v) };
 }
@@ -166,10 +170,22 @@ qoz_string qoz_fs_list_qoz_files(qoz_string dir) {
         if (nlen < 4) continue;
         if (memcmp(name + nlen - 4, ".qoz", 4) != 0) continue;
         if (count == cap) {
-            cap = cap == 0 ? 8 : cap * 2;
-            names = (const char **)realloc((void *)names, (size_t)cap * sizeof(*names));
+            int64_t new_cap = cap == 0 ? 8 : cap * 2;
+            const char **new_names = (const char **)realloc((void *)names, (size_t)new_cap * sizeof(*names));
+            if (!new_names) {
+                free((void *)names);
+                closedir(d);
+                qoz_panic((qoz_string){"qoz_fs_list_qoz_files: realloc failed", 37, NULL});
+            }
+            names = new_names;
+            cap = new_cap;
         }
         char *dup = (char *)malloc(nlen + 1);
+        if (!dup) {
+            free((void *)names);
+            closedir(d);
+            qoz_panic((qoz_string){"qoz_fs_list_qoz_files: malloc failed", 36, NULL});
+        }
         memcpy(dup, name, nlen + 1);
         names[count++] = dup;
     }
@@ -209,7 +225,11 @@ void qoz_strbuf_append_f64(void *bv, double v) {
         int64_t new_cap = b->cap == 0 ? 64 : b->cap;
         while (new_cap < b->len + n) new_cap *= 2;
         if (new_cap > b->cap) {
-            b->buf = (char *)qoz_realloc(b->buf, new_cap);
+            char *nb = (char *)qoz_realloc(b->buf, new_cap);
+            if (!nb) {
+                qoz_panic((qoz_string){"qoz_strbuf_append_f64: realloc failed", 37, NULL});
+            }
+            b->buf = nb;
             b->cap = new_cap;
         }
         memcpy(b->buf + b->len, tmp, (size_t)n);
@@ -231,7 +251,11 @@ static void qoz_interp_grow(qoz_interp_buf *b, int64_t needed) {
     int64_t new_cap = b->cap == 0 ? 64 : b->cap;
     while (new_cap < b->len + needed) new_cap *= 2;
     if (new_cap > b->cap) {
-        b->buf = (char *)qoz_realloc(b->buf, new_cap);
+        char *nb = (char *)qoz_realloc(b->buf, new_cap);
+        if (!nb) {
+            qoz_panic((qoz_string){"qoz_interp_grow: realloc failed", 31, NULL});
+        }
+        b->buf = nb;
         b->cap = new_cap;
     }
 }

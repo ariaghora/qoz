@@ -1,0 +1,28 @@
+// expect: 0
+// JSON parse of a string longer than the parser's initial 64-byte
+// buffer must round-trip its contents exactly. Exercises grow_to,
+// whose **u8 deref-and-store path used to truncate to the first 64
+// bytes of garbage memory.
+
+import strings
+import encoding/json
+import result
+
+let main(): i64 = {
+    var s = "\""
+    var i: i64 = 0
+    while i < 200 {
+        s = strings.cat(s, "a")
+        i += 1
+    }
+    s = strings.cat(s, "\"")
+    match json.parse_text(s) {
+    | Err(_) -> 1
+    | Ok(v)  -> {
+        match v {
+        | Str(text) -> if len(text) == 200 { 0 } else { 1 }
+        | _         -> 1
+        }
+    }
+    }
+}

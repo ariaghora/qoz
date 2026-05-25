@@ -1,20 +1,20 @@
 import strings
 import fmt
 
-type Option<T> =
-    | Some(T)
-    | None
+type Maybe<T> =
+    | Just(T)
+    | Nothing
 
 let main() = {
-    let opt_int = Option.Some(42)
+    let opt_int = Maybe.Just(42)
     match opt_int {
-    | Option.Some(v) -> fmt.println(`int: {v}`)
-    | Option.None    -> fmt.println("nothing")
+    | Maybe.Just(v)  -> fmt.println(`int: {v}`)
+    | Maybe.Nothing  -> fmt.println("nothing")
     }
 
-    let opt_str = Option.Some("hello")
+    let opt_str = Maybe.Just("hello")
     match opt_str {
-    | Option.Some(s) -> fmt.println(`str: {s}`)
-    | Option.None    -> fmt.println("nothing")
+    | Maybe.Just(s)  -> fmt.println(`str: {s}`)
+    | Maybe.Nothing  -> fmt.println("nothing")
     }
 }

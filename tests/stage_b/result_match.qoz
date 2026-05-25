@@ -1,17 +1,18 @@
 // expect: 7
-// Generic Result<T, E> with two arms and pattern binding.
+// Generic two-arm ADT with pattern binding. Uses a user-defined name
+// so it does not shadow the prelude's Result.
 
-type Result<T, E> =
-    | Ok(T)
-    | Err(E)
+type Outcome<T, E> =
+    | Got(T)
+    | Bad(E)
 
-let unwrap_default<T, E>(r: Result<T, E>, fallback: T): T = match r {
-| Ok(x)  -> x
-| Err(_) -> fallback
+let unwrap_default<T, E>(r: Outcome<T, E>, fallback: T): T = match r {
+| Got(x) -> x
+| Bad(_) -> fallback
 }
 
 let main(): i64 = {
-    let ok: Result<i64, i64> = Ok(7)
-    let er: Result<i64, i64> = Err(99)
+    let ok: Outcome<i64, i64> = Got(7)
+    let er: Outcome<i64, i64> = Bad(99)
     unwrap_default(ok, 0) + unwrap_default(er, 0)
 }

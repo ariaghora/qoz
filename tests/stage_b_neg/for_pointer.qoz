@@ -1,0 +1,13 @@
+// Negative: a raw pointer is not iterable. A pointer carries no
+// length so `for x in p { ... }` has no termination condition.
+
+import mem
+
+let main(): i64 = {
+    let p = mem.alloc(8) as *i64
+    var sum: i64 = 0
+    for x in p {
+        sum += x
+    }
+    sum
+}

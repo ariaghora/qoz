@@ -355,9 +355,10 @@ let arg_passes_to_param(param: ty.Ty, arg: ty.Ty): bool = {
 // parameter without first unifying the constructor's type arguments.
 let same_constructor_assignable(param: ty.Ty, arg: ty.Ty): bool = {
     match param {
-    | TyAdt(_, pn, pa) -> {
+    | TyAdt(ph, pn, pa) -> {
         match arg {
-        | TyAdt(_, an, aa) -> {
+        | TyAdt(ah, an, aa) -> {
+            if !strings.eq_raw(ph, ah) { return false }
             if !strings.eq_raw(pn, an) { return false }
             if len(pa) != len(aa) { return false }
             var i: i64 = 0
@@ -370,9 +371,10 @@ let same_constructor_assignable(param: ty.Ty, arg: ty.Ty): bool = {
         | _ -> false
         }
     }
-    | TyRecord(_, pn, pa) -> {
+    | TyRecord(ph, pn, pa) -> {
         match arg {
-        | TyRecord(_, an, aa) -> {
+        | TyRecord(ah, an, aa) -> {
+            if !strings.eq_raw(ph, ah) { return false }
             if !strings.eq_raw(pn, an) { return false }
             if len(pa) != len(aa) { return false }
             var i: i64 = 0

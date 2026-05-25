@@ -753,12 +753,16 @@ let scan_interp_end(body: string, start: i64): i64 = {
     return -1
 }
 
-// Re-tokenize the interpolation body and parse it as a single
-// expression. `text` is the substring inside the `{...}` (without the
-// braces). `span` locates the start for diagnostics.
-let build_interp_expr(text: string, span: ast.Span): ast.Expr = {
-    let tokens = tokenize.run(text)
-    var sub = make_parser(tokens, span.file)
+// Re-tokenize an interpolation slot body and parse it as a single
+// expression. `text` is the substring inside the `{...}` (without
+// the braces). `start_line` and `start_col` are where the first
+// byte of `text` sits in the outer file; the inner tokenizer is
+// initialised at that position so every token carries the correct
+// outer span. A diagnostic on the inner expression then anchors at
+// the call site, not at the surrounding backtick.
+let build_interp_expr_at(text: string, file: string, start_line: i64, start_col: i64): ast.Expr = {
+    let tokens = tokenize.run_at(text, start_line, start_col)
+    var sub = make_parser(tokens, file)
     parse_expr(&sub)
 }
 
@@ -771,6 +775,30 @@ let interp_text_valid(text: string): bool = {
     let _ = parse_expr(&sub)
     if len(sub.errors) > 0 { return false }
     sub.pos == len(sub.tokens)
+}
+
+type OuterPos = { line: i64, col: i64 }
+
+// Walk `body[0..offset]` counting newlines and column advances, so
+// the source position of `body[offset]` in the outer file is exactly
+// reconstructed. `span` locates the opening delimiter of the
+// backtick literal in the outer file; the first byte of `body` sits
+// one column past that delimiter.
+let body_offset_to_outer(body: string, offset: i64, span: ast.Span): parse.OuterPos = {
+    var line: i64 = span.line
+    var col:  i64 = span.col + 1
+    var i: i64 = 0
+    while i < offset {
+        let c = strings.byte_at(body, i)
+        if c == 10 {
+            line += 1
+            col = 1
+        } else {
+            col += 1
+        }
+        i += 1
+    }
+    parse.OuterPos { line: line, col: col }
 }
 
 // Translate one source byte from a backtick-string body into the bytes
@@ -854,7 +882,8 @@ let build_string_lit_or_interp(raw: string, span: ast.Span): ast.Expr = {
             let ident_text = if end >= 0 { strings.slice(body, i + 1, end) } else { "" }
             if end >= 0 && interp_text_valid(ident_text) {
                 template = strings.cat(template, "{}")
-                vec.push(&args, build_interp_expr(ident_text, span))
+                let pos = body_offset_to_outer(body, i + 1, span)
+                vec.push(&args, build_interp_expr_at(ident_text, span.file, pos.line, pos.col))
                 i = end + 1
             } else {
                 template = append_str_byte(template, body, i)

@@ -34,6 +34,52 @@ type Lexer = {
 
 let make_lexer(src: string): Lexer = Lexer { src: src, pos: 0, line: 1, col: 1 }
 
+// Variant that starts the line / column counter at user-supplied
+// values. Used by the parser when re-tokenising an interpolation
+// slot body: the slot is at a known position inside the outer file,
+// and the inner tokens carry spans that resolve to that position so
+// diagnostics anchor at the call site rather than the start of the
+// substring.
+let make_lexer_at(src: string, line: i64, col: i64): Lexer = Lexer { src: src, pos: 0, line: line, col: col }
+
+let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = {
+    var raw: Vec<tokenize.Token> = vec.make()
+    var l = make_lexer_at(src, start_line, start_col)
+    let kw = build_keywords()
+    var running = true
+    while running {
+        let t = lex_one(&l, &kw)
+        match t.kind {
+        | TokEOF -> running = false
+        | _      -> vec.push(&raw, t)
+        }
+    }
+    var out: Vec<tokenize.Token> = vec.make()
+    var paren_depth: i64 = 0
+    var i: i64 = 0
+    while i < len(raw) {
+        let cur = raw[i]
+        if i > 0 && paren_depth == 0 {
+            let prev = raw[i - 1]
+            if cur.line > prev.line && is_stmt_ender(prev) && !is_line_continuation(cur) {
+                vec.push(&out, tokenize.Token { kind: TokPunct, text: ";", line: prev.line, col: prev.col })
+            }
+        }
+        vec.push(&out, cur)
+        match cur.kind {
+        | TokPunct -> {
+            if strings.eq_raw(cur.text, "(") { paren_depth += 1 }
+            else if strings.eq_raw(cur.text, "[") { paren_depth += 1 }
+            else if strings.eq_raw(cur.text, ")") { paren_depth -= 1 }
+            else if strings.eq_raw(cur.text, "]") { paren_depth -= 1 }
+        }
+        | _ -> { }
+        }
+        i += 1
+    }
+    out
+}
+
 // Report a malformed-token error and exit non-zero. The tokenizer
 // has no recovery channel beyond keeping the bytes as-is, which
 // downstream consumers cannot reliably distinguish from a well-formed
@@ -323,7 +369,10 @@ let is_stmt_ender(t: tokenize.Token): bool = {
 // Returns true when the upcoming token clearly extends the previous
 // expression: binary operators, postfix operators, closing brackets,
 // alternation `|`, the `else`/`as`/`in` keywords, and so on. When this
-// holds, do not synthesise a semicolon at the line break.
+// holds, do not synthesise a semicolon at the line break. `*` and `&`
+// are intentionally omitted because they are also the unary deref and
+// address-of operators; treating them as continuations would turn a
+// new-line `*buf = nb` into the multiplication `(prev) * buf`.
 let is_line_continuation(t: tokenize.Token): bool = {
     match t.kind {
     | TokKeyword -> {
@@ -336,11 +385,9 @@ let is_line_continuation(t: tokenize.Token): bool = {
         let s = t.text
         if strings.eq_raw(s, "|")  { return true }
         if strings.eq_raw(s, "||") { return true }
-        if strings.eq_raw(s, "&")  { return true }
         if strings.eq_raw(s, "&&") { return true }
         if strings.eq_raw(s, "+")  { return true }
         if strings.eq_raw(s, "-")  { return true }
-        if strings.eq_raw(s, "*")  { return true }
         if strings.eq_raw(s, "/")  { return true }
         if strings.eq_raw(s, "%")  { return true }
         if strings.eq_raw(s, "^")  { return true }

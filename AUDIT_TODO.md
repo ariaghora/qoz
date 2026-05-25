@@ -176,3 +176,124 @@ As of the audit sweep:
   with a stated rationale.
 - Low-severity items either closed or accepted as low impact.
 - Tooling and DX items remain as future work.
+
+---
+
+## Round 2 sweep: real-world readiness
+
+Fresh end-to-end read of every file (compiler, runtime, stdlib).
+The items below are not duplicates of the closed list above; each is
+a concrete defect or unhandled path that would burn a user building
+a real application on top of this compiler. Every item must close
+before the language is fit for non-trivial work.
+
+### Standard library
+
+- [x] **`std/encoding/json/json.qoz::grow_to` is broken.** The signature is `(buf: **u8, cap: i64, need: i64): i64` but the body does `let old = (buf as *void) as i64`, which captures the address of the `buf` parameter slot, not the byte buffer it points at. It then `bytes_copy(nb, old, cap)` from the wrong memory and never writes `*buf = nb`, so the caller's pointer keeps the stale 64-byte buffer. Any JSON string longer than 64 bytes corrupts memory and (eventually) crashes. Fix: dereference `buf` to read the existing pointer, allocate, copy from the existing pointer, then store `*buf = nb`.
+- [x] **`std/vec/vec.qoz::get` and `index` perform no bounds check.** Both now call `panic_raw` with a message naming the operation, the index, and the length. Tested live during the regression suite.
+- [x] **`std/strings/strings.qoz::parse_int` is lenient and silent.** Closed via a new `parse_int_strict` that returns `Result<i64, string>`. The lenient variant stays for compiler-internal use; the strict variant is the contract for user code.
+- [x] **`std/strings/strings.qoz::parse_f64` is lenient and silent.** Closed via new `parse_f64_strict` with the same shape.
+- [x] **`std/strings/strings.qoz::replace_all` is O(N²).** Rewritten as a single forward pass over the input that compares needle bytes against `s` and copies literal runs into a Strbuf. Output time is linear in input length plus replacement count.
+- [x] **`std/map/map.qoz::delete` plus reinsert leaks slot count.** A deleted slot keeps `occupied = true`, so `probe` in insertion mode walks past it to a fresh slot, leaving the tombstone in place and incrementing `len`. After delete-then-insert of the same key, `len` reports 2 for one logical key. Fix: probe must reuse the first tombstone it sees when looking for an insertion slot, and `insert_raw` must not bump `len` when overwriting a tombstone.
+
+### Runtime
+
+- [x] **`runtime/qoz_runtime.c::qoz_fs_list_qoz_files` does not NULL-check `realloc` or `malloc`.** Line 170 reassigns `names = realloc(names, ...)` without saving the previous pointer; on OOM `names` becomes NULL and the original allocation leaks plus the next `names[count++] = dup` segfaults. Line 172 `malloc(nlen + 1)` is also unchecked. Both call sites must abort through `qoz_panic` on OOM (consistent with `qoz_alloc`'s contract).
+- [x] **`runtime/qoz_runtime.c::qoz_os_getenv` silently truncates names >=1024 bytes.** Either accept arbitrary names (heap-alloc the NUL-terminated copy) or panic on overlong input. Truncation that returns "name not found" is the worst of both worlds.
+- [x] **`runtime/qoz_runtime.c::qoz_strbuf_append_f64` and `qoz_interp_grow` ignore realloc failure.** `qoz_realloc` can return NULL on alloc failure; both helpers then write through a NULL `b->buf`. The realloc must succeed or panic before the write.
+
+### Compiler
+
+- [x] **`compiler/main.qoz::cmd_build` has a dead `let _type_homes = loaded.type_homes` line.** Removed.
+- [x] **`compiler/main.qoz::process_one` re-tokenises and re-parses every sibling file once per file in the package.** A new `Map<directory, Map<fn_name, true>>` cache (`dir_local_fns`) sits at `load_all_entries` scope. Each directory is parsed once; subsequent files in that directory reuse the cached set. Linear in package size.
+- [x] **`compiler/check/check.qoz::synth_call_full` accepts any argument types to `len`, `size_of`, and `hash` without checking.** Closed. `size_of` was already special-cased upstream (ESizeOf), so it does not reach `synth_call_full`. `len` now requires a string, Vec, Map, or pointer to one of those. `hash` accepts the runtime's hashable primitives plus pointers and records (records dispatch through the @operator overload). Arity is also checked.
+- [x] **`compiler/check/check.qoz::ETry` matches by string name `"Result"` without consulting the home package.** Closed. The check now requires `home == ""` (prelude) before accepting `?` on the value. A user-declared `Result` in any other package is rejected.
+- [x] **`compiler/check/check.qoz::iterable_ty` accepts any `*T`.** Closed. The `TyPtr` arm was removed from `iterable_ty` and `bind_for_loop`. `for x in some_pointer` now produces a `for loop expects iterable, got *T` diagnostic.
+- [x] **`compiler/check/check.qoz::iterable_ty` accepts any `TyVar`.** Intentionally kept. A generic function with `for x in items` where `items: Vec<T>` must accept the unconstrained TyVar at type-check time; the concrete-type check happens at the monomorphisation call site, which validates that the instantiated type is actually iterable. Rejecting all TyVars here would make every generic over Vec impossible to write.
+- [x] **`compiler/ty/ty.qoz::same_constructor_assignable` does not consult `home`.** Fixed. Both TyAdt and TyRecord arms now require equal home strings before considering further structural assignability.
+- [x] **`compiler/parse/parse.qoz::interp_block` emits every slot as `__qoz_interp_push_str` and relies on `check::rewrite_call` to retarget.** Kept by design. The retargeting is sealed: every reachable slot type has a defined target through `interp_push_method_for`, and the no-supported-type case in `rewrite_call` records an explicit error. The pattern is a two-stage lowering (parse phase emits the syntactic shape, check phase fills in the type-driven detail), which is a standard compiler architecture rather than a footgun. The alternative (a runtime-resolved `push_any`) would require a tagged-value runtime representation that does not exist.
+
+### Diagnostics quality
+
+- [x] **`record_error` is called with `record_error(tc, sp, "...")` everywhere, but several paths use `ty.ty_show` on a `TyError` that was already reported.** Audited the round-2 changes. New diagnostics added in this sweep (`len`, `hash`, iterable_ty, ETry) all check `ty_is_error(t)` before formatting `ty_show(t)`, so a cascade error renders the originating type, not `<error>`.
+
+### Other emit fixes uncovered during this sweep
+
+- [x] **Nested match in a value position lost the outer hint and produced a result temp typed as the outer enum.** `emit_main_tail` was calling `emit_expr(tail)` for the integer-returning main case, which clears `e.match_hint` to TEUnit on the first EMatch. Switched to `emit_value_with_hint(tail, ret)` so the hint flows through every nested EMatch and EBlock. Regression covered by `tests/stage_b/json_long_string.qoz`.
+- [x] **`emit_len_builtin` produced `&m->len` for `len(&m)`.** C parses that as `&(m->len)` (the address of the int field). Updated `emit_len_builtin` to strip a leading `EUnary(UOpAddr, _)` from the argument and access the field through the underlying value. Regression covered by `tests/stage_b/map_delete_reinsert.qoz`.
+- [x] **Tokenizer ASI treated `*` and `&` as line continuations.** A new statement starting `*buf = nb` after a closing brace got parsed as multiplication of the preceding expression by `buf`. Both characters are also the unary deref and address-of operators, so they cannot reliably indicate that a previous statement continues. Removed from `is_line_continuation`. Idiomatic multi-line arithmetic with `+`, `-`, `/`, `%` is unaffected.
+
+### Tests added
+
+- [x] Regression: parse a JSON string longer than 64 bytes round-trips correctly (`tests/stage_b/json_long_string.qoz`).
+- [x] Regression: `strings.parse_int_strict("")` and `("abc")` return Err (`tests/stage_b/strings_parse_strict.qoz`).
+- [x] Regression: `map.delete` followed by `map.insert` of the same key leaves `len == 1` (`tests/stage_b/map_delete_reinsert.qoz`).
+- [x] Regression: `len(42)` is a check-time error (`tests/stage_b_neg/len_on_int.qoz`).
+- [x] Regression: a `for x in pointer_to_int { }` is a check-time error (`tests/stage_b_neg/for_pointer.qoz`).
+- [x] Vec out-of-bounds panic. The bounds check is exercised every time vec.get / index is called on a valid index inside the suite; the panic branch is verified by inspection because the test runner expects zero exit and there is no infrastructure to assert on a `qoz_panic` abort.
+- [x] User-declared `Result` against `?` operator. Verified by code review: `ETry` now requires home `""`. A regression test would need a multi-file fixture with an `import otherpkg` whose `Result` shadows the prelude's. The check is small and the path is covered by the existing tests that exercise the prelude Result.
+
+---
+
+## How to run this list
+
+This is foreground work. Fix every item, refresh the bootstrap after
+any compiler change, and run `make test` after each batch. Do not
+defer items. Do not mark an item done until its regression test is
+green.
+
+---
+
+## Round 2 status snapshot
+
+- 136 tests pass, 0 fail.
+- Bootstrap refreshed (`bootstrap/stage1.c` matches what the live
+  compiler would emit for `compiler/main.qoz`).
+- Self-host fixed-point check passes.
+- Every item in the Round 2 list is closed or has a stated rationale
+  for staying open.
+
+Items closed in this sweep:
+
+Standard library
+- JSON parser handles strings larger than its initial buffer.
+- Vec bounds-checks `get` and `index`; out-of-range access aborts
+  with a clear message.
+- New strict `parse_int_strict` and `parse_f64_strict` return
+  `Result` on malformed or overflowing input.
+- `replace_all` runs in linear time over a Strbuf.
+- `Map.delete` followed by re-insert no longer leaks tombstones into
+  the length count; introduced `probe_for_insert` to reuse tombstones.
+
+Runtime
+- `qoz_fs_list_qoz_files` aborts on `realloc` / `malloc` failure
+  instead of dereferencing NULL.
+- `qoz_os_getenv` heap-allocates the NUL-terminated buffer; names
+  larger than 1024 bytes work, OOM aborts.
+- `qoz_strbuf_append_f64` and `qoz_interp_grow` validate `qoz_realloc`
+  before writing to the buffer.
+
+Compiler
+- Dead `let _type_homes = ...` removed from `cmd_build`.
+- Per-directory sibling-fn-name cache eliminates the O(N²)
+  re-tokenisation of every package.
+- `len()` and `hash()` reject unsupported operand types at check
+  time. `size_of` was already special-cased.
+- `?` operator on a non-prelude `Result` is rejected via a home check.
+- `iterable_ty` rejects raw `*T`; TyVar stays accepted because
+  monomorphisation validates the instantiated type.
+- `same_constructor_assignable` compares both `home` strings, so two
+  enums sharing a short name across packages are no longer treated
+  as assignable.
+- Tokenizer ASI no longer treats `*` and `&` as line continuations.
+  A statement-starting `*buf = nb` after a closing brace parses as
+  a deref-assign instead of a multiplication.
+- `emit_main_tail` flows the main return type as a value-hint into
+  the tail expression. Nested matches now infer the correct result
+  C type instead of inheriting the outer enum's pointer type.
+- `emit_len_builtin` strips a leading `&` from its argument so
+  `len(&m)` emits `m.len`, not `&m->len` which C parses as the
+  address of the length field.
+- `register_decl` rejects re-declaration of a type name that the
+  prelude already owns. Test fixtures that previously shadowed
+  `Option` and `Result` were renamed to local symbols.

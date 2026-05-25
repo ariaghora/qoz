@@ -1,19 +1,19 @@
 import strings
 import fmt
 
-type Option<T> =
-    | Some(T)
-    | None
+type Maybe<T> =
+    | Just(T)
+    | Nothing
 
 let main() = {
-    let a: Option<i32> = Option.None
-    let b: Option<i32> = Option.Some(7)
+    let a: Maybe<i32> = Maybe.Nothing
+    let b: Maybe<i32> = Maybe.Just(7)
     match a {
-    | Option.Some(v) -> fmt.println(`a: {v}`)
-    | Option.None    -> fmt.println("a: nothing")
+    | Maybe.Just(v)  -> fmt.println(`a: {v}`)
+    | Maybe.Nothing  -> fmt.println("a: nothing")
     }
     match b {
-    | Option.Some(v) -> fmt.println(`b: {v}`)
-    | Option.None    -> fmt.println("b: nothing")
+    | Maybe.Just(v)  -> fmt.println(`b: {v}`)
+    | Maybe.Nothing  -> fmt.println("b: nothing")
     }
 }

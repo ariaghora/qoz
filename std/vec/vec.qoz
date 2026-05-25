@@ -2,6 +2,13 @@
 
 import mem
 
+@link_name("qoz_panic")
+external let panic_raw(msg: string)
+
+let bounds_die(op: string, i: i64, n: i64) = {
+    panic_raw(`vec.{op}: index {i} out of bounds for vec of length {n}`)
+}
+
 type Vec<T> = {
     data: *T,
     len:  i64,
@@ -25,7 +32,10 @@ let push<T>(v: *Vec<T>, x: T) = {
     v.len = v.len + 1
 }
 
-let get<T>(v: *Vec<T>, i: i64): T = v.data[i]
+let get<T>(v: *Vec<T>, i: i64): T = {
+    if i < 0 || i >= v.len { bounds_die("get", i, v.len) }
+    v.data[i]
+}
 
 let pop<T>(v: *Vec<T>): Option<T> = {
     if v.len == 0 { return None }
@@ -38,7 +48,10 @@ let clear<T>(v: *Vec<T>) = {
 }
 
 @operator("[]")
-let index<T>(v: *Vec<T>, i: i64): T = v.data[i]
+let index<T>(v: *Vec<T>, i: i64): T = {
+    if i < 0 || i >= v.len { bounds_die("index", i, v.len) }
+    v.data[i]
+}
 
 @operator("len")
 let len<T>(v: *Vec<T>): i64 = v.len

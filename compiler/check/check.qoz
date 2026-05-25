@@ -103,7 +103,10 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         }
         tc.packages[name] = true
     }
-    | DEnum(_, name, _, variants)     -> {
+    | DEnum(sp, name, _, variants)     -> {
+        if type_name_collides(tc, name) {
+            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        }
         tc.enums[name] = d
         for v in variants {
             if !map.contains(&tc.variant_of, v.name) {
@@ -121,13 +124,29 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
             }
         }
     }
-    | DStruct(_, name, _, _)          -> { tc.structs[name] = d }
-    | DTypeAlias(_, name, _, _)       -> { tc.aliases[name] = d }
+    | DStruct(sp, name, _, _)          -> {
+        if type_name_collides(tc, name) {
+            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        }
+        tc.structs[name] = d
+    }
+    | DTypeAlias(sp, name, _, _)       -> {
+        if type_name_collides(tc, name) {
+            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        }
+        tc.aliases[name] = d
+    }
     | DFn(_, name, _, _, _, _, _)     -> { tc.fns[name] = d }
     | DExternal(_, name, _, _, _)     -> { tc.externs[name] = d }
     | DConst(_, _, _, _)              -> { }
     | DLink(_, _, _)                  -> { }
     }
+}
+
+let type_name_collides(tc: *check.TyContext, name: string): bool = {
+    map.contains(&tc.enums, name) ||
+    map.contains(&tc.structs, name) ||
+    map.contains(&tc.aliases, name)
 }
 
 let register_file(tc: *check.TyContext, f: ast.File) = {
@@ -183,12 +202,20 @@ let nth_line(src: string, line: i64): string = {
     ""
 }
 
-// Produce a caret string with `col - 1` spaces followed by a `^`.
-let caret_pad(col: i64): string = {
+// Produce a caret string aligned with the col-th byte of `line`.
+// Each leading byte that is a tab is preserved as a tab in the
+// padding so the terminal's tab-expansion lines up with the caret;
+// every other byte becomes a space. Without this, a source line that
+// contains a tab renders wider than the pad and the caret drifts
+// left of the offending token.
+let caret_pad(line: string, col: i64): string = {
     var s = ""
+    let n = len(line)
     var i: i64 = 1
     while i < col {
-        s = strings.cat(s, " ")
+        let c = if i - 1 < n { strings.byte_at(line, i - 1) } else { 32 }
+        if c == 9 { s = strings.cat(s, "\t") }
+        else      { s = strings.cat(s, " ") }
         i += 1
     }
     strings.cat(s, "^")
@@ -213,7 +240,7 @@ let report(tc: *check.TyContext) = {
                 let line = nth_line(src, e.span.line)
                 if len(line) > 0 {
                     fmt.println(`    {line}`)
-                    fmt.println(`    {caret_pad(e.span.col)}`)
+                    fmt.println(`    {caret_pad(line, e.span.col)}`)
                 }
             }
         }
@@ -461,21 +488,22 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     | EIndex(sp, base, idx)  -> synth_index(tc, env, sp, base, idx)
     | ECast(_, value, te)    -> { let _ = synth(tc, env, value); resolve_type(tc, te) }
     | ETry(sp, v)            -> {
-        // The `?` operator on a Result<T, E> evaluates to T. Codegen
-        // handles the early-return on the Err branch. Anything other
-        // than a Result is rejected here.
+        // The `?` operator on the prelude's Result<T, E> evaluates to
+        // T. Codegen handles the early-return on the Err branch. The
+        // operand's home must be "" (the prelude); a user-declared
+        // enum that happens to be named Result is rejected.
         let t = synth(tc, env, v)
         if ty.ty_is_error(t) { return ty.ty_error_() }
         match t {
-        | TyAdt(_, name, args) -> {
-            if strings.eq_raw(name, "Result") && len(args) >= 1 {
+        | TyAdt(home, name, args) -> {
+            if strings.eq_raw(home, "") && strings.eq_raw(name, "Result") && len(args) >= 1 {
                 return args[0]
             }
-            record_error(tc, sp, `the '?' operator requires a Result<T, E>, got {ty.ty_show(t)}`)
+            record_error(tc, sp, `the '?' operator requires the prelude Result<T, E>, got {ty.ty_show(t)}`)
             ty.ty_error_()
         }
         | _ -> {
-            record_error(tc, sp, `the '?' operator requires a Result<T, E>, got {ty.ty_show(t)}`)
+            record_error(tc, sp, `the '?' operator requires the prelude Result<T, E>, got {ty.ty_show(t)}`)
             ty.ty_error_()
         }
         }
@@ -881,6 +909,31 @@ let is_interp_intrinsic(name: string): bool = {
     strings.has_prefix(name, "__qoz_interp_")
 }
 
+let is_len_argument(t: ty.Ty): bool = {
+    match t {
+    | TyString | TyCstring -> true
+    | TyRecord(_, name, _) -> strings.eq_raw(name, "Vec") || strings.eq_raw(name, "Map")
+    | TyPtr(inner)         -> is_len_argument(inner)
+    | TyVar(_, _)          -> true
+    | _                    -> false
+    }
+}
+
+// Records reach this predicate via the @operator("hash") dispatch:
+// the emit phase rewrites a bare `hash(rec)` into a call to the
+// user's overload, so the check stage need not understand the
+// concrete signature, only that an overload could exist.
+let is_hash_argument(t: ty.Ty): bool = {
+    match t {
+    | TyString | TyCstring | TyChar | TyBool -> true
+    | TyInt(_)        -> true
+    | TyPtr(inner)    -> is_hash_argument(inner)
+    | TyVar(_, _)     -> true
+    | TyRecord(_, _, _) -> true
+    | _               -> false
+    }
+}
+
 // True when `t` can be rendered to a string by the auto-derived show
 // machinery. Records, ADTs, tuples, Vec, and Map are all printable
 // because their structure is exposed to the compiler. Function values
@@ -922,15 +975,33 @@ let resolve_callee_fn(tc: *check.TyContext, callee: ast.Expr): string = {
 
 let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>): ty.Ty = {
     let fn_name: string = resolve_callee_fn(tc, callee)
-    // Bare-ident primitives that take values of any type and return a
-    // fixed integer type. `size_of` may take a type identifier rather
-    // than a value; the argument is not synthesised for that reason.
-    if strings.eq_raw(fn_name, "len") || strings.eq_raw(fn_name, "size_of") {
-        for a in args { let _ = synth(tc, env, a) }
+    // size_of is parsed as ESizeOf directly, so it never reaches this
+    // path. len and hash are bare-name primitives. len accepts a
+    // string, Vec, Map, or a pointer to one of these (the &xs form
+    // used elsewhere in the compiler); anything else is rejected.
+    // hash accepts a string, integer, or pointer to a value of those
+    // types; user records that overload hash flow through the regular
+    // operator-dispatch path and never reach here.
+    if strings.eq_raw(fn_name, "len") {
+        if len(args) != 1 {
+            record_error(tc, sp, `len() takes exactly 1 argument, got {len(args)}`)
+            return ty.ty_int_(64, true)
+        }
+        let t = synth(tc, env, args[0])
+        if !ty.ty_is_error(t) && !is_len_argument(t) {
+            record_error(tc, sp, `len() expects a string, Vec, or Map (or a pointer to one); got {ty.ty_show(t)}`)
+        }
         return ty.ty_int_(64, true)
     }
     if strings.eq_raw(fn_name, "hash") {
-        for a in args { let _ = synth(tc, env, a) }
+        if len(args) != 1 {
+            record_error(tc, sp, `hash() takes exactly 1 argument, got {len(args)}`)
+            return ty.ty_int_(64, false)
+        }
+        let t = synth(tc, env, args[0])
+        if !ty.ty_is_error(t) && !is_hash_argument(t) {
+            record_error(tc, sp, `hash() expects a string, integer, char, bool, or pointer to one of these; got {ty.ty_show(t)}`)
+        }
         return ty.ty_int_(64, false)
     }
     // Interpolation intrinsics. Implemented as bare-name runtime
@@ -1829,9 +1900,12 @@ let collect_covered_variants(arms: Vec<ast.MatchArm>, cs: *CoverSet) = {
 }
 
 // True when `t` can drive a `for x in t` loop. With paired bindings
-// (`for k, v in m`) only a two-argument record (Map) is acceptable.
-// TyInt covers the `for i in 0..<n` range form: the BOpRange operator
-// returns the operand type, which is an integer.
+// (`for k, v in m`) only a two-argument Map is acceptable. With a
+// single binding, the supported iterables are Vec, Map (yields keys),
+// Range, and an integer (the `for i in 0..<n` range form, where the
+// BOpRange operator returns its operand type). Pointers are not
+// iterable because a raw pointer carries no length, so `for x in p`
+// would have no termination condition.
 let iterable_ty(t: ty.Ty, paired: bool): bool = {
     match t {
     | TyRecord(_, name, args) -> {
@@ -1839,7 +1913,6 @@ let iterable_ty(t: ty.Ty, paired: bool): bool = {
         strings.eq_raw(name, "Vec") || strings.eq_raw(name, "Map") || strings.eq_raw(name, "Range")
     }
     | TyInt(_) -> !paired
-    | TyPtr(_) -> !paired
     | TyVar(_, _) -> true
     | TyAdt(_, name, _) -> strings.eq_raw(name, "Range")
     | _ -> false
@@ -1854,10 +1927,6 @@ let bind_for_loop(env: *Env, b1: string, b2: string, it_ty: ty.Ty) = {
                 env_define(env, b1, args[0])
                 return
             }
-        }
-        | TyPtr(inner) -> {
-            env_define(env, b1, inner)
-            return
         }
         | _ -> { }
         }

@@ -250,6 +250,10 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
     var type_homes: Map<string, string> = map.make()
     var fn_homes:   Map<string, string> = map.make()
     var file_pkgs:  Map<string, string> = map.make()
+    // Per-directory cache of fn/extern names declared anywhere in the
+    // package. process_one consults this so it parses each directory's
+    // sibling list once instead of once per file in the package.
+    var dir_local_fns: Map<string, Map<string, bool>> = map.make()
     // Prelude: Option, Result, Vec, and Map are in scope without an
     // explicit import. Types and variant constructors flow through
     // the global namespace either way; functions stay package-prefixed
@@ -280,13 +284,13 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
         qi += 1
         if !map.contains(&visited, cur.path) {
             visited[cur.path] = true
-            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, &file_pkgs, qoz_root)
+            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, &file_pkgs, &dir_local_fns, qoz_root)
         }
     }
     Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes, file_pkgs: file_pkgs }
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, qoz_root: string) = {
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, qoz_root: string) = {
     let src = fs.read_file(cur.path)
     if len(src) < 0 {
         fmt.println(`could not read {cur.path}`)
@@ -308,28 +312,8 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         os.exit(1)
     }
     let file = parsed.file
-    // Collect fn and extern names defined anywhere in this package.
-    // A package can span several .qoz files in the same directory,
-    // and a file inside that package may call a sibling function by
-    // its bare name. The renamer prefixes such calls with the
-    // package, so it must see every sibling declaration first.
-    var local_fns: Map<string, bool> = map.make()
     let pkg_dir = dir_of_path(cur.path)
-    let pkg_files = list_package_files(pkg_dir)
-    for sibling in pkg_files {
-        let sib_src = fs.read_file(sibling)
-        if len(sib_src) >= 0 {
-            let sib_tokens = tokenize.run(sib_src)
-            let sib_parsed = parse.run(sib_tokens, sibling)
-            for d in sib_parsed.file.decls {
-                match d {
-                | DFn(_, n, _, _, _, _, _) -> local_fns[n] = true
-                | DExternal(_, n, _, _, _) -> local_fns[n] = true
-                | _ -> { }
-                }
-            }
-        }
-    }
+    let local_fns = sibling_fn_names(pkg_dir, dir_local_fns)
     for d in file.decls {
         match d {
         | DImport(_, ipath, alias) -> {
@@ -377,6 +361,33 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             vec.push(aggregated_decls, renamed)
         }
     }
+}
+
+// Return the set of fn / extern names declared in every .qoz file
+// inside `pkg_dir`. Cached by directory so a package with N files is
+// tokenised and parsed once per file, not N times per file.
+let sibling_fn_names(pkg_dir: string, cache: *Map<string, Map<string, bool>>): Map<string, bool> = {
+    if let Some(existing) = map.get(cache, pkg_dir) {
+        return existing
+    }
+    var local_fns: Map<string, bool> = map.make()
+    let pkg_files = list_package_files(pkg_dir)
+    for sibling in pkg_files {
+        let sib_src = fs.read_file(sibling)
+        if len(sib_src) >= 0 {
+            let sib_tokens = tokenize.run(sib_src)
+            let sib_parsed = parse.run(sib_tokens, sibling)
+            for d in sib_parsed.file.decls {
+                match d {
+                | DFn(_, n, _, _, _, _, _) -> local_fns[n] = true
+                | DExternal(_, n, _, _, _) -> local_fns[n] = true
+                | _ -> { }
+                }
+            }
+        }
+    }
+    map.set(cache, pkg_dir, local_fns)
+    local_fns
 }
 
 let is_error_placeholder(d: ast.Decl): bool = {
@@ -454,7 +465,6 @@ let count_main_decls(decls: Vec<ast.Decl>): i64 = {
 let cmd_build(path: string, qoz_root: string): string = {
     let paths = resolve_entry_paths(path)
     let loaded = load_all_entries(paths.entries, paths.primary, qoz_root)
-    let _type_homes = loaded.type_homes
     let file = loaded.file
     let main_count = count_main_decls(file.decls)
     if main_count == 0 {

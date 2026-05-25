@@ -23,11 +23,13 @@ type Map<K, V> = {
 
 let make<K, V>(): Map<K, V> = Map { slots: nil, len: 0, cap: 0 }
 
+// Lookup probe. Walks the collision chain until it finds the key or
+// hits an empty slot. Deleted (tombstone) slots are walked past so a
+// key that was once placed after a collision remains reachable. The
+// returned index either holds the key or is the first empty slot in
+// the chain; callers must inspect `occupied` and `deleted` on the
+// returned slot to interpret the result.
 let probe<K, V>(m: *Map<K, V>, key: K): i64 = {
-    // Empty backing array: no slot exists. Return zero so callers
-    // looking for a slot to insert into can grow first; callers that
-    // are looking for an existing entry should consult `m.cap > 0`
-    // before invoking probe (the public get/contains paths do).
     if m.cap == 0 { return 0 }
     let h = hash(key)
     var idx: i64 = (h % (m.cap as u64)) as i64
@@ -43,11 +45,34 @@ let probe<K, V>(m: *Map<K, V>, key: K): i64 = {
     idx
 }
 
+// Insertion probe. Same chain walk as `probe`, but returns the first
+// tombstone seen instead of skipping past it. This keeps the table
+// from accumulating tombstones after a delete-then-insert cycle of
+// the same key.
+let probe_for_insert<K, V>(m: *Map<K, V>, key: K): i64 = {
+    if m.cap == 0 { return 0 }
+    let h = hash(key)
+    var idx: i64 = (h % (m.cap as u64)) as i64
+    var first_tomb: i64 = 0 - 1
+    while m.slots[idx].occupied {
+        if m.slots[idx].deleted {
+            if first_tomb < 0 { first_tomb = idx }
+        } else {
+            if m.slots[idx].key == key {
+                return idx
+            }
+        }
+        idx += 1
+        if idx == m.cap { idx = 0 }
+    }
+    if first_tomb >= 0 { first_tomb } else { idx }
+}
+
 let insert_raw<K, V>(m: *Map<K, V>, key: K, value: V) = {
-    let idx = probe(m, key)
-    let was_occupied = m.slots[idx].occupied
+    let idx = probe_for_insert(m, key)
+    let prev_live = m.slots[idx].occupied && !m.slots[idx].deleted
     m.slots[idx] = Slot { key: key, value: value, occupied: true, deleted: false }
-    if !was_occupied {
+    if !prev_live {
         m.len = m.len + 1
     }
 }

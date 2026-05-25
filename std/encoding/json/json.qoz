@@ -278,9 +278,12 @@ let utf8_encode(buf: *u8, i: i64, code: i64): i64 = {
 let grow_to(buf: **u8, cap: i64, need: i64): i64 = {
     var new_cap = cap
     while new_cap < need { new_cap = new_cap * 2 }
-    let old = (buf as *void) as i64
+    let old_ptr = *buf
     let nb = mem.alloc(new_cap) as *u8
-    bytes_copy(nb as *void, ((old) as *void), cap)
+    if cap > 0 {
+        bytes_copy(nb as *void, old_ptr as *void, cap)
+    }
+    *buf = nb
     new_cap
 }
 

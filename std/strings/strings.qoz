@@ -126,11 +126,12 @@ let cat(a: string, b: string): string = {
     string_alias(buf, n)
 }
 
-// Parse a decimal integer with optional leading minus. An empty
-// string returns 0. Any non-digit byte stops the scan and the digits
-// accumulated so far are returned. Parsing is intentionally lenient
-// because callers in the compiler want a best-effort numeric
-// interpretation rather than a hard error.
+// Lenient decimal parser. Returns 0 on empty input and on any
+// non-digit byte. The compiler's internal call sites accept this
+// looseness because the input has already been validated upstream
+// (the tokenizer rejects malformed integer literals before they
+// reach here). Callers that need explicit failure should use
+// parse_int_strict instead.
 let parse_int(s: string): i64 = {
     let n = len(s)
     if n == 0 { return 0 }
@@ -150,6 +151,39 @@ let parse_int(s: string): i64 = {
         i += 1
     }
     if neg { 0 - acc } else { acc }
+}
+
+// Strict decimal parser. Empty input, leading sign without digits,
+// non-digit bytes, and arithmetic overflow each produce an Err. The
+// range accepted is the positive i64 domain plus zero on the negative
+// side; INT64_MIN (-9223372036854775808) is rejected as overflow
+// because the magnitude does not fit in a positive i64. Callers that
+// require INT64_MIN should use parse_f64 and round.
+let parse_int_strict(s: string): Result<i64, string> = {
+    let n = len(s)
+    if n == 0 { return Err("empty input") }
+    let data = string_data(s) as *u8
+    var i: i64 = 0
+    var neg = false
+    let first = data[0] as i64
+    if first == 45 { neg = true; i = 1 }
+    else if first == 43 { i = 1 }
+    if i >= n { return Err("sign without digits") }
+    let i64_max: i64 = 9223372036854775807
+    var acc: i64 = 0
+    while i < n {
+        let b = data[i] as i64
+        if b < 48 || b > 57 {
+            return Err(cat("non-digit byte at offset ", i64_to_string(i)))
+        }
+        let d = b - 48
+        if acc > (i64_max - d) / 10 {
+            return Err("integer overflow")
+        }
+        acc = acc * 10 + d
+        i += 1
+    }
+    if neg { Ok(0 - acc) } else { Ok(acc) }
 }
 
 @operator("==")
@@ -176,26 +210,36 @@ let lt_raw(a: string, b: string): bool = {
 let lt(a: *string, b: *string): bool = lt_raw(*a, *b)
 
 // Replace every occurrence of `needle` in `s` with `replacement`.
-// Empty needle returns `s` unchanged.
+// Empty needle returns `s` unchanged. Linear time: a single forward
+// scan compares needle bytes against `s` and copies literal runs
+// into a Strbuf rather than re-allocating the output on every byte.
 let replace_all(s: string, needle: string, replacement: string): string = {
     let nn = len(needle)
     if nn == 0 { return s }
-    var out = ""
-    var i: i64 = 0
     let total = len(s)
+    if total < nn { return s }
+    let sd = string_data(s) as *u8
+    let nd = string_data(needle) as *u8
+    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    sb_init(&sb)
+    var i: i64 = 0
+    var run_start: i64 = 0
     while i + nn <= total {
-        if has_prefix(slice(s, i, total), needle) {
-            out = cat(out, replacement)
+        if bytes_eq(sd, i, nd, 0, nn) {
+            if i > run_start {
+                sb_append(&sb, slice(s, run_start, i))
+            }
+            sb_append(&sb, replacement)
             i += nn
+            run_start = i
         } else {
-            out = cat(out, slice(s, i, i + 1))
             i += 1
         }
     }
-    if i < total {
-        out = cat(out, slice(s, i, total))
+    if run_start < total {
+        sb_append(&sb, slice(s, run_start, total))
     }
-    out
+    sb_finish(&sb)
 }
 
 // Render an i64 as a decimal string. The integer `0` returns "0".
@@ -233,6 +277,47 @@ let i64_to_string(v: i64): string = {
     let src = (scratch as i64) + pos
     bytes_copy(out, src as *void, out_len)
     string_alias(out, out_len)
+}
+
+// Strict decimal-float parser. Empty input, a leading sign without
+// digits, a `.` without surrounding digits, and an `e`/`E` without
+// exponent digits each produce an Err. Trailing non-numeric bytes
+// after a valid number also produce an Err.
+let parse_f64_strict(s: string): Result<f64, string> = {
+    let n = len(s)
+    if n == 0 { return Err("empty input") }
+    var i: i64 = 0
+    var neg = false
+    let first = byte_at(s, i)
+    if first == 45 { neg = true; i += 1 }
+    else if first == 43 { i += 1 }
+    if i >= n { return Err("sign without digits") }
+    let start_int = i
+    while i < n && byte_at(s, i) >= 48 && byte_at(s, i) <= 57 { i += 1 }
+    let int_digits = i - start_int
+    var have_frac = false
+    var frac_digits: i64 = 0
+    if i < n && byte_at(s, i) == 46 {
+        have_frac = true
+        i += 1
+        let start_frac = i
+        while i < n && byte_at(s, i) >= 48 && byte_at(s, i) <= 57 { i += 1 }
+        frac_digits = i - start_frac
+    }
+    if int_digits == 0 && frac_digits == 0 {
+        return Err("expected digits")
+    }
+    if i < n && (byte_at(s, i) == 101 || byte_at(s, i) == 69) {
+        i += 1
+        if i < n && (byte_at(s, i) == 45 || byte_at(s, i) == 43) { i += 1 }
+        let start_exp = i
+        while i < n && byte_at(s, i) >= 48 && byte_at(s, i) <= 57 { i += 1 }
+        if i - start_exp == 0 { return Err("expected exponent digits") }
+    }
+    if i != n {
+        return Err(cat("trailing non-numeric input at offset ", i64_to_string(i)))
+    }
+    Ok(parse_f64(s))
 }
 
 // Parse a decimal floating-point string. Accepts an optional sign,

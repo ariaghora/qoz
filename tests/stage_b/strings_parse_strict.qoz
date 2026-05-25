@@ -1,0 +1,56 @@
+// expect: 0
+// Strict integer and float parsers reject malformed input through
+// the Result channel. Lenient parse_int / parse_f64 keep their
+// silent-zero behaviour for the compiler's internal call sites.
+
+import strings
+import result
+
+let assert_int_err(label: string, s: string): i64 = {
+    match strings.parse_int_strict(s) {
+    | Err(_) -> 0
+    | Ok(_)  -> 1
+    }
+}
+
+let assert_int_ok(label: string, s: string, want: i64): i64 = {
+    match strings.parse_int_strict(s) {
+    | Err(_) -> 1
+    | Ok(v)  -> if v == want { 0 } else { 1 }
+    }
+}
+
+let assert_f64_err(label: string, s: string): i64 = {
+    match strings.parse_f64_strict(s) {
+    | Err(_) -> 0
+    | Ok(_)  -> 1
+    }
+}
+
+let assert_f64_ok(label: string, s: string): i64 = {
+    match strings.parse_f64_strict(s) {
+    | Err(_) -> 1
+    | Ok(_)  -> 0
+    }
+}
+
+let main(): i64 = {
+    var bad: i64 = 0
+    bad += assert_int_err("empty", "")
+    bad += assert_int_err("alpha", "abc")
+    bad += assert_int_err("trailing", "12x")
+    bad += assert_int_err("sign-only", "-")
+    bad += assert_int_ok("zero", "0", 0)
+    bad += assert_int_ok("neg", "-42", 0 - 42)
+    bad += assert_int_ok("max", "9223372036854775807", 9223372036854775807)
+    bad += assert_int_err("over", "9223372036854775808")
+
+    bad += assert_f64_err("empty", "")
+    bad += assert_f64_err("alpha", "xyz")
+    bad += assert_f64_err("trailing", "1.5x")
+    bad += assert_f64_err("just-dot", ".")
+    bad += assert_f64_err("exp-no-digits", "1e")
+    bad += assert_f64_ok("normal", "3.14")
+    bad += assert_f64_ok("exp", "1.5e3")
+    bad
+}

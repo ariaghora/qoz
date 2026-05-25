@@ -1,0 +1,18 @@
+// expect: 0
+// Delete a key then insert a new value for the same key; the map's
+// length must stay at one logical entry, not accumulate a tombstone
+// pair. Exercises the tombstone-reuse path in probe_for_insert.
+
+import map
+
+let main(): i64 = {
+    var m: Map<string, i64> = map.make()
+    map.insert(&m, "key", 1)
+    map.delete(&m, "key")
+    map.insert(&m, "key", 2)
+    if len(&m) != 1 { return 1 }
+    match map.get(&m, "key") {
+    | Some(v) -> if v == 2 { 0 } else { 1 }
+    | None    -> 1
+    }
+}
