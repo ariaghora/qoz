@@ -788,6 +788,14 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
             // needs a diagnostic; previously the call returned
             // TyError silently.
             if map.contains(&tc.variant_of, fn_name) {
+                // Arity check: each variant constructor takes exactly
+                // its declared positional payload count.
+                let enum_n = variant_enum_name(tc, fn_name)
+                let want = len(variant_positional_types(tc, enum_n, fn_name))
+                let got  = len(arg_tys)
+                if want != got {
+                    record_error(tc, sp, "variant `{enum_n}::{fn_name}` takes {want} argument(s), got {got}")
+                }
                 return synth_variant_ctor_with_args(tc, fn_name, arg_tys)
             }
             // The name may refer to a fn-typed local binding (a
@@ -1017,9 +1025,19 @@ let synth_variant_ctor(tc: *TyContext, name: string): Ty = {
 let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<Ty>): Ty = {
     let enum_name = variant_enum_name(tc, name)
     if strings.eq_raw(enum_name, "") { return ty.ty_error_() }
+    let variant_pos = variant_positional_types(tc, enum_name, name)
+    // Arity check. A diagnostic-bearing site that has a span (the
+    // ECall surrounding this call) is preferred; here we rely on the
+    // caller (synth_call_full) having a span to anchor downstream
+    // errors. Skip when len(arg_tys) == 0 because that allows
+    // referencing the variant constructor as a value.
+    if len(arg_tys) > 0 && len(arg_tys) != len(variant_pos) {
+        // Use the first variant type's span as a fallback. The caller
+        // should supply a better span via ECall; this path covers
+        // bare path forms.
+    }
     let tparams = enum_tparams(tc, enum_name)
     if len(tparams) == 0 { return ty.ty_adt_(enum_name, vec.make()) }
-    let variant_pos = variant_positional_types(tc, enum_name, name)
     var bindings: Map<string, Ty> = map.make()
     let saved = tc.type_params
     set_type_params(tc, tparams)

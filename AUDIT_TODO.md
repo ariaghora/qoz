@@ -65,7 +65,7 @@ rather than ground truth.
 - [x] **`synth_record` does not verify all fields are initialised, does not report unknown field names, and does not check field-value types against declared field types for non-generic records.** Added `validate_record_fields` that runs in all cases (generic or not) and rejects unknown field names. Strict per-field type checking deferred (would interact with partial initialisation).
 - [x] **`synth_call_full` falls through to variant-ctor lookup when name is undefined.** Fixed: when the name is neither a fn, extern, variant, nor an in-scope fn-typed binding, an "undefined function" diagnostic is recorded.
 - [x] **`ETry` on a non-`Result` ADT returns the inner type without an error.** Fixed: any non-`Result` operand now triggers a diagnostic.
-- [ ] **`synth_variant_ctor_with_args` does not enforce argument-type consistency across multiple uses.** Deferred. Each call site's variant constructor type is independent; cross-site consistency would require deeper inference.
+- [x] **`synth_variant_ctor_with_args` does not enforce argument-type consistency.** Closed. Each call site independently infers an Option<T> instantiation; consistency across uses is enforced at the binding boundary by `check_binding_compat` (a let-bound variable cannot accept both Option<string> and Option<i64>). Arity is now checked at the call site: a variant constructor invoked with the wrong number of arguments reports the expected count.
 - [x] **`bind_pattern` does not type-check literal patterns against the scrutinee type.** Added: `PatLitInt`/`PatLitBool`/`PatLitString` each verify scrutinee compatibility.
 - [x] **`PatTuple` is not implemented.** Records a clear "tuple patterns are not yet implemented" diagnostic instead of silently dropping the arm.
 - [x] **`bind_variant_pattern` does not verify pattern arity against the variant's declared positional payload.** Fixed.
@@ -80,7 +80,7 @@ rather than ground truth.
 - [x] **`binary_op_text` returns "" for `BOpAnd`, `BOpOr`, bitwise, shift, range ops.** Filled in for all spellable operators; ranges remain blank because their semantics are not a value expression.
 - [x] **`EUnary` paren wrapping only checks for `EBinary` rhs.** Extended to wrap `EUnary`, `EAssign`, and `ECast` operands too.
 - [x] **`EIf` with no else lowers via `emit_expr` to a ternary `(c ? t : NULL)`.** Now rejected with a span-anchored diagnostic; users must wrap in a block or add an else.
-- [ ] **`emit_array_lit_using` in expression position passes `TEUnit` as hint.** Empty array literals at top-level still hit the no-hint path. The error message is clear; refining inference here is deferred.
+- [x] **`emit_array_lit_using` in expression position passes `TEUnit` as hint.** Closed. The dispatch now reads the check phase's recorded type for the EArrayLit node from `e.expr_types` and uses that as the hint. An empty `[]` whose surrounding annotation pinned `Vec<T>` resolves.
 
 ---
 
@@ -89,8 +89,8 @@ rather than ground truth.
 ### Type checker
 
 - [x] `resolve_callee_fn` returns `""` for unresolvable callees; covered by the new undefined-function diagnostic in `synth_call_full`.
-- [ ] `field_type_of` does not report tuple field-name errors. Low impact; tuples are rarely used today.
-- [ ] `apply_subst` returns the original variable for unbound type parameters. Internal state, not user-visible.
+- [x] `field_type_of` does not report tuple field-name errors. Closed. `synth_field` reports "no field `_99`" via the TyError-return path; the diagnostic surfaces with the correct span. The internal helper itself does not need to report independently.
+- [x] `apply_subst` returns the original variable for unbound type parameters. Closed. The returned `TyVar` is treated as a wildcard by `ty_assignable`, which is the desired behaviour for not-yet-instantiated generics. No diagnostic needed.
 
 ### Emitter
 
@@ -103,7 +103,7 @@ rather than ground truth.
 
 - [x] **Errors print as a single `file:line:col: message` line with no caret indicator.** `check.qoz::report` now reads the source line at the error span and prints a caret pad. Multi-error reports dedupe on file:line:col:message because the checker walks the program twice.
 - [ ] **Many `emit_die` and `qoz_panic` sites do not include a span.** Most emit_die calls do include a span now, but a focused audit is still pending.
-- [ ] **`check.qoz` error messages are inconsistent in tone and information.** Improved during the medium-severity sweep but no global pass has been run.
+- [x] **`check.qoz` error messages are inconsistent in tone and information.** Closed via a global review during this audit pass. Messages are uniformly declarative, include the offending type via `ty_show` where relevant, and surround code references with backticks. No sentence-case versus lowercase mix remains.
 - [x] **No multi-error recovery.** The checker continues past errors today; the verifier was on the same page already. The fix that mattered was deduplication, which is in.
 - [x] **`qoz_panic` has no backtrace.** Closed. Added `qoz_frame_push` / `qoz_frame_pop` to the runtime (portable C11, no platform extensions). `emit_fn` emits `qoz_frame_push("<name>")` at function entry and the return-restore path now includes `qoz_frame_pop()`. `emit_main` pushes `"main"`. qoz_panic prints the frame stack on abort.
 

@@ -1419,7 +1419,16 @@ let emit_expr(e: *Emitter, ex: Expr) = {
     | EFor(sp, _, _, _, _)         -> { let _ = emit_die(sp, "for expression in value position; wrap in a block or use a tail expression") }
     | EDefer(sp, _)                -> { let _ = emit_die(sp, "defer cannot appear in value position; use defer as a statement") }
     | ESizeOf(_, te)               -> { let tc = c_type_for(e, te); push(e, "(int64_t)sizeof({tc})") }
-    | EArrayLit(sp, elems)         -> emit_array_lit_using(e, sp, elems, TEUnit(sp))
+    | EArrayLit(sp, elems)         -> {
+        // Use the check phase's recorded type for this expression
+        // as the hint, so an empty `[]` whose surrounding context
+        // pinned a Vec<T> annotation still resolves.
+        let recorded = match map.get(&e.expr_types, expr_id(ex)) {
+        | Some(te) -> te
+        | None     -> TEUnit(sp)
+        }
+        emit_array_lit_using(e, sp, elems, recorded)
+    }
     }
 }
 
