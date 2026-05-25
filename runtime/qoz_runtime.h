@@ -103,13 +103,25 @@ void qoz_print_nl(void);
  * single-argument std/fmt::println. */
 void qoz_print_line(qoz_string s);
 
-/* Growable byte buffer used by string interpolation. The struct
- * layout is shared with std/strings::Strbuf so the same value can
- * round-trip between Qoz code and the libm-backed f64 appender below. */
+/* Growable byte buffer used by std/strings::Strbuf. The struct layout
+ * matches the Qoz-side Strbuf record so a Qoz value can be passed in
+ * directly. */
 typedef struct { char *buf; int64_t len; int64_t cap; } qoz_strbuf;
-/* Format a double into the buffer using snprintf("%g", v). Lives in
- * C because Qoz does not yet have a floating-point printer. */
-void       qoz_strbuf_append_f64(void *b, double v);
+void qoz_strbuf_append_f64(void *b, double v);
+
+/* Backtick-string interpolation builder. Allocated, grown, and
+ * finalised entirely through these runtime calls. The compiler emits
+ * a sequence of them for every `text {expr} text` literal, with no
+ * user-importable surface in the path. Callers see only an opaque
+ * pointer. The buffer is GC-tracked, so the string returned by
+ * qoz_interp_finish keeps the bytes reachable through tgc. */
+void*      qoz_interp_init(void);
+void       qoz_interp_push_str(void *b, qoz_string s);
+void       qoz_interp_push_i64(void *b, int64_t v);
+void       qoz_interp_push_f64(void *b, double v);
+void       qoz_interp_push_bool(void *b, bool v);
+void       qoz_interp_push_char(void *b, int64_t c);
+qoz_string qoz_interp_finish(void *b);
 
 #define QOZ_STR_LIT(s) ((qoz_string){ (s), (int64_t)(sizeof(s) - 1) })
 

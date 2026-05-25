@@ -891,30 +891,21 @@ let split_template_chunks(template: string): Vec<string> = {
 let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
     let sb_name = interp_var_name(span)
 
-    // type Strbuf = { buf: *u8, len: i64, cap: i64 } (from std/strings).
-    // The user must `import std/strings` for interpolation to type-check.
-    var strbuf_path: Vec<string> = vec.make()
-    vec.push(&strbuf_path, "Strbuf")
-    var no_args: Vec<TypeExpr> = vec.make()
-    let strbuf_te: TypeExpr = TENamed(span, strbuf_path, no_args)
+    // The interpolation builder is a runtime-allocated, opaque buffer.
+    // From Qoz it is just a `*void` that the compiler-recognised
+    // intrinsics carry through. There is no user-visible type, no
+    // user-callable surface, and no dependency on std/strings.
+    var void_path: Vec<string> = vec.make()
+    vec.push(&void_path, "void")
+    let void_te: TypeExpr = TENamed(span, void_path, vec.make())
+    let sb_te: TypeExpr   = TEPtr(span, void_te)
 
-    var u8_path: Vec<string> = vec.make()
-    vec.push(&u8_path, "u8")
-    let u8_te: TypeExpr = TENamed(span, u8_path, vec.make())
-    let nil_as_u8_ptr: Expr = ECast(span, ENil(span), TEPtr(span, u8_te))
-    var fields: Vec<RecordFieldLit> = vec.make()
-    vec.push(&fields, RecordFieldLit { name: "buf", value: nil_as_u8_ptr })
-    vec.push(&fields, RecordFieldLit { name: "len", value: EInt(span, "0") })
-    vec.push(&fields, RecordFieldLit { name: "cap", value: EInt(span, "0") })
-    let init_value: Expr = ERecord(span, strbuf_te, fields)
+    let init_call: Expr = builtin_call(span, "__qoz_interp_init", vec.make())
 
     var stmts: Vec<Stmt> = vec.make()
-    vec.push(&stmts, SVar(span, sb_name, strbuf_te, init_value))
+    vec.push(&stmts, SLet(span, sb_name, sb_te, init_call))
 
-    let sb_ref: Expr = EUnary(span, UOpAddr, EIdent(span, sb_name))
-
-    let init_call: Expr = strings_call("sb_init", span, append_args1(sb_ref))
-    vec.push(&stmts, SExpr(span, init_call))
+    let sb_id: Expr = EIdent(span, sb_name)
 
     let chunks = split_template_chunks(template)
     var idx: i64 = 0
@@ -922,21 +913,28 @@ let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
         let chunk = chunks[idx]
         if len(chunk) > 0 {
             let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(chunk, "\"")))
-            let append_lit: Expr = strings_call("sb_append", span, append_args2(sb_ref, lit_arg))
-            vec.push(&stmts, SExpr(span, append_lit))
+            vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, lit_arg))))
         }
-        let append_arg: Expr = strings_call("sb_append", span, append_args2(sb_ref, args[idx]))
-        vec.push(&stmts, SExpr(span, append_arg))
+        // The per-type push name is decided at check time once the
+        // argument's type is known. The placeholder name is the
+        // string variant; check::rewrite_call retargets it to the
+        // numeric, boolean, or character variant if the argument is
+        // not already a string.
+        vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, args[idx]))))
         idx += 1
     }
     let tail_chunk = chunks[len(args)]
     if len(tail_chunk) > 0 {
         let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(tail_chunk, "\"")))
-        let append_lit: Expr = strings_call("sb_append", span, append_args2(sb_ref, lit_arg))
-        vec.push(&stmts, SExpr(span, append_lit))
+        vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, lit_arg))))
     }
-    let finish_call: Expr = strings_call("sb_finish", span, append_args1(sb_ref))
+    let finish_call: Expr = builtin_call(span, "__qoz_interp_finish", append_args1(sb_id))
     EBlock(span, stmts, finish_call)
+}
+
+let builtin_call(span: Span, name: string, args: Vec<Expr>): Expr = {
+    let callee: Expr = EIdent(span, name)
+    ECall(span, callee, vec.make(), args)
 }
 
 let append_args1(a: Expr): Vec<Expr> = {

@@ -2014,6 +2014,17 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Ve
     if strings.eq_raw(name, "len")     { return single_named_te(sp, "i64") }
     if strings.eq_raw(name, "size_of") { return single_named_te(sp, "i64") }
     if strings.eq_raw(name, "hash")    { return single_named_te(sp, "u64") }
+    if strings.has_prefix(name, "__qoz_interp_") {
+        if strings.eq_raw(name, "__qoz_interp_init") {
+            var vp: Vec<string> = vec.make()
+            vec.push(&vp, "void")
+            return TEPtr(sp, TENamed(sp, vp, vec.make()))
+        }
+        if strings.eq_raw(name, "__qoz_interp_finish") {
+            return single_named_te(sp, "string")
+        }
+        return TEUnit(sp)
+    }
     // Variant constructor; if no explicit type args, infer from value args.
     match map.get(&e.variant_of, name) {
     | Some(en) -> {
@@ -2746,6 +2757,25 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
         }
         if strings.eq_raw(name, "hash") && len(args) == 1 {
             emit_hash_builtin(e, args[0])
+            return
+        }
+        // Interpolation intrinsics map 1:1 to runtime C functions:
+        // the Qoz-side name has a `__` prefix to mark it as an
+        // intrinsic; the C function is the same name with that prefix
+        // stripped. No declaration is needed on the Qoz side because
+        // the type checker recognises the prefix and types the call
+        // directly.
+        if strings.has_prefix(name, "__qoz_interp_") {
+            let c_name = strings.slice(name, 2, len(name))
+            push(e, c_name)
+            push(e, "(")
+            var i: i64 = 0
+            for a in args {
+                if i > 0 { push(e, ", ") }
+                emit_expr(e, a)
+                i += 1
+            }
+            push(e, ")")
             return
         }
     }

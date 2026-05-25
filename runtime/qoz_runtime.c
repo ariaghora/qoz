@@ -217,6 +217,84 @@ void qoz_strbuf_append_f64(void *bv, double v) {
     }
 }
 
+/* Backtick-string interpolation builder. Heap-allocated through tgc,
+ * grown on demand, finalised through qoz_string_alias so the result
+ * string aliases the buffer in place and the GC sees the buffer as
+ * still reachable through that allocation. */
+typedef struct {
+    char *  buf;
+    int64_t len;
+    int64_t cap;
+} qoz_interp_buf;
+
+static void qoz_interp_grow(qoz_interp_buf *b, int64_t needed) {
+    int64_t new_cap = b->cap == 0 ? 64 : b->cap;
+    while (new_cap < b->len + needed) new_cap *= 2;
+    if (new_cap > b->cap) {
+        b->buf = (char *)qoz_realloc(b->buf, new_cap);
+        b->cap = new_cap;
+    }
+}
+
+void *qoz_interp_init(void) {
+    qoz_interp_buf *b = (qoz_interp_buf *)qoz_alloc((int64_t)sizeof(qoz_interp_buf));
+    b->buf = NULL;
+    b->len = 0;
+    b->cap = 0;
+    return b;
+}
+
+void qoz_interp_push_str(void *bv, qoz_string s) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    if (s.len <= 0) return;
+    qoz_interp_grow(b, s.len);
+    memcpy(b->buf + b->len, s.data, (size_t)s.len);
+    b->len += s.len;
+}
+
+void qoz_interp_push_i64(void *bv, int64_t v) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v);
+    if (n > 0) {
+        qoz_interp_grow(b, n);
+        memcpy(b->buf + b->len, tmp, (size_t)n);
+        b->len += n;
+    }
+}
+
+void qoz_interp_push_f64(void *bv, double v) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%g", v);
+    if (n > 0) {
+        qoz_interp_grow(b, n);
+        memcpy(b->buf + b->len, tmp, (size_t)n);
+        b->len += n;
+    }
+}
+
+void qoz_interp_push_bool(void *bv, bool v) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    const char *s = v ? "true" : "false";
+    int64_t n = v ? 4 : 5;
+    qoz_interp_grow(b, n);
+    memcpy(b->buf + b->len, s, (size_t)n);
+    b->len += n;
+}
+
+void qoz_interp_push_char(void *bv, int64_t c) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    qoz_interp_grow(b, 1);
+    b->buf[b->len] = (char)c;
+    b->len += 1;
+}
+
+qoz_string qoz_interp_finish(void *bv) {
+    qoz_interp_buf *b = (qoz_interp_buf *)bv;
+    return qoz_string_alias(b->buf, b->len);
+}
+
 void qoz_init(int *stack_anchor) {
     /* gc.c owns the heap and auto-collects from qoz_gc_alloc once the
      * live-byte threshold is crossed. The shadow stack registers every

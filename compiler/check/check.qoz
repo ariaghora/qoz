@@ -739,6 +739,27 @@ let sb_append_method_for(t: Ty): string = {
     }
 }
 
+// Per-type interpolation push name. The parser desugars every
+// interpolation slot to a call to __qoz_interp_push_str; this routine
+// retargets it to the matching typed variant once the slot's value
+// type is known. Returning None signals that the slot's type is not a
+// supported interpolation primitive; the caller must report that as
+// an error.
+let interp_push_method_for(t: Ty): Option<string> = {
+    match t {
+    | TyString   -> Some("__qoz_interp_push_str")
+    | TyBool     -> Some("__qoz_interp_push_bool")
+    | TyFloat(_) -> Some("__qoz_interp_push_f64")
+    | TyInt(_)   -> Some("__qoz_interp_push_i64")
+    | TyChar     -> Some("__qoz_interp_push_char")
+    | _          -> None
+    }
+}
+
+let is_interp_intrinsic(name: string): bool = {
+    strings.has_prefix(name, "__qoz_interp_")
+}
+
 let resolve_callee_fn(tc: *TyContext, callee: Expr): string = {
     match callee {
     | EIdent(_, name) -> name
@@ -778,6 +799,17 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
     if strings.eq_raw(fn_name, "hash") {
         for a in args { let _ = synth(tc, env, a) }
         return ty.ty_int_(64, false)
+    }
+    // Interpolation intrinsics. Implemented as bare-name runtime
+    // primitives so the backtick-interpolation desugar has no
+    // dependency on any user-importable module. The arguments are
+    // synthesised so their types are recorded; rewrite_call later
+    // retargets the push call to the per-type variant.
+    if is_interp_intrinsic(fn_name) {
+        for a in args { let _ = synth(tc, env, a) }
+        if strings.eq_raw(fn_name, "__qoz_interp_init")   { return ty.ty_ptr_(ty.ty_unit_()) }
+        if strings.eq_raw(fn_name, "__qoz_interp_finish") { return ty.ty_string_() }
+        return ty.ty_unit_()
     }
     var arg_tys: Vec<Ty> = vec.make()
     for a in args { vec.push(&arg_tys, synth(tc, env, a)) }
@@ -2026,9 +2058,43 @@ let is_ty_unit_or_error(t: Ty): bool = {
 }
 
 let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Expr = {
-    // strings.sb_append accepts a string. Interpolation desugar calls
-    // it with the user's interpolated expression regardless of type;
-    // here we resolve the value's type and pick the typed appender.
+    // The interpolation desugar emits every slot as a call to
+    // __qoz_interp_push_str. Once the slot's value type is known,
+    // retarget the call to the matching typed push intrinsic so the
+    // runtime gets the value in its native representation rather than
+    // going through a string conversion at the call site.
+    let bare_name = match callee {
+    | EIdent(_, n) -> n
+    | _            -> ""
+    }
+    if strings.eq_raw(bare_name, "__qoz_interp_push_str") && len(args) == 2 {
+        let val_ty = synth(tc, env, args[1])
+        match interp_push_method_for(val_ty) {
+        | Some(method) -> {
+            if !strings.eq_raw(method, "__qoz_interp_push_str") {
+                let new_callee2: Expr = EIdent(sp, method)
+                var new_args: Vec<Expr> = vec.make()
+                vec.push(&new_args, infer_calls_expr(tc, env, args[0], ty.ty_error_()))
+                vec.push(&new_args, infer_calls_expr(tc, env, args[1], val_ty))
+                return ECall(sp, new_callee2, type_args, new_args)
+            }
+        }
+        | None -> {
+            record_error(tc, sp, `interpolation slot must be a primitive (string, i64, f64, bool, or char); got {ty.ty_show(val_ty)}`)
+        }
+        }
+    }
+    if is_interp_intrinsic(bare_name) {
+        var new_args: Vec<Expr> = vec.make()
+        for a in args {
+            vec.push(&new_args, infer_calls_expr(tc, env, a, ty.ty_error_()))
+        }
+        return ECall(sp, callee, type_args, new_args)
+    }
+    // strings.sb_append accepts a string. The same retargeting trick as
+    // above applies for user code that calls the Strbuf surface
+    // directly: an integer or boolean argument routes to the typed
+    // appender so the call type-checks without an explicit conversion.
     if is_strings_callee(callee, "sb_append") && len(args) == 2 {
         let val_ty = synth(tc, env, args[1])
         let method = sb_append_method_for(val_ty)
