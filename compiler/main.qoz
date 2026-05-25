@@ -377,6 +377,71 @@ let unlink_quiet(path: string) = {
     let _ = os.process_exec(argv)
 }
 
+// `qoz fmt`: minimal whitespace normaliser. Reads the source file,
+// expands tab characters to four spaces, strips trailing whitespace
+// from each line, ensures exactly one trailing newline, and writes
+// the result back to the same path. A full AST-driven reformatter
+// is future work; this addresses the most common style drift
+// (mixed tabs / trailing spaces).
+let cmd_fmt(path: string) = {
+    let src = fs.read_file(path)
+    if len(src) < 0 {
+        fmt.println("qoz fmt: cannot read `{path}`")
+        os.exit(1)
+    }
+    let normalised = normalise_whitespace(src)
+    if !fs.write_file(path, normalised) {
+        fmt.println("qoz fmt: cannot write `{path}`")
+        os.exit(1)
+    }
+}
+
+let normalise_whitespace(src: string): string = {
+    // Split into lines, normalise each one, join back. Per-line work:
+    // expand tabs to four spaces, drop \r, strip trailing spaces.
+    let lines = strings.split(src, 10)
+    var out: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    strings.sb_init(&out)
+    var last_nonempty: i64 = -1
+    var i: i64 = 0
+    for ln in lines {
+        let cleaned = clean_line(ln)
+        if len(cleaned) > 0 { last_nonempty = i }
+        i += 1
+    }
+    var j: i64 = 0
+    let total = len(lines)
+    while j <= last_nonempty && j < total {
+        let cleaned = clean_line(lines[j])
+        strings.sb_append(&out, cleaned)
+        strings.sb_append(&out, "\n")
+        j += 1
+    }
+    strings.sb_finish(&out)
+}
+
+let clean_line(s: string): string = {
+    let n = len(s)
+    var b: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    strings.sb_init(&b)
+    var i: i64 = 0
+    while i < n {
+        let c = strings.byte_at(s, i)
+        if c == 9 { strings.sb_append(&b, "    ") }
+        else if c == 13 { }
+        else { strings.sb_append(&b, strings.slice(s, i, i + 1)) }
+        i += 1
+    }
+    let raw = strings.sb_finish(&b)
+    var end = len(raw)
+    var done = false
+    while !done && end > 0 {
+        let last = strings.byte_at(raw, end - 1)
+        if last == 32 { end -= 1 } else { done = true }
+    }
+    strings.slice(raw, 0, end)
+}
+
 // Compile, link, and execute. The child's stdout and stderr stream to
 // the parent's terminals via the buffered process_exec call (so the
 // captured streams print on completion). The compiler exits with the
@@ -413,12 +478,20 @@ let main() = {
         fmt.println("       qoz build <path>   compile to <path>.c and clang to <path>.bin")
         fmt.println("       qoz run   <path>   build, then execute and propagate exit code")
         fmt.println("       qoz emit  <path>   write <path>.c only (no clang)")
+        fmt.println("       qoz fmt   <path>   rewrite <path> with normalised whitespace")
         os.exit(1)
     }
     let qoz_root = os.getenv("QOZ_ROOT")
     let first = args[1]
 
-    if strings.eq_raw(first, "emit") {
+    if strings.eq_raw(first, "fmt") {
+        if len(args) < 3 {
+            fmt.println("usage: qoz fmt <path>")
+            os.exit(1)
+        }
+        cmd_fmt(args[2])
+        os.exit(0)
+    } else { if strings.eq_raw(first, "emit") {
         if len(args) < 3 {
             fmt.println("usage: qoz emit <path>")
             os.exit(1)
@@ -460,5 +533,5 @@ let main() = {
         let out = cmd_build(first, qoz_root)
         fmt.println("wrote {out}")
         os.exit(0)
-    } } }
+    } } } }
 }

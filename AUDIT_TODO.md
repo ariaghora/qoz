@@ -142,11 +142,11 @@ rather than ground truth.
 
 ## Tooling and DX
 
-- [ ] No formatter — multi-file style drift is unavoidable in any non-trivial codebase.
-- [ ] No language server / LSP — no in-editor diagnostics.
-- [ ] No incremental compilation — every build recompiles everything.
-- [ ] No package manager — the import path resolution is filesystem-only.
-- [ ] No documentation generator from `///` comments (Qoz does not have doc comments yet).
+- [x] No formatter. Added `qoz fmt <path>` as a minimal whitespace normaliser: expands tabs to four spaces, drops `\r`, strips trailing spaces per line, and collapses trailing blank lines to a single newline. A full AST-driven reformatter is a future enhancement; this addresses the most common style drift.
+- [ ] No language server / LSP — no in-editor diagnostics. Tooling work; user marked as later.
+- [ ] No incremental compilation — every build recompiles everything. Tooling work; user marked as later.
+- [ ] No package manager — the import path resolution is filesystem-only. Tooling work; user marked as later.
+- [ ] No documentation generator from `///` comments (Qoz does not have doc comments yet). Tooling work; user marked as later.
 - [x] No richer stdlib: `Set<T>`, `time`, `random`. Closed for the three immediate gaps. `std/set/set.qoz` is a Map<T, bool>-backed set with `make`, `add`, `contains`, `size`, `sorted_elements`. `std/time/time.qoz` exposes `unix()` and `unix_micros()` over gettimeofday. `std/random/random.qoz` is an LCG (Numerical Recipes constants) with `make`, `next_u64`, `next_below`. JSON, regex, networking, threading, async remain as future work because each is a substantial dependency.
 
 ---
