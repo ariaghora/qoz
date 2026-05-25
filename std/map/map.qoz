@@ -109,6 +109,26 @@ let contains<K, V>(m: *Map<K, V>, key: K): bool = {
     false
 }
 
+let delete<K, V>(m: *Map<K, V>, key: K) = {
+    if m.cap == 0 { return }
+    let idx = probe(m, key)
+    if m.slots[idx].occupied && !m.slots[idx].deleted {
+        m.slots[idx].deleted = true
+        m.len = m.len - 1
+    }
+}
+
+let clear<K, V>(m: *Map<K, V>) = {
+    if m.cap == 0 { return }
+    var i: i64 = 0
+    while i < m.cap {
+        m.slots[i].occupied = false
+        m.slots[i].deleted = false
+        i = i + 1
+    }
+    m.len = 0
+}
+
 @operator("len")
 let len<K, V>(m: *Map<K, V>): i64 = m.len
 

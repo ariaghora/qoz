@@ -1945,7 +1945,10 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: Expr, expected: Ty): Expr = {
     | EIf(sp, c, t, f) -> EIf(sp, infer_calls_expr(tc, env, c, ty.ty_error_()), infer_calls_expr(tc, env, t, expected), infer_calls_expr(tc, env, f, expected))
     | EMatch(sp, scrut, arms) -> {
         let new_scrut = infer_calls_expr(tc, env, scrut, ty.ty_error_())
-        let scrut_ty = synth(tc, env, scrut)
+        // Synth on the rewritten scrutinee so a bare builtin call
+        // (`match pop(&xs) { ... }`) has its container-dispatch
+        // applied before its type is read by pattern binding.
+        let scrut_ty = synth(tc, env, new_scrut)
         var na: Vec<MatchArm> = vec.make()
         for a in arms {
             let saved_len = len(env.bindings)
@@ -2165,8 +2168,11 @@ let pick_variant_home(homes: Vec<string>, expected: Ty): string = {
 let is_container_builtin(name: string): bool = {
     strings.eq_raw(name, "make")     ||
     strings.eq_raw(name, "push")     ||
+    strings.eq_raw(name, "pop")      ||
+    strings.eq_raw(name, "clear")    ||
     strings.eq_raw(name, "insert")   ||
-    strings.eq_raw(name, "contains")
+    strings.eq_raw(name, "contains") ||
+    strings.eq_raw(name, "delete")
 }
 
 type ContainerInfo = {
@@ -2286,7 +2292,8 @@ let rewrite_container_builtin(tc: *TyContext, env: *Env, sp: Span, name: string,
     let target_pkg = match_builtin_pkg(name, is_vec, is_map)
     if strings.eq_raw(target_pkg, "") {
         let needed = if is_vec { "Map" } else { "Vec" }
-        record_error(tc, sp, `'{name}' is a {needed} operation; got Vec or Map per the first argument`)
+        let got    = if is_vec { "Vec" } else { "Map" }
+        record_error(tc, sp, `'{name}' is a {needed} operation; got {got}`)
         return Some(ECall(sp, EIdent(sp, name), type_args, args))
     }
     let new_callee: Expr = EField(sp, EIdent(sp, target_pkg), name)
@@ -2296,11 +2303,16 @@ let rewrite_container_builtin(tc: *TyContext, env: *Env, sp: Span, name: string,
 }
 
 let match_builtin_pkg(name: string, is_vec: bool, is_map: bool): string = {
-    if strings.eq_raw(name, "push") {
+    if strings.eq_raw(name, "push") || strings.eq_raw(name, "pop") {
         if is_vec { return "vec" } else { return "" }
     }
-    if strings.eq_raw(name, "insert") || strings.eq_raw(name, "contains") {
+    if strings.eq_raw(name, "insert") || strings.eq_raw(name, "contains") || strings.eq_raw(name, "delete") {
         if is_map { return "map" } else { return "" }
+    }
+    if strings.eq_raw(name, "clear") {
+        if is_vec { return "vec" }
+        if is_map { return "map" }
+        return ""
     }
     ""
 }

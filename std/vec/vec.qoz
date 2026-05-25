@@ -27,6 +27,16 @@ let push<T>(v: *Vec<T>, x: T) = {
 
 let get<T>(v: *Vec<T>, i: i64): T = v.data[i]
 
+let pop<T>(v: *Vec<T>): Option<T> = {
+    if v.len == 0 { return None }
+    v.len = v.len - 1
+    Some(v.data[v.len])
+}
+
+let clear<T>(v: *Vec<T>) = {
+    v.len = 0
+}
+
 @operator("[]")
 let index<T>(v: *Vec<T>, i: i64): T = v.data[i]
 
