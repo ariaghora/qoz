@@ -26,8 +26,13 @@ type Ty =
     | TyNil
     | TyError
     | TyPtr(ty.Ty)
-    | TyAdt(string, Vec<ty.Ty>)
-    | TyRecord(string, Vec<ty.Ty>)
+    // The string fields are (home_pkg, name). home_pkg is empty for
+    // prelude / entry types and the package name otherwise; storing
+    // it alongside the name keeps every Ty self-describing about
+    // which package it came from, so resolve_named and the
+    // cross-package access rule do not need an ambient current_pkg.
+    | TyAdt(string, string, Vec<ty.Ty>)
+    | TyRecord(string, string, Vec<ty.Ty>)
     | TyFn(Vec<ty.Ty>, ty.Ty)
     | TyTuple(Vec<ty.Ty>)
     | TyVar(i64, string)
@@ -50,8 +55,10 @@ let ty_error_(): ty.Ty  = TyError
 
 let ty_ptr_(inner: ty.Ty): ty.Ty = TyPtr(inner)
 
-let ty_adt_(name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt(name, args)
-let ty_record_(name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord(name, args)
+let ty_adt_(name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt("", name, args)
+let ty_record_(name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord("", name, args)
+let ty_adt_homed(home: string, name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt(home, name, args)
+let ty_record_homed(home: string, name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord(home, name, args)
 let ty_fn_(params: Vec<ty.Ty>, ret: ty.Ty): ty.Ty = TyFn(params, ret)
 let ty_tuple_(elems: Vec<ty.Ty>): ty.Ty = TyTuple(elems)
 
@@ -82,7 +89,7 @@ let ty_is_bool(t: ty.Ty): bool = { match t { | TyBool -> true | TyVar(_, _) -> t
 // would block valid overloaded code.
 let ty_is_numeric(t: ty.Ty): bool = {
     match t {
-    | TyInt(_) | TyFloat(_) | TyChar | TyVar(_, _) | TyRecord(_, _) -> true
+    | TyInt(_) | TyFloat(_) | TyChar | TyVar(_, _) | TyRecord(_, _, _) -> true
     | _ -> false
     }
 }
@@ -116,15 +123,15 @@ let ty_eq(a: ty.Ty, b: ty.Ty): bool = {
         | _         -> false
         }
     }
-    | TyAdt(an, aa) -> {
+    | TyAdt(_, an, aa) -> {
         match b {
-        | TyAdt(bn, ba) -> strings.eq_raw(an, bn) && ty_args_eq(aa, ba)
+        | TyAdt(_, bn, ba) -> strings.eq_raw(an, bn) && ty_args_eq(aa, ba)
         | _             -> false
         }
     }
-    | TyRecord(an, aa) -> {
+    | TyRecord(_, an, aa) -> {
         match b {
-        | TyRecord(bn, ba) -> strings.eq_raw(an, bn) && ty_args_eq(aa, ba)
+        | TyRecord(_, bn, ba) -> strings.eq_raw(an, bn) && ty_args_eq(aa, ba)
         | _                -> false
         }
     }
@@ -165,8 +172,8 @@ let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     | TyNil     -> single_path_te(sp, "nil")
     | TyError   -> single_path_te(sp, "?")
     | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
-    | TyAdt(name, args) -> named_with_args(sp, name, args)
-    | TyRecord(name, args) -> named_with_args(sp, name, args)
+    | TyAdt(home, name, args) -> named_with_args_homed(sp, home, name, args)
+    | TyRecord(home, name, args) -> named_with_args_homed(sp, home, name, args)
     | TyFn(fparams, ret) -> {
         var pte: Vec<ast.TypeExpr> = vec.make()
         for p in fparams { vec.push(&pte, ty_to_type_expr_at(p, sp)) }
@@ -205,7 +212,15 @@ let single_path_te(sp: ast.Span, name: string): ast.TypeExpr = {
 }
 
 let named_with_args(sp: ast.Span, name: string, args: Vec<ty.Ty>): ast.TypeExpr = {
+    named_with_args_homed(sp, "", name, args)
+}
+
+// Same as named_with_args but reattaches the type's home package as
+// the first path segment when present, so the reconstructed
+// TypeExpr survives the cross-package access rule.
+let named_with_args_homed(sp: ast.Span, home: string, name: string, args: Vec<ty.Ty>): ast.TypeExpr = {
     var path: Vec<string> = vec.make()
+    if !strings.eq_raw(home, "") { vec.push(&path, home) }
     vec.push(&path, name)
     var te_args: Vec<ast.TypeExpr> = vec.make()
     for a in args { vec.push(&te_args, ty_to_type_expr_at(a, sp)) }
@@ -245,7 +260,7 @@ let ty_show(t: ty.Ty): string = {
     | TyError   -> "<error>"
     | TyVar(_, n) -> n
     | TyPtr(inner) -> strings.cat("*", ty_show(inner))
-    | TyAdt(n, args) | TyRecord(n, args) -> {
+    | TyAdt(_, n, args) | TyRecord(_, n, args) -> {
         if len(args) == 0 { return n }
         var out = strings.cat(n, "<")
         var i: i64 = 0
@@ -340,9 +355,9 @@ let arg_passes_to_param(param: ty.Ty, arg: ty.Ty): bool = {
 // parameter without first unifying the constructor's type arguments.
 let same_constructor_assignable(param: ty.Ty, arg: ty.Ty): bool = {
     match param {
-    | TyAdt(pn, pa) -> {
+    | TyAdt(_, pn, pa) -> {
         match arg {
-        | TyAdt(an, aa) -> {
+        | TyAdt(_, an, aa) -> {
             if !strings.eq_raw(pn, an) { return false }
             if len(pa) != len(aa) { return false }
             var i: i64 = 0
@@ -355,9 +370,9 @@ let same_constructor_assignable(param: ty.Ty, arg: ty.Ty): bool = {
         | _ -> false
         }
     }
-    | TyRecord(pn, pa) -> {
+    | TyRecord(_, pn, pa) -> {
         match arg {
-        | TyRecord(an, aa) -> {
+        | TyRecord(_, an, aa) -> {
             if !strings.eq_raw(pn, an) { return false }
             if len(pa) != len(aa) { return false }
             var i: i64 = 0

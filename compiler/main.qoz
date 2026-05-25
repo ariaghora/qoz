@@ -223,11 +223,13 @@ type Loaded = {
     // through an explicit `import` and must be referenced as
     // `<pkg>.<TypeName>` from outside its own package.
     type_homes: Map<string, string>,
-    // Per-fn-name (renamed C-style) owning package. Same convention
-    // as type_homes. The check phase reads this when entering each
-    // fn body so resolve_named knows whether bare access to a
-    // same-pkg type is allowed.
+    // Per-fn-name (renamed C-style) owning package.
     fn_homes:   Map<string, string>,
+    // Each loaded source file's owning package. resolve_named uses
+    // this to pin the use-site package straight from the TypeExpr's
+    // span, so the cross-package enforcement does not depend on
+    // synth-side current_pkg propagation.
+    file_pkgs:  Map<string, string>,
 }
 
 let load_all(entry: string, qoz_root: string): Loaded = {
@@ -247,6 +249,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
     var sources: Vec<string> = vec.make()
     var type_homes: Map<string, string> = map.make()
     var fn_homes:   Map<string, string> = map.make()
+    var file_pkgs:  Map<string, string> = map.make()
     // Prelude: Option, Result, Vec, and Map are in scope without an
     // explicit import. Types and variant constructors flow through
     // the global namespace either way; functions stay package-prefixed
@@ -277,19 +280,25 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
         qi += 1
         if !map.contains(&visited, cur.path) {
             visited[cur.path] = true
-            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, qoz_root)
+            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, &file_pkgs, qoz_root)
         }
     }
-    Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes }
+    Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes, file_pkgs: file_pkgs }
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, qoz_root: string) = {
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, qoz_root: string) = {
     let src = fs.read_file(cur.path)
     if len(src) < 0 {
         fmt.println(`could not read {cur.path}`)
         os.exit(1)
     }
     vec.push(sources, src)
+    // Record the file's owning package so resolve_named can look up
+    // the use-site pkg from any TypeExpr's span. Prelude / entry
+    // files carry an empty pkg; imported files carry the import
+    // path's last segment (or the alias when set).
+    let file_home_pkg = if cur.bare_types { "" } else { cur.pkg }
+    map.set(file_pkgs, cur.path, file_home_pkg)
     let tokens = tokenize.run(src)
     let parsed = parse.run(tokens, cur.path)
     if len(parsed.errors) > 0 {
@@ -459,8 +468,8 @@ let cmd_build(path: string, qoz_root: string): string = {
     var tc = check.make_ctx()
     tc.type_homes = loaded.type_homes
     tc.fn_homes   = loaded.fn_homes
+    tc.file_pkgs  = loaded.file_pkgs
     check.register_file(&tc, file)
-    check.check_qualified_access(&tc, file)
     check.validate_signatures(&tc, file)
     let inferred = check.infer_calls(&tc, file)
     check.check_fn_bodies(&tc, inferred)
