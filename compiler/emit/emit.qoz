@@ -2341,6 +2341,37 @@ let same_enum_base(e: *Emitter, bare: string, maybe_mangled: string): bool = {
     strings.eq_raw(strip_mangled(maybe_mangled), bare)
 }
 
+// Register the locals that a pattern brings into scope, by walking
+// the pattern and recording each PatBind under its inferred TypeExpr.
+// Used by the pre-pass type inference so the inner expressions of an
+// arm body can resolve names that the pattern introduces. Recurses
+// into nested PatVariant so deeply destructured bindings (for example
+// the `v` in `Some(Some(v))`) are registered with the payload's
+// TypeExpr at every depth.
+let bind_arm_locals_at(e: *Emitter, pat: Pattern, value_te: TypeExpr) = {
+    match pat {
+    | PatBind(_, bname) -> {
+        match map.get(&e.variant_of, bname) {
+        | Some(_) -> { }
+        | None    -> e.locals[bname] = value_te
+        }
+    }
+    | PatVariant(_, path, sub_pats) -> {
+        if len(path) < 1 { return }
+        let vname = path[len(path) - 1]
+        let inner_enum = enum_name_of_te(e, value_te)
+        if strings.eq_raw(inner_enum, "") { return }
+        var i: i64 = 0
+        for sp in sub_pats {
+            let sub_te = variant_payload_typeexpr(e, inner_enum, vname, i)
+            bind_arm_locals_at(e, sp, sub_te)
+            i += 1
+        }
+    }
+    | _ -> { }
+    }
+}
+
 let bind_arm_locals(e: *Emitter, enum_name: string, pat: Pattern) = {
     match pat {
     | PatVariant(_, path, sub_pats) -> {
@@ -2348,12 +2379,8 @@ let bind_arm_locals(e: *Emitter, enum_name: string, pat: Pattern) = {
         let vname = path[len(path) - 1]
         var i: i64 = 0
         for sp in sub_pats {
-            match sp {
-            | PatBind(_, bname) -> {
-                e.locals[bname] = variant_payload_typeexpr(e, enum_name, vname, i)
-            }
-            | _ -> { }
-            }
+            let sub_te = variant_payload_typeexpr(e, enum_name, vname, i)
+            bind_arm_locals_at(e, sp, sub_te)
             i += 1
         }
     }
@@ -4643,20 +4670,25 @@ let any_arm_has_guard(arms: Vec<MatchArm>): bool = {
     false
 }
 
+// A sub-pattern requires the if-chain emitter when it carries a
+// literal equality test or when it is itself a variant pattern. The
+// switch-based dispatch can only test the outer tag; anything that
+// constrains a payload must AND into the if condition.
+let pat_needs_if_chain(p: Pattern): bool = {
+    match p {
+    | PatLitInt(_, _) | PatLitString(_, _) | PatLitBool(_, _) -> true
+    | PatVariant(_, _, _) -> true
+    | _ -> false
+    }
+}
+
 let any_arm_is_literal(arms: Vec<MatchArm>): bool = {
     for a in arms {
         match a.pat {
         | PatLitInt(_, _) | PatLitString(_, _) | PatLitBool(_, _) -> return true
         | PatVariant(_, _, sub_pats) -> {
-            // Any literal sub-pattern inside a variant routes the
-            // arm set through the if-chain emitter, which can ANDs
-            // the sub-pattern conditions into the if test. The
-            // switch-based dispatch cannot do that.
             for sp in sub_pats {
-                match sp {
-                | PatLitInt(_, _) | PatLitString(_, _) | PatLitBool(_, _) -> return true
-                | _ -> { }
-                }
+                if pat_needs_if_chain(sp) { return true }
             }
         }
         | _ -> { }
@@ -4708,6 +4740,96 @@ let emit_match_as_expr(e: *Emitter, span: Span, scrut: Expr, arms: Vec<MatchArm>
         push(e, "0")
     } else {
         push(e, res_tmp)
+    }
+}
+
+// Read the C-side enum name out of a TypeExpr. Used when descending
+// into a nested variant pattern: the payload's TypeExpr names the
+// inner enum, possibly with type arguments that get mangled.
+let enum_name_of_te(e: *Emitter, te: TypeExpr): string = {
+    match te {
+    | TENamed(_, path, args) -> {
+        if len(path) >= 1 {
+            let last = path[len(path) - 1]
+            if len(args) > 0 { return mangle_inst(e, last, args) }
+            return last
+        }
+        ""
+    }
+    | _ -> ""
+    }
+}
+
+// Emit the conjunction of conditions that a value of static type
+// value_te (denoted by C expression value_expr) must satisfy to match
+// the pattern p. Each clause is prefixed with ` && ` so the caller
+// can splice the result inside an `if (...)` condition that already
+// has at least one term. Walks PatVariant subtrees recursively to
+// emit tag tests and literal equalities at every depth.
+let emit_pat_match_cond(e: *Emitter, p: Pattern, value_expr: string, value_te: TypeExpr) = {
+    match p {
+    | PatWild(_)         -> { }
+    | PatBind(_, _)      -> { }
+    | PatLitInt(_, text) -> {
+        let tn = strip_numeric_underscores(text)
+        push(e, ` && {value_expr} == {tn}`)
+    }
+    | PatLitBool(_, b) -> {
+        if b { push(e, ` && {value_expr} == true`) }
+        else { push(e, ` && {value_expr} == false`) }
+    }
+    | PatLitString(_, text) -> {
+        push(e, ` && qoz_string_eq({value_expr}, QOZ_STR_LIT({text}))`)
+    }
+    | PatVariant(_, path, sub_pats) -> {
+        if len(path) > 0 {
+            let vname = path[len(path) - 1]
+            let inner_enum = enum_name_of_te(e, value_te)
+            if !strings.eq_raw(inner_enum, "") {
+                push(e, ` && {value_expr}->tag == qoz_{inner_enum}_{vname}`)
+                var i: i64 = 0
+                for sp in sub_pats {
+                    let sub_te = variant_payload_typeexpr(e, inner_enum, vname, i)
+                    let is = int_to_string(i)
+                    let sub_expr = `{value_expr}->payload.{vname}.f{is}`
+                    emit_pat_match_cond(e, sp, sub_expr, sub_te)
+                    i += 1
+                }
+            }
+        }
+    }
+    | PatTuple(_, _) -> { }
+    }
+}
+
+// Inside an arm body whose conditions have already passed, materialise
+// the bindings that the pattern introduces. Recurses through nested
+// PatVariant subtrees so a `Some(Some(v))` arm binds the deeply
+// nested `v` to the inner payload.
+let emit_pat_bindings(e: *Emitter, p: Pattern, value_expr: string, value_te: TypeExpr) = {
+    match p {
+    | PatBind(_, bname) -> {
+        let ct = c_type_for(e, value_te)
+        push(e, `{ct} {bname} = {value_expr}; (void){bname}; `)
+        e.locals[bname] = value_te
+    }
+    | PatVariant(_, path, sub_pats) -> {
+        if len(path) > 0 {
+            let vname = path[len(path) - 1]
+            let inner_enum = enum_name_of_te(e, value_te)
+            if !strings.eq_raw(inner_enum, "") {
+                var i: i64 = 0
+                for sp in sub_pats {
+                    let sub_te = variant_payload_typeexpr(e, inner_enum, vname, i)
+                    let is = int_to_string(i)
+                    let sub_expr = `{value_expr}->payload.{vname}.f{is}`
+                    emit_pat_bindings(e, sp, sub_expr, sub_te)
+                    i += 1
+                }
+            }
+        }
+    }
+    | _ -> { }
     }
 }
 
@@ -4790,48 +4912,23 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
         if len(path) > 0 {
             let vname = path[len(path) - 1]
             push(e, ` && {scrut_tmp}->tag == qoz_{enum_name}_{vname}`)
-            // Literal sub-patterns extend the if condition with an
-            // equality check against the payload field. Wildcard and
-            // bind sub-patterns require no extra condition and are
-            // handled inside the body. Nested PatVariant inside a
-            // PatVariant is not yet supported and is silently
-            // accepted as a tag-only match.
             var i: i64 = 0
             for sp in sub_pats {
+                let sub_te = variant_payload_typeexpr(e, enum_name, vname, i)
                 let is = int_to_string(i)
-                match sp {
-                | PatLitInt(_, text) -> {
-                    let tn = strip_numeric_underscores(text)
-                    push(e, ` && {scrut_tmp}->payload.{vname}.f{is} == {tn}`)
-                }
-                | PatLitBool(_, b) -> {
-                    if b { push(e, ` && {scrut_tmp}->payload.{vname}.f{is} == true`) }
-                    else { push(e, ` && {scrut_tmp}->payload.{vname}.f{is} == false`) }
-                }
-                | PatLitString(_, text) -> {
-                    push(e, ` && qoz_string_eq({scrut_tmp}->payload.{vname}.f{is}, QOZ_STR_LIT({text}))`)
-                }
-                | _ -> { }
-                }
+                let sub_expr = `{scrut_tmp}->payload.{vname}.f{is}`
+                emit_pat_match_cond(e, sp, sub_expr, sub_te)
                 i += 1
             }
             push(e, ") { ")
             var j: i64 = 0
             for sp in sub_pats {
-                match sp {
-                | PatBind(_, bname) -> {
-                    let pc = variant_payload_ctype(e, enum_name, vname, j)
-                    let js = int_to_string(j)
-                    push(e, `{pc} {bname} = {scrut_tmp}->payload.{vname}.f{js}; `)
-                    e.locals[bname] = variant_payload_typeexpr(e, enum_name, vname, j)
-                }
-                | _ -> { }
-                }
+                let sub_te = variant_payload_typeexpr(e, enum_name, vname, j)
+                let js = int_to_string(j)
+                let sub_expr = `{scrut_tmp}->payload.{vname}.f{js}`
+                emit_pat_bindings(e, sp, sub_expr, sub_te)
                 j += 1
             }
-            // Restore the trailing space removed when we changed the
-            // close-paren emission, so the body's first character has
-            // a separator.
         } else {
             push(e, ") { ")
         }
