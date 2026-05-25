@@ -460,6 +460,7 @@ let cmd_build(path: string, qoz_root: string): string = {
     tc.type_homes = loaded.type_homes
     tc.fn_homes   = loaded.fn_homes
     check.register_file(&tc, file)
+    check.check_qualified_access(&tc, file)
     check.validate_signatures(&tc, file)
     let inferred = check.infer_calls(&tc, file)
     check.check_fn_bodies(&tc, inferred)

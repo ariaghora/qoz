@@ -45,6 +45,15 @@ type TyContext = {
     // lives inside an imported package and may reach its sibling
     // types by bare name.
     current_pkg:   string,
+    // Resolved parameter and return types of every declared fn /
+    // extern, keyed by the renamed C-style name. Populated once in
+    // validate_signatures with the right current_pkg for each
+    // declaration. synth_call_with_decl reads from these caches
+    // instead of re-resolving the TypeExprs, so the cross-package
+    // enforcement does not need current_pkg to propagate into
+    // synth-driven resolves.
+    fn_param_tys:  Map<string, Vec<ty.Ty>>,
+    fn_ret_ty:     Map<string, ty.Ty>,
     errors:       Vec<check.TypeError>,
     type_params:  Map<string, bool>,
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
@@ -68,6 +77,8 @@ let make_ctx(): check.TyContext = TyContext {
     type_homes:  map.make(),
     fn_homes:    map.make(),
     current_pkg: "",
+    fn_param_tys: map.make(),
+    fn_ret_ty:    map.make(),
     errors:      vec.make(),
     type_params: map.make(),
     expr_types:  map.make(),
@@ -118,6 +129,170 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
     | DExternal(_, name, _, _, _)     -> { tc.externs[name] = d }
     | DConst(_, _, _, _)              -> { }
     | DLink(_, _, _)                  -> { }
+    }
+}
+
+// Walk every TypeExpr in the program and reject bare TENamed nodes
+// whose name lives in a different package from the surrounding
+// declaration. Runs as its own pass with an explicit per-decl home
+// so the check does not depend on the thread-local current_pkg
+// state that the synth path manipulates. Multi-segment TypeExprs
+// are validated against their qualifier; the rest of the compiler
+// keeps resolving qualified paths through resolve_named.
+let check_qualified_access(tc: *check.TyContext, f: ast.File) = {
+    for d in f.decls {
+        match d {
+        | DFn(_, name, _, params, ret, body, _) -> {
+            let home = match map.get(&tc.fn_homes, name) {
+            | Some(p) -> p
+            | None    -> ""
+            }
+            for pp in params { walk_te_for_qualified(tc, pp.ty, home) }
+            walk_te_for_qualified(tc, ret, home)
+            walk_expr_for_qualified(tc, body, home)
+        }
+        | DExternal(_, name, _, params, ret) -> {
+            let home = match map.get(&tc.fn_homes, name) {
+            | Some(p) -> p
+            | None    -> ""
+            }
+            for pp in params { walk_te_for_qualified(tc, pp.ty, home) }
+            walk_te_for_qualified(tc, ret, home)
+        }
+        | DStruct(_, name, _, fields) -> {
+            let home = match map.get(&tc.type_homes, name) {
+            | Some(p) -> p
+            | None    -> ""
+            }
+            for fld in fields { walk_te_for_qualified(tc, fld.ty, home) }
+        }
+        | DEnum(_, name, _, variants) -> {
+            let home = match map.get(&tc.type_homes, name) {
+            | Some(p) -> p
+            | None    -> ""
+            }
+            for v in variants {
+                for pt in v.pos { walk_te_for_qualified(tc, pt, home) }
+                for nf in v.named { walk_te_for_qualified(tc, nf.ty, home) }
+            }
+        }
+        | DTypeAlias(_, name, _, target) -> {
+            let home = match map.get(&tc.type_homes, name) {
+            | Some(p) -> p
+            | None    -> ""
+            }
+            walk_te_for_qualified(tc, target, home)
+        }
+        | DConst(_, _, t, _) -> walk_te_for_qualified(tc, t, "")
+        | _ -> { }
+        }
+    }
+}
+
+let walk_te_for_qualified(tc: *check.TyContext, te: ast.TypeExpr, decl_home: string) = {
+    match te {
+    | TEUnit(_)                  -> { }
+    | TEPtr(_, inner)            -> walk_te_for_qualified(tc, inner, decl_home)
+    | TETuple(_, elems)          -> { for el in elems { walk_te_for_qualified(tc, el, decl_home) } }
+    | TEFn(_, params, ret)       -> {
+        for p in params { walk_te_for_qualified(tc, p, decl_home) }
+        walk_te_for_qualified(tc, ret, decl_home)
+    }
+    | TENamed(sp, path, args) -> {
+        for a in args { walk_te_for_qualified(tc, a, decl_home) }
+        if len(path) == 1 {
+            let name = path[0]
+            match map.get(&tc.type_homes, name) {
+            | Some(home) -> {
+                if !strings.eq_raw(home, "") && !strings.eq_raw(home, decl_home) {
+                    record_error(tc, sp, `type '{name}' is from package '{home}'; use '{home}.{name}'`)
+                }
+            }
+            | None -> { }
+            }
+        }
+    }
+    }
+}
+
+let walk_expr_for_qualified(tc: *check.TyContext, e: ast.Expr, decl_home: string) = {
+    match e {
+    | EInt(_, _) | EFloat(_, _) | EString(_, _) | EChar(_, _) | EBool(_, _) | ENil(_) | EIdent(_, _) | EPath(_, _) | ESizeOf(_, _) -> { }
+    | EUnary(_, _, rhs) -> walk_expr_for_qualified(tc, rhs, decl_home)
+    | EBinary(_, _, l, r) -> {
+        walk_expr_for_qualified(tc, l, decl_home)
+        walk_expr_for_qualified(tc, r, decl_home)
+    }
+    | EAssign(_, _, l, r) -> {
+        walk_expr_for_qualified(tc, l, decl_home)
+        walk_expr_for_qualified(tc, r, decl_home)
+    }
+    | EField(_, base, _) -> walk_expr_for_qualified(tc, base, decl_home)
+    | EIndex(_, base, idx) -> {
+        walk_expr_for_qualified(tc, base, decl_home)
+        walk_expr_for_qualified(tc, idx, decl_home)
+    }
+    | ECast(_, v, t) -> {
+        walk_expr_for_qualified(tc, v, decl_home)
+        walk_te_for_qualified(tc, t, decl_home)
+    }
+    | ETry(_, v) -> walk_expr_for_qualified(tc, v, decl_home)
+    | EReturn(_, v) -> walk_expr_for_qualified(tc, v, decl_home)
+    | EDefer(_, v) -> walk_expr_for_qualified(tc, v, decl_home)
+    | ETuple(_, elems) -> { for el in elems { walk_expr_for_qualified(tc, el, decl_home) } }
+    | EArrayLit(_, elems) -> { for el in elems { walk_expr_for_qualified(tc, el, decl_home) } }
+    | ERecord(_, te, fields) -> {
+        walk_te_for_qualified(tc, te, decl_home)
+        for f in fields { walk_expr_for_qualified(tc, f.value, decl_home) }
+    }
+    | ECall(_, callee, ta, args) -> {
+        walk_expr_for_qualified(tc, callee, decl_home)
+        for a in ta { walk_te_for_qualified(tc, a, decl_home) }
+        for a in args { walk_expr_for_qualified(tc, a, decl_home) }
+    }
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts { walk_stmt_for_qualified(tc, s, decl_home) }
+        walk_expr_for_qualified(tc, tail, decl_home)
+    }
+    | EIf(_, c, t, f) -> {
+        walk_expr_for_qualified(tc, c, decl_home)
+        walk_expr_for_qualified(tc, t, decl_home)
+        walk_expr_for_qualified(tc, f, decl_home)
+    }
+    | EWhile(_, c, b) -> {
+        walk_expr_for_qualified(tc, c, decl_home)
+        walk_expr_for_qualified(tc, b, decl_home)
+    }
+    | EFor(_, _, _, it, body) -> {
+        walk_expr_for_qualified(tc, it, decl_home)
+        walk_expr_for_qualified(tc, body, decl_home)
+    }
+    | EMatch(_, scrut, arms) -> {
+        walk_expr_for_qualified(tc, scrut, decl_home)
+        for a in arms {
+            walk_expr_for_qualified(tc, a.body, decl_home)
+            if a.has_guard { walk_expr_for_qualified(tc, a.guard, decl_home) }
+        }
+    }
+    | EClosure(_, cps, ret, body) -> {
+        for cp in cps { walk_te_for_qualified(tc, cp.ty, decl_home) }
+        walk_te_for_qualified(tc, ret, decl_home)
+        walk_expr_for_qualified(tc, body, decl_home)
+    }
+    }
+}
+
+let walk_stmt_for_qualified(tc: *check.TyContext, s: ast.Stmt, decl_home: string) = {
+    match s {
+    | SLet(_, _, te, v) -> {
+        walk_te_for_qualified(tc, te, decl_home)
+        walk_expr_for_qualified(tc, v, decl_home)
+    }
+    | SVar(_, _, te, v) -> {
+        walk_te_for_qualified(tc, te, decl_home)
+        walk_expr_for_qualified(tc, v, decl_home)
+    }
+    | SExpr(_, v) -> walk_expr_for_qualified(tc, v, decl_home)
     }
 }
 
@@ -289,16 +464,10 @@ let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args:
     // TypeExprs that flow through `qualified_ty_to_type_expr_at`
     // carry their qualifier, so the rule fires only on bare names
     // that the user actually wrote.
-    // Bare-vs-qualified enforcement is staged: the home map and the
-    // current_pkg context propagate correctly through validate_signatures
-    // and the top-level resolution of fn parameters, but synth-driven
-    // resolutions inside expression bodies do not consistently restore
-    // current_pkg across every nested call into resolve_type. Flipping
-    // the rule on today surfaces several hundred diagnostics from
-    // positions the user never wrote. Once every resolve_type entry
-    // either propagates the home explicitly or the home moves into the
-    // Ty representation itself, the block below switches from a
-    // no-op to the enforcement form.
+    // The cross-package enforcement runs in a dedicated pass
+    // (`check_qualified_access`) that walks every Decl's TypeExprs
+    // with an explicit decl-home context, so resolve_type does not
+    // need to thread current_pkg through every synth-driven call.
     resolve_named_short(tc, span, name, args)
 }
 
@@ -1300,39 +1469,36 @@ let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_a
         if len(arg_tys) != len(params) {
             record_error(tc, sp, `function expects {len(params)} argument(s), got {len(arg_tys)}`)
         }
-        // Resolve the callee's signature in its OWN package context.
-        let saved_callee_pkg = tc.current_pkg
-        tc.current_pkg = match map.get(&tc.fn_homes, fn_name) {
-        | Some(p) -> p
-        | None    -> tc.current_pkg
+        // Look up the callee's resolved param and return types from
+        // the cache populated by validate_signatures. The cache
+        // contains values resolved with the callee's own pkg in
+        // scope, so synth-driven calls do not need to flip
+        // current_pkg and the qualified-access rule does not fire
+        // from synthesised re-resolutions.
+        let param_tys: Vec<ty.Ty> = match map.get(&tc.fn_param_tys, fn_name) {
+        | Some(ts) -> ts
+        | None     -> vec.make()
+        }
+        let cached_ret: ty.Ty = match map.get(&tc.fn_ret_ty, fn_name) {
+        | Some(t) -> t
+        | None    -> ty.ty_error_()
         }
         if len(tparams) == 0 {
-            let saved = tc.type_params
-            set_type_params(tc, tparams)
             var i: i64 = 0
-            while i < len(params) && i < len(arg_tys) {
-                let p_ty = resolve_type(tc, params[i].ty)
-                if !ty.ty_assignable(p_ty, arg_tys[i]) {
-                    let want = ty.ty_show(p_ty)
+            while i < len(param_tys) && i < len(arg_tys) {
+                if !ty.ty_assignable(param_tys[i], arg_tys[i]) {
+                    let want = ty.ty_show(param_tys[i])
                     let got  = ty.ty_show(arg_tys[i])
                     record_error(tc, sp, `expected {want}, got {got}`)
                 }
                 i += 1
             }
-            let r = resolve_type(tc, ret)
-            tc.type_params = saved
-            tc.current_pkg = saved_callee_pkg
-            return r
+            return cached_ret
         }
         var tyarg_tys: Vec<ty.Ty> = vec.make()
         if len(type_args) == len(tparams) {
             for ta in type_args { vec.push(&tyarg_tys, resolve_type(tc, ta)) }
         } else {
-            let saved_a = tc.type_params
-            set_type_params(tc, tparams)
-            var param_tys: Vec<ty.Ty> = vec.make()
-            for pp in params { vec.push(&param_tys, resolve_type(tc, pp.ty)) }
-            tc.type_params = saved_a
             var subst_env: Map<string, ty.Ty> = map.make()
             var ok = true
             var i: i64 = 0
@@ -1353,22 +1519,14 @@ let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_a
                 }
             }
         }
-        let saved_b = tc.type_params
-        set_type_params(tc, tparams)
-        let raw_ret = resolve_type(tc, ret)
-        tc.type_params = saved_b
-        tc.current_pkg = saved_callee_pkg
+        let raw_ret = cached_ret
         apply_subst(raw_ret, tparams, tyarg_tys)
     }
-    | DExternal(_, ex_name, _, _, ret) -> {
-        let saved_callee_pkg = tc.current_pkg
-        tc.current_pkg = match map.get(&tc.fn_homes, ex_name) {
-        | Some(p) -> p
-        | None    -> tc.current_pkg
+    | DExternal(_, ex_name, _, _, _) -> {
+        match map.get(&tc.fn_ret_ty, ex_name) {
+        | Some(t) -> t
+        | None    -> ty.ty_error_()
         }
-        let r = resolve_type(tc, ret)
-        tc.current_pkg = saved_callee_pkg
-        r
     }
     | _ -> ty.ty_error_()
     }
@@ -2761,11 +2919,13 @@ let validate_signatures(tc: *check.TyContext, f: ast.File) = {
             | Some(p) -> p
             | None    -> ""
             }
-            fmt.println(`VS DFn name='{name}' current_pkg='{tc.current_pkg}'`)
+            var p_tys: Vec<ty.Ty> = vec.make()
             for pp in params {
-                let _ = resolve_type(tc, pp.ty)
+                vec.push(&p_tys, resolve_type(tc, pp.ty))
             }
-            let _ = resolve_type(tc, ret)
+            let r_ty = resolve_type(tc, ret)
+            map.set(&tc.fn_param_tys, name, p_tys)
+            map.set(&tc.fn_ret_ty, name, r_ty)
             clear_type_params(tc)
             tc.current_pkg = saved_pkg
         }
@@ -2775,10 +2935,13 @@ let validate_signatures(tc: *check.TyContext, f: ast.File) = {
             | Some(p) -> p
             | None    -> ""
             }
+            var p_tys: Vec<ty.Ty> = vec.make()
             for pp in params {
-                let _ = resolve_type(tc, pp.ty)
+                vec.push(&p_tys, resolve_type(tc, pp.ty))
             }
-            let _ = resolve_type(tc, ret)
+            let r_ty = resolve_type(tc, ret)
+            map.set(&tc.fn_param_tys, name, p_tys)
+            map.set(&tc.fn_ret_ty, name, r_ty)
             tc.current_pkg = saved_pkg
         }
         | DStruct(_, name, tparams, fields) -> {
