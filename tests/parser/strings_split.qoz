@@ -4,7 +4,7 @@ import vec
 
 let main() = {
     let parts = strings.split("alpha,beta,gamma,delta", 44)
-    fmt.println("count = {len(parts)}")
+    fmt.println(`count = {len(parts)}`)
     var i: i64 = 0
     while i < len(parts) {
         fmt.println(parts[i])

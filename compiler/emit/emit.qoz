@@ -1278,7 +1278,7 @@ let emit_expr(e: *Emitter, ex: Expr) = {
                     let ret_te = match map.get(&e.fn_returns, fn_name) {
                     | Some(t) -> t
                     | None    -> {
-                        let _ = emit_die(span_of_expr(rhs), "operator `{op_text}` for `{tname}` has no recorded return type")
+                        let _ = emit_die(span_of_expr(rhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
                         TEUnit(span_of_expr(rhs))
                     }
                     }
@@ -1522,7 +1522,7 @@ let infer_base_typeexpr(e: *Emitter, base: Expr): TypeExpr = {
                 TENamed(sp, path, vec.make())
             }
             | None -> {
-                let _ = emit_die(sp, "identifier `{ident}` has no known TypeExpr (not a local, parameter, or variant)")
+                let _ = emit_die(sp, `identifier '{ident}' has no known TypeExpr (not a local, parameter, or variant)`)
                 TEUnit(sp)
             }
             }
@@ -1599,7 +1599,7 @@ let field_typeexpr_for(e: *Emitter, base_te: TypeExpr, field: string, sp: Span):
     match unwrapped {
     | TENamed(_, path, args) -> {
         if len(path) < 1 {
-            let _ = emit_die(sp, "field access `.{field}` on TypeExpr with empty path")
+            let _ = emit_die(sp, `field access '.{field}' on TypeExpr with empty path`)
             return TEUnit(sp)
         }
         let lookup = type_lookup_key(e, path)
@@ -1619,17 +1619,17 @@ let field_typeexpr_for(e: *Emitter, base_te: TypeExpr, field: string, sp: Span):
                         return f.ty
                     }
                 }
-                let _ = emit_die(sp, "struct `{lookup}` has no field `{field}`")
+                let _ = emit_die(sp, `struct '{lookup}' has no field '{field}'`)
                 TEUnit(sp)
             }
             | _ -> {
-                let _ = emit_die(sp, "decl `{lookup}` is not a struct")
+                let _ = emit_die(sp, `decl '{lookup}' is not a struct`)
                 TEUnit(sp)
             }
             }
         }
         | None -> {
-            let _ = emit_die(sp, "unknown struct `{lookup}` for field `.{field}`")
+            let _ = emit_die(sp, `unknown struct '{lookup}' for field '.{field}'`)
             TEUnit(sp)
         }
         }
@@ -1637,11 +1637,11 @@ let field_typeexpr_for(e: *Emitter, base_te: TypeExpr, field: string, sp: Span):
     | TETuple(_, elems) -> {
         let idx = tuple_field_index(field)
         if idx >= 0 && idx < len(elems) { return elems[idx] }
-        let _ = emit_die(sp, "tuple has no field `.{field}`")
+        let _ = emit_die(sp, `tuple has no field '.{field}'`)
         TEUnit(sp)
     }
     | _ -> {
-        let _ = emit_die(sp, "field access `.{field}` on a non-named base")
+        let _ = emit_die(sp, `field access '.{field}' on a non-named base`)
         TEUnit(sp)
     }
     }
@@ -1754,7 +1754,7 @@ let infer_value_te(e: *Emitter, v: Expr): TypeExpr = {
         match map.get(&e.locals, name) {
         | Some(t) -> t
         | None -> {
-            let _ = emit_die(sp, "let-binding value references unknown name `{name}`")
+            let _ = emit_die(sp, `let-binding value references unknown name '{name}'`)
             TEUnit(sp)
         }
         }
@@ -2034,7 +2034,7 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Ve
             ret
         }
         | _ -> {
-            let _ = emit_die(sp, "`{name}` is in generic_fn_decls but not a DFn")
+            let _ = emit_die(sp, `'{name}' is in generic_fn_decls but not a DFn`)
             TEUnit(sp)
         }
         }
@@ -2043,7 +2043,7 @@ let call_return_te(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Ve
         match map.get(&e.fn_returns, name) {
         | Some(t) -> t
         | None -> {
-            let _ = emit_die(sp, "call to unknown function `{name}` (no DFn, DExternal, or builtin matched)")
+            let _ = emit_die(sp, `call to unknown function '{name}' (no DFn, DExternal, or builtin matched)`)
             TEUnit(sp)
         }
         }
@@ -3025,7 +3025,7 @@ let emit_binary(e: *Emitter, op: BinaryOp, lhs: Expr, rhs: Expr) = {
                 let ret_te = match map.get(&e.fn_returns, fn_name) {
                 | Some(t) -> t
                 | None    -> {
-                    let _ = emit_die(span_of_expr(lhs), "operator `{op_text}` for `{tname}` has no recorded return type")
+                    let _ = emit_die(span_of_expr(lhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
                     TEUnit(span_of_expr(lhs))
                 }
                 }
@@ -5193,7 +5193,7 @@ let main_return_kind(ret: TypeExpr): MainRetKind = {
         if strings.eq_raw(n, "u64")  { return MainRetInt("uint64_t") }
         if strings.eq_raw(n, "unit") { return MainRetUnit }
         if strings.eq_raw(n, "void") { return MainRetUnit }
-        fmt.println("{sp.file}:{sp.line}:{sp.col}: main may return only integer types or unit, got `{n}`")
+        fmt.println(`{sp.file}:{sp.line}:{sp.col}: main may return only integer types or unit, got '{n}'`)
         MainRetInt("int64_t")
     }
     | _ -> {

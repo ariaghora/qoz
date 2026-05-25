@@ -290,7 +290,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         | DImport(_, ipath, alias) -> {
             let resolved_dir = resolve_import_path(ipath, qoz_root)
             if strings.eq_raw(resolved_dir, "") {
-                fmt.println("could not resolve import {ipath[len(ipath) - 1]}")
+                fmt.println(`could not resolve import {ipath[len(ipath) - 1]}`)
                 os.exit(1)
             }
             var pkg = alias
@@ -394,12 +394,12 @@ let unlink_quiet(path: string) = {
 let cmd_fmt(path: string) = {
     let src = fs.read_file(path)
     if len(src) < 0 {
-        fmt.println("qoz fmt: cannot read `{path}`")
+        fmt.println(`qoz fmt: cannot read '{path}'`)
         os.exit(1)
     }
     let normalised = normalise_whitespace(src)
     if !fs.write_file(path, normalised) {
-        fmt.println("qoz fmt: cannot write `{path}`")
+        fmt.println(`qoz fmt: cannot write '{path}'`)
         os.exit(1)
     }
 }

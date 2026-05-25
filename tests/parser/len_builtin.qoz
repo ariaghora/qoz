@@ -15,7 +15,7 @@ let main() = {
 
     let s = "hello"
 
-    fmt.println("len(v) = {len(v)}")
-    fmt.println("len(m) = {len(m)}")
-    fmt.println("len(s) = {len(s)}")
+    fmt.println(`len(v) = {len(v)}`)
+    fmt.println(`len(m) = {len(m)}`)
+    fmt.println(`len(s) = {len(s)}`)
 }

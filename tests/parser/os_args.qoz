@@ -4,8 +4,8 @@ import os
 
 let main() = {
     let a = os.args()
-    fmt.println("argc = {len(a)}")
+    fmt.println(`argc = {len(a)}`)
     if len(a) > 0 {
-        fmt.println("argv[0] = {a[0]}")
+        fmt.println(`argv[0] = {a[0]}`)
     }
 }

@@ -102,7 +102,7 @@ let record_error(p: *Parser, msg: string) = {
 }
 
 let err_unexpected(p: *Parser, want: string, t: Token) = {
-    record_error(p, "expected {want} at line {t.line} (got `{t.text}`)")
+    record_error(p, `expected {want} at line {t.line} (got '{t.text}')`)
 }
 
 let expect_punct(p: *Parser, sym: string) = {
@@ -110,7 +110,7 @@ let expect_punct(p: *Parser, sym: string) = {
     if is_punct(t, sym) {
         advance(p)
     } else {
-        err_unexpected(p, "`{sym}`", t)
+        err_unexpected(p, `'{sym}'`, t)
         if !at_eof(p) {
             advance(p)
         }
@@ -663,7 +663,7 @@ let c_escape_bytes(src: string): string = {
         else if b == 13 { out = strings.cat(out, "\\r") }
         else if b == 9  { out = strings.cat(out, "\\t") }
         else if b < 32 || b == 127 {
-            out = strings.cat(out, "\\x{hex2(b)}")
+            out = strings.cat(out, `\\x{hex2(b)}`)
         } else {
             out = strings.cat(out, strings.slice(src, i, i + 1))
         }
@@ -757,6 +757,33 @@ let interp_text_valid(text: string): bool = {
     sub.pos == len(sub.tokens)
 }
 
+// Translate one source byte from a backtick-string body into the bytes
+// a C double-quoted literal needs and append to the template. A raw
+// `"` becomes `\"`; a `' followed by `` ` `` collapses to one literal
+// backtick; every other `\X` escape passes through unchanged.
+let append_str_byte(template: string, body: string, i: i64): string = {
+    let bn = len(body)
+    let b = strings.byte_at(body, i)
+    if b == 92 && i + 1 < bn {
+        let nb = strings.byte_at(body, i + 1)
+        if nb == 96 {
+            return strings.cat(template, "`")
+        }
+        return strings.cat(template, strings.slice(body, i, i + 2))
+    }
+    if b == 34 {
+        return strings.cat(template, "\\\"")
+    }
+    strings.cat(template, strings.slice(body, i, i + 1))
+}
+
+let str_byte_advance(body: string, i: i64): i64 = {
+    let bn = len(body)
+    let b = strings.byte_at(body, i)
+    if b == 92 && i + 1 < bn { return 2 }
+    1
+}
+
 let build_string_lit_or_interp(raw: string, span: Span): Expr = {
     let n = len(raw)
     if n < 2 { return EString(span, raw) }
@@ -784,17 +811,23 @@ let build_string_lit_or_interp(raw: string, span: Span): Expr = {
             else { i += 1 }
         } else { i += 1 }
     }
-    if !needs_rewrite { return EString(span, raw) }
+    if !needs_rewrite {
+        var s = "\""
+        i = 0
+        while i < bn {
+            s = append_str_byte(s, body, i)
+            i += str_byte_advance(body, i)
+        }
+        s = strings.cat(s, "\"")
+        return EString(span, s)
+    }
 
     var template = "\""
     var args: Vec<Expr> = vec.make()
     i = 0
     while i < bn {
         let b = strings.byte_at(body, i)
-        if b == 92 && i + 1 < bn {
-            template = strings.cat(template, strings.slice(body, i, i + 2))
-            i += 2
-        } else if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
+        if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
             template = strings.cat(template, "{")
             i += 2
         } else if b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
@@ -808,12 +841,12 @@ let build_string_lit_or_interp(raw: string, span: Span): Expr = {
                 vec.push(&args, build_interp_expr(ident_text, span))
                 i = end + 1
             } else {
-                template = strings.cat(template, strings.slice(body, i, i + 1))
-                i += 1
+                template = append_str_byte(template, body, i)
+                i += str_byte_advance(body, i)
             }
         } else {
-            template = strings.cat(template, strings.slice(body, i, i + 1))
-            i += 1
+            template = append_str_byte(template, body, i)
+            i += str_byte_advance(body, i)
         }
     }
     template = strings.cat(template, "\"")
@@ -934,7 +967,7 @@ let parse_atom(p: *Parser): Expr = {
         advance(p)
         let name_tok = peek(p)
         if !is_ident(name_tok) {
-            record_error(p, "expected directive name after `#`, got `{name_tok.text}`")
+            record_error(p, `expected directive name after '#', got '{name_tok.text}'`)
             return ENil(span)
         }
         advance(p)
@@ -947,7 +980,7 @@ let parse_atom(p: *Parser): Expr = {
         advance(p)
         expect_punct(p, ")")
         if !strings.eq_raw(name_tok.text, "load_string") {
-            record_error(p, "unknown directive `#{name_tok.text}` in expression position; supported: #load_string")
+            record_error(p, `unknown directive '#{name_tok.text}' in expression position; supported: #load_string`)
             return ENil(span)
         }
         // arg_tok.text includes surrounding quotes; strip them.
@@ -958,7 +991,7 @@ let parse_atom(p: *Parser): Expr = {
         }
         let bytes = fs.read_file(raw_path)
         if len(bytes) < 0 {
-            record_error(p, "#load_string: cannot read `{raw_path}`")
+            record_error(p, `#load_string: cannot read '{raw_path}'`)
             return ENil(span)
         }
         return EString(span, c_escape_bytes(bytes))

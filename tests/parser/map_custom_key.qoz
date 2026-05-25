@@ -23,7 +23,7 @@ let main() = {
     m[bob]   = 200
     m[carol] = 300
 
-    fmt.println("len = {map.len(&m)}")
+    fmt.println(`len = {map.len(&m)}`)
 
     match map.get(&m, alice) {
     | Some(v) -> fmt.println(`alice = {v}`)

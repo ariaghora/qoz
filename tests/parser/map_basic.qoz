@@ -10,7 +10,7 @@ let main() = {
     map.insert(&m, "three", 3)
     map.insert(&m, "four",  4)
 
-    fmt.println("len = {map.len(&m)}")
+    fmt.println(`len = {map.len(&m)}`)
 
     match map.get(&m, "two") {
     | Some(v) -> fmt.println(`two = {v}`)
@@ -37,5 +37,5 @@ let main() = {
     | Some(v) -> fmt.println(`two after overwrite = {v}`)
     | None    -> fmt.println("two missing after overwrite")
     }
-    fmt.println("len after overwrite = {map.len(&m)}")
+    fmt.println(`len after overwrite = {map.len(&m)}`)
 }

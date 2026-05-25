@@ -7,5 +7,5 @@ let main() = {
     fmt.println(`write ok = {ok}`)
     let back = fs.read_file("/tmp/qoz_fs_io_test.txt")
     fmt.println(`read = {back}`)
-    fmt.println("len = {len(back)}")
+    fmt.println(`len = {len(back)}`)
 }

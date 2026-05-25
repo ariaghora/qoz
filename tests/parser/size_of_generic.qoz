@@ -11,12 +11,12 @@ let main() = {
     xs[1] = 22
     xs[2] = 33
     xs[3] = 44
-    fmt.println("xs[0] = {xs[0]}")
-    fmt.println("xs[3] = {xs[3]}")
+    fmt.println(`xs[0] = {xs[0]}`)
+    fmt.println(`xs[3] = {xs[3]}`)
 
     let ys: *f64 = alloc_array(2)
     ys[0] = 3.14
     ys[1] = 2.71
-    fmt.println("ys[0] = {ys[0]}")
-    fmt.println("ys[1] = {ys[1]}")
+    fmt.println(`ys[0] = {ys[0]}`)
+    fmt.println(`ys[1] = {ys[1]}`)
 }

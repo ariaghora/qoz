@@ -156,7 +156,7 @@ let report(tc: *TyContext) = {
                 let line = nth_line(src, e.span.line)
                 if len(line) > 0 {
                     fmt.println(`    {line}`)
-                    fmt.println("    {caret_pad(e.span.col)}")
+                    fmt.println(`    {caret_pad(e.span.col)}`)
                 }
             }
         }
@@ -180,13 +180,13 @@ let i64_to_string_local(v: i64): string = {
 }
 
 let summary(tc: *TyContext) = {
-    fmt.println("enums:    {len(tc.enums)}")
-    fmt.println("structs:  {len(tc.structs)}")
-    fmt.println("aliases:  {len(tc.aliases)}")
-    fmt.println("fns:      {len(tc.fns)}")
-    fmt.println("externs:  {len(tc.externs)}")
-    fmt.println("packages: {len(tc.packages)}")
-    fmt.println("errors:   {len(tc.errors)}")
+    fmt.println(`enums:    {len(tc.enums)}`)
+    fmt.println(`structs:  {len(tc.structs)}`)
+    fmt.println(`aliases:  {len(tc.aliases)}`)
+    fmt.println(`fns:      {len(tc.fns)}`)
+    fmt.println(`externs:  {len(tc.externs)}`)
+    fmt.println(`packages: {len(tc.packages)}`)
+    fmt.println(`errors:   {len(tc.errors)}`)
 }
 
 // --- Type resolution ---
@@ -250,7 +250,7 @@ let resolve_named(tc: *TyContext, span: Span, path: Vec<string>, args: Vec<TypeE
         // Aliases stay as named records until type-alias unfolding lands.
         return ty.ty_record_(name, resolved_args)
     }
-    record_error(tc, span, "unknown type `{name}`")
+    record_error(tc, span, `unknown type '{name}'`)
     ty.ty_error_()
 }
 
@@ -350,11 +350,11 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
             if strings.eq_raw(name, "Result") && len(args) >= 1 {
                 return args[0]
             }
-            record_error(tc, sp, "the `?` operator requires a Result<T, E>, got {ty.ty_show(t)}")
+            record_error(tc, sp, `the '?' operator requires a Result<T, E>, got {ty.ty_show(t)}`)
             ty.ty_error_()
         }
         | _ -> {
-            record_error(tc, sp, "the `?` operator requires a Result<T, E>, got {ty.ty_show(t)}")
+            record_error(tc, sp, `the '?' operator requires a Result<T, E>, got {ty.ty_show(t)}`)
             ty.ty_error_()
         }
         }
@@ -383,7 +383,7 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
         // annotation = take the body's type).
         if !ty.ty_is_unit(ret_ty) && !ty.ty_is_error(ret_ty) && !ty.ty_is_error(body_ty) {
             if !ty.ty_is_nil(body_ty) && !ty.ty_assignable(ret_ty, body_ty) {
-                record_error(tc, sp, "closure body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(ret_ty)}")
+                record_error(tc, sp, `closure body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(ret_ty)}`)
             }
         }
         ty.ty_fn_(pty, ret_ty)
@@ -394,7 +394,7 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
     | EWhile(sp, c, b)       -> {
         let ct = synth(tc, env, c)
         if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
-            record_error(tc, sp, "while condition must be bool, got {ty.ty_show(ct)}")
+            record_error(tc, sp, `while condition must be bool, got {ty.ty_show(ct)}`)
         }
         let _ = synth(tc, env, b)
         ty.ty_unit_()
@@ -424,7 +424,7 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
             ty.ty_is_error(rt) ||
             ty.ty_is_unit(rt)
         if !skip && !ty.ty_assignable(rt, vt) {
-            record_error(tc, sp, "return value of type {ty.ty_show(vt)} does not match function's declared return type {ty.ty_show(rt)}")
+            record_error(tc, sp, `return value of type {ty.ty_show(vt)} does not match function's declared return type {ty.ty_show(rt)}`)
         }
         ty.ty_unit_()
     }
@@ -504,7 +504,7 @@ let check_assign(tc: *TyContext, env: *Env, sp: Span, lhs: Expr, rhs: Expr): Ty 
     match lhs {
     | EIdent(_, name) -> {
         if env_has(env, name) && !env_is_var(env, name) {
-            record_error(tc, sp, "cannot assign to `let`-bound `{name}`; use `var` to declare a mutable binding")
+            record_error(tc, sp, `cannot assign to 'let'-bound '{name}'; use 'var' to declare a mutable binding`)
         }
     }
     | _ -> { }
@@ -527,14 +527,14 @@ let synth_unary(tc: *TyContext, env: *Env, sp: Span, op: UnaryOp, rhs: Expr): Ty
     match op {
     | UOpNeg   -> {
         if !ty.ty_is_numeric(t) {
-            record_error(tc, sp, "unary `-` requires a numeric operand, got {ty.ty_show(t)}")
+            record_error(tc, sp, `unary '-' requires a numeric operand, got {ty.ty_show(t)}`)
             return ty.ty_error_()
         }
         t
     }
     | UOpNot   -> {
         if !ty.ty_is_bool(t) {
-            record_error(tc, sp, "unary `!` requires a bool operand, got {ty.ty_show(t)}")
+            record_error(tc, sp, `unary '!' requires a bool operand, got {ty.ty_show(t)}`)
             return ty.ty_error_()
         }
         ty.ty_bool_()
@@ -543,7 +543,7 @@ let synth_unary(tc: *TyContext, env: *Env, sp: Span, op: UnaryOp, rhs: Expr): Ty
         match t {
         | TyPtr(inner) -> inner
         | _            -> {
-            record_error(tc, sp, "cannot dereference value of type {ty.ty_show(t)}")
+            record_error(tc, sp, `cannot dereference value of type {ty.ty_show(t)}`)
             ty.ty_error_()
         }
         }
@@ -570,7 +570,7 @@ let synth_field(tc: *TyContext, env: *Env, sp: Span, base: Expr, name: string): 
     }
     let ft = field_type_of(tc, bt, name)
     if ty.ty_is_error(ft) {
-        record_error(tc, sp, "type {ty.ty_show(bt)} has no field `{name}`")
+        record_error(tc, sp, `type {ty.ty_show(bt)} has no field '{name}'`)
     }
     ft
 }
@@ -682,34 +682,34 @@ let synth_index(tc: *TyContext, env: *Env, sp: Span, base: Expr, idx: Expr): Ty 
     match bt {
     | TyString -> {
         if !ty.ty_is_int(it) {
-            record_error(tc, sp, "string index must be an integer, got {ty.ty_show(it)}")
+            record_error(tc, sp, `string index must be an integer, got {ty.ty_show(it)}`)
         }
         ty.ty_int_(64, true)
     }
     | TyPtr(inner) -> {
         if !ty.ty_is_int(it) {
-            record_error(tc, sp, "pointer index must be an integer, got {ty.ty_show(it)}")
+            record_error(tc, sp, `pointer index must be an integer, got {ty.ty_show(it)}`)
         }
         inner
     }
     | TyRecord(name, args) -> {
         if strings.eq_raw(name, "Vec") && len(args) >= 1 {
             if !ty.ty_is_int(it) {
-                record_error(tc, sp, "Vec index must be an integer, got {ty.ty_show(it)}")
+                record_error(tc, sp, `Vec index must be an integer, got {ty.ty_show(it)}`)
             }
             return args[0]
         }
         if strings.eq_raw(name, "Map") && len(args) >= 2 {
             if !ty.ty_assignable(args[0], it) {
-                record_error(tc, sp, "Map key has type {ty.ty_show(args[0])}; cannot use index of type {ty.ty_show(it)}")
+                record_error(tc, sp, `Map key has type {ty.ty_show(args[0])}; cannot use index of type {ty.ty_show(it)}`)
             }
             return args[1]
         }
-        record_error(tc, sp, "cannot index value of type {ty.ty_show(bt)}")
+        record_error(tc, sp, `cannot index value of type {ty.ty_show(bt)}`)
         ty.ty_error_()
     }
     | _ -> {
-        record_error(tc, sp, "cannot index value of type {ty.ty_show(bt)}")
+        record_error(tc, sp, `cannot index value of type {ty.ty_show(bt)}`)
         ty.ty_error_()
     }
     }
@@ -800,7 +800,7 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
                 let want = len(variant_positional_types(tc, enum_n, fn_name))
                 let got  = len(arg_tys)
                 if want != got {
-                    record_error(tc, sp, "variant `{enum_n}::{fn_name}` takes {want} argument(s), got {got}")
+                    record_error(tc, sp, `variant '{enum_n}::{fn_name}' takes {want} argument(s), got {got}`)
                 }
                 return synth_variant_ctor_with_args(tc, fn_name, arg_tys)
             }
@@ -815,7 +815,7 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
                 | _ -> { }
                 }
             }
-            record_error(tc, sp, "call to undefined function `{fn_name}`")
+            record_error(tc, sp, `call to undefined function '{fn_name}'`)
             ty.ty_error_()
         }
         }
@@ -882,7 +882,7 @@ let validate_record_fields(tc: *TyContext, sp: Span, struct_name: string, fields
                         if strings.eq_raw(df.name, f.name) { found = true }
                     }
                     if !found {
-                        record_error(tc, sp, "struct `{struct_name}` has no field `{f.name}`")
+                        record_error(tc, sp, `struct '{struct_name}' has no field '{f.name}'`)
                     }
                 }
             }
@@ -1001,19 +1001,19 @@ let synth_path(tc: *TyContext, sp: Span, segs: Vec<string>): Ty = {
     let enum_name = segs[0]
     let variant   = segs[1]
     if !map.contains(&tc.enums, enum_name) {
-        record_error(tc, sp, "unknown enum `{enum_name}`")
+        record_error(tc, sp, `unknown enum '{enum_name}'`)
         return ty.ty_error_()
     }
     match map.get(&tc.variant_of, variant) {
     | Some(declared_enum) -> {
         if !strings.eq_raw(declared_enum, enum_name) {
-            record_error(tc, sp, "`{variant}` is not a variant of enum `{enum_name}`")
+            record_error(tc, sp, `'{variant}' is not a variant of enum '{enum_name}'`)
             return ty.ty_error_()
         }
         synth_variant_ctor(tc, variant)
     }
     | None -> {
-        record_error(tc, sp, "unknown variant `{enum_name}::{variant}`")
+        record_error(tc, sp, `unknown variant '{enum_name}::{variant}'`)
         ty.ty_error_()
     }
     }
@@ -1129,7 +1129,7 @@ let synth_call_with_decl(tc: *TyContext, sp: Span, d: Decl, type_args: Vec<TypeE
     match d {
     | DFn(_, _, tparams, params, ret, _, _) -> {
         if len(arg_tys) != len(params) {
-            record_error(tc, sp, "function expects {len(params)} argument(s), got {len(arg_tys)}")
+            record_error(tc, sp, `function expects {len(params)} argument(s), got {len(arg_tys)}`)
         }
         if len(tparams) == 0 {
             // Save and restore the enclosing fn's type_params so a
@@ -1174,7 +1174,7 @@ let synth_call_with_decl(tc: *TyContext, sp: Span, d: Decl, type_args: Vec<TypeE
                 match map.get(&subst_env, tp) {
                 | Some(t) -> vec.push(&tyarg_tys, t)
                 | None    -> {
-                    record_error(tc, sp, "type parameter `{tp}` is not constrained by any argument; add an explicit annotation")
+                    record_error(tc, sp, `type parameter '{tp}' is not constrained by any argument; add an explicit annotation`)
                     vec.push(&tyarg_tys, ty.ty_error_())
                 }
                 }
@@ -1312,7 +1312,7 @@ let synth_ident(tc: *TyContext, env: *Env, span: Span, name: string): Ty = {
     | Some(enum_name) -> return synth_variant_ctor(tc, name)
     | None -> { }
     }
-    record_error(tc, span, "undefined name `{name}`")
+    record_error(tc, span, `undefined name '{name}'`)
     ty.ty_error_()
 }
 
@@ -1342,42 +1342,42 @@ let synth_binary(tc: *TyContext, env: *Env, sp: Span, op: BinaryOp, l: Expr, r: 
     match op {
     | BOpEq | BOpNe -> {
         if !ty.ty_assignable(lt, rt) && !ty.ty_assignable(rt, lt) {
-            record_error(tc, sp, "operands of `==` / `!=` have incompatible types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}")
+            record_error(tc, sp, `operands of '==' / '!=' have incompatible types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}`)
         }
         ty.ty_bool_()
     }
     | BOpLt | BOpGt | BOpLe | BOpGe -> {
         if !ty.ty_is_numeric(lt) || !ty.ty_is_numeric(rt) {
-            record_error(tc, sp, "ordering comparison requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            record_error(tc, sp, `ordering comparison requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}`)
         }
         ty.ty_bool_()
     }
     | BOpAnd | BOpOr -> {
         if !ty.ty_is_bool(lt) || !ty.ty_is_bool(rt) {
-            record_error(tc, sp, "logical operator requires bool operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            record_error(tc, sp, `logical operator requires bool operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}`)
         }
         ty.ty_bool_()
     }
     | BOpAdd | BOpSub | BOpMul | BOpDiv | BOpMod -> {
         if !ty.ty_is_numeric(lt) || !ty.ty_is_numeric(rt) {
-            record_error(tc, sp, "arithmetic operator requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            record_error(tc, sp, `arithmetic operator requires numeric operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}`)
             return ty.ty_error_()
         }
         if !ty.ty_assignable(lt, rt) && !ty.ty_assignable(rt, lt) {
-            record_error(tc, sp, "arithmetic operands have incompatible numeric types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}")
+            record_error(tc, sp, `arithmetic operands have incompatible numeric types: {ty.ty_show(lt)} vs {ty.ty_show(rt)}`)
         }
         lt
     }
     | BOpBitAnd | BOpBitOr | BOpBitXor | BOpShl | BOpShr -> {
         if !ty.ty_is_int(lt) || !ty.ty_is_int(rt) {
-            record_error(tc, sp, "bitwise / shift operator requires integer operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            record_error(tc, sp, `bitwise / shift operator requires integer operands, got {ty.ty_show(lt)} and {ty.ty_show(rt)}`)
             return ty.ty_error_()
         }
         lt
     }
     | BOpRange | BOpRangeInclusive -> {
         if !ty.ty_is_int(lt) || !ty.ty_is_int(rt) {
-            record_error(tc, sp, "range bounds must be integers, got {ty.ty_show(lt)} and {ty.ty_show(rt)}")
+            record_error(tc, sp, `range bounds must be integers, got {ty.ty_show(lt)} and {ty.ty_show(rt)}`)
         }
         lt
     }
@@ -1430,7 +1430,7 @@ let synth_block(tc: *TyContext, env: *Env, stmts: Vec<Stmt>, tail: Expr): Ty = {
 let synth_if(tc: *TyContext, env: *Env, sp: Span, c: Expr, t: Expr, f: Expr): Ty = {
     let ct = synth(tc, env, c)
     if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
-        record_error(tc, sp, "if condition must be bool, got {ty.ty_show(ct)}")
+        record_error(tc, sp, `if condition must be bool, got {ty.ty_show(ct)}`)
     }
     let tt = synth(tc, env, t)
     let ft = synth(tc, env, f)
@@ -1440,7 +1440,7 @@ let synth_if(tc: *TyContext, env: *Env, sp: Span, c: Expr, t: Expr, f: Expr): Ty
     // direction is assignable.
     if !ty.ty_is_nil(tt) && !ty.ty_is_nil(ft) {
         if !ty.ty_assignable(tt, ft) && !ty.ty_assignable(ft, tt) {
-            record_error(tc, sp, "if branches have incompatible types: then is {ty.ty_show(tt)}, else is {ty.ty_show(ft)}")
+            record_error(tc, sp, `if branches have incompatible types: then is {ty.ty_show(tt)}, else is {ty.ty_show(ft)}`)
         }
     }
     tt
@@ -1462,7 +1462,7 @@ let synth_match(tc: *TyContext, env: *Env, sp: Span, scrut: Expr, arms: Vec<Matc
             if !ty.ty_is_error(result) && !ty.ty_is_error(armt) {
                 if !ty.ty_is_nil(armt) && !ty.ty_is_nil(result) {
                     if !ty.ty_assignable(result, armt) && !ty.ty_assignable(armt, result) {
-                        record_error(tc, sp, "match arms have incompatible types: earlier arm is {ty.ty_show(result)}, this arm is {ty.ty_show(armt)}")
+                        record_error(tc, sp, `match arms have incompatible types: earlier arm is {ty.ty_show(result)}, this arm is {ty.ty_show(armt)}`)
                     }
                 }
             }
@@ -1498,7 +1498,7 @@ let check_match_exhaustiveness(tc: *TyContext, scrut: Expr, scrut_ty: Ty, arms: 
                     match map.get(&tc.variant_of, name) {
                     | Some(other_enum) -> {
                         if !strings.eq_raw(other_enum, enum_name) {
-                            record_error(tc, psp, "binding `{name}` shadows a variant of enum `{other_enum}`; this arm is a catch-all bind, not a variant match. Use `{other_enum}.{name}` or rename the binding")
+                            record_error(tc, psp, `binding '{name}' shadows a variant of enum '{other_enum}'; this arm is a catch-all bind, not a variant match. Use '{other_enum}.{name}' or rename the binding`)
                         }
                     }
                     | None -> { }
@@ -1675,7 +1675,7 @@ let bind_pattern(tc: *TyContext, env: *Env, pat: Pattern, scrut: Ty) = {
     | PatLitInt(sp, _) -> {
         let bad = !ty.ty_is_error(scrut) && !ty.ty_is_int(scrut) && !ty.ty_is_numeric(scrut)
         if bad {
-            record_error(tc, sp, "integer literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+            record_error(tc, sp, `integer literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}`)
         } else { }
     }
     | PatLitString(sp, _) -> {
@@ -1684,13 +1684,13 @@ let bind_pattern(tc: *TyContext, env: *Env, pat: Pattern, scrut: Ty) = {
         | _ -> true
         }
         if bad {
-            record_error(tc, sp, "string literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+            record_error(tc, sp, `string literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}`)
         } else { }
     }
     | PatLitBool(sp, _) -> {
         let bad = !ty.ty_is_error(scrut) && !ty.ty_is_bool(scrut)
         if bad {
-            record_error(tc, sp, "bool literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}")
+            record_error(tc, sp, `bool literal pattern cannot match scrutinee of type {ty.ty_show(scrut)}`)
         } else { }
     }
     | PatTuple(sp, _) -> {
@@ -1706,14 +1706,14 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, sp: Span, path: Vec<string>,
     let variant = path[len(path) - 1]
     match map.get(&tc.variant_of, variant) {
     | None -> {
-        record_error(tc, sp, "unknown variant `{variant}` in pattern")
+        record_error(tc, sp, `unknown variant '{variant}' in pattern`)
         return
     }
     | Some(declared_enum) -> {
         // Check the variant belongs to the scrutinee's enum.
         let scrut_enum = enum_name_of_ty(scrut)
         if !strings.eq_raw(scrut_enum, "") && !strings.eq_raw(scrut_enum, declared_enum) {
-            record_error(tc, sp, "variant `{declared_enum}::{variant}` cannot match scrutinee of enum `{scrut_enum}`")
+            record_error(tc, sp, `variant '{declared_enum}::{variant}' cannot match scrutinee of enum '{scrut_enum}'`)
             return
         }
         match map.get(&tc.enums, declared_enum) {
@@ -1728,7 +1728,7 @@ let bind_variant_pattern(tc: *TyContext, env: *Env, sp: Span, path: Vec<string>,
                 for v in variants {
                     if strings.eq_raw(v.name, variant) {
                         if len(sub_pats) != len(v.pos) {
-                            record_error(tc, sp, "variant `{variant}` takes {len(v.pos)} arguments but pattern provides {len(sub_pats)}")
+                            record_error(tc, sp, `variant '{variant}' takes {len(v.pos)} arguments but pattern provides {len(sub_pats)}`)
                         }
                         var i: i64 = 0
                         for pos_te in v.pos {
@@ -2084,7 +2084,7 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
                 let _ = unify(ret_pattern, expected, &subst_env)
             }
             if !ok {
-                record_error(tc, sp, "could not unify argument types with generic parameters of `{fn_name}`")
+                record_error(tc, sp, `could not unify argument types with generic parameters of '{fn_name}'`)
                 return ECall(sp, new_callee, type_args, new_args)
             }
             var inferred: Vec<TypeExpr> = vec.make()
@@ -2092,7 +2092,7 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
                 match map.get(&subst_env, tp) {
                 | Some(t) -> vec.push(&inferred, ty.ty_to_type_expr_at(t, sp))
                 | None    -> {
-                    record_error(tc, sp, "type parameter `{tp}` of `{fn_name}` is not constrained; add an explicit annotation")
+                    record_error(tc, sp, `type parameter '{tp}' of '{fn_name}' is not constrained; add an explicit annotation`)
                     vec.push(&inferred, ty.ty_to_type_expr_at(ty.ty_error_(), sp))
                 }
                 }
@@ -2189,7 +2189,7 @@ let check_fn_bodies(tc: *TyContext, f: File) = {
                 expr_has_return(body)
             if !skip {
                 if !ty.ty_assignable(declared_ret, body_ty) {
-                    record_error(tc, sp, "function body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(declared_ret)}")
+                    record_error(tc, sp, `function body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(declared_ret)}`)
                 }
             }
             clear_type_params(tc)

@@ -10,14 +10,14 @@ let main() = {
     buf[1] = 200
     buf[2] = 300
     buf[3] = 400
-    fmt.println("buf[0] = {buf[0]}")
-    fmt.println("buf[1] = {buf[1]}")
-    fmt.println("buf[2] = {buf[2]}")
-    fmt.println("buf[3] = {buf[3]}")
+    fmt.println(`buf[0] = {buf[0]}`)
+    fmt.println(`buf[1] = {buf[1]}`)
+    fmt.println(`buf[2] = {buf[2]}`)
+    fmt.println(`buf[3] = {buf[3]}`)
 
     let grown = qoz_realloc(buf as *void, 80) as *i32
     grown[4] = 500
     grown[5] = 600
-    fmt.println("grown[2] = {grown[2]}")
-    fmt.println("grown[5] = {grown[5]}")
+    fmt.println(`grown[2] = {grown[2]}`)
+    fmt.println(`grown[5] = {grown[5]}`)
 }
