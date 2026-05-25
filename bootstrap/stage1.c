@@ -4998,6 +4998,7 @@ bool qoz_emit_emit_qualified_variant_with_hint(qoz_Emitter* e, qoz_Expr* base, q
 void qoz_emit_emit_ident_with_hint(qoz_Emitter* e, qoz_string name, qoz_TypeExpr* hint);
 qoz_string qoz_emit_register_fn_thunk(qoz_Emitter* e, qoz_string fn_name, qoz_Vec__qoz_TypeExpr params, qoz_TypeExpr* ret);
 void qoz_emit_emit_call_with_hint(qoz_Emitter* e, qoz_Expr* callee, qoz_Vec__qoz_TypeExpr type_args, qoz_Vec__qoz_Expr args, qoz_TypeExpr* hint);
+qoz_Vec__qoz_TypeExpr qoz_emit_variant_payload_hints(qoz_Emitter* e, qoz_string enum_name, qoz_string variant, qoz_Vec__qoz_TypeExpr hint_args);
 qoz_Vec__qoz_TypeExpr qoz_emit_hint_args_for_enum(qoz_TypeExpr* hint, qoz_string enum_name);
 void qoz_emit_emit_record_lit_with_hint(qoz_Emitter* e, qoz_TypeExpr* te, qoz_Vec__qoz_RecordFieldLit fields, qoz_TypeExpr* hint);
 qoz_Vec__qoz_RecordFieldLit qoz_emit_expand_record_spread_fields(qoz_Emitter* e, qoz_TypeExpr* te, qoz_Vec__qoz_RecordFieldLit fields);
@@ -10433,21 +10434,32 @@ void qoz_emit_emit_call_with_hint(qoz_Emitter* e, qoz_Expr* callee, qoz_Vec__qoz
     {
         void* _qoz_sb_4722_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4722_25); qoz_interp_push_str(_qoz_sb_4722_25, QOZ_STR_LIT("qoz_make_")); qoz_interp_push_str(_qoz_sb_4722_25, mangled); qoz_interp_push_str(_qoz_sb_4722_25, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_4722_25, variant_name); qoz_interp_push_str(_qoz_sb_4722_25, QOZ_STR_LIT("(")); _qoz_bv_433 = qoz_interp_finish(_qoz_sb_4722_25);
     }
-    qoz_emit_push(e, _qoz_bv_433); int64_t i = 0; { qoz_Vec__qoz_Expr __col = args; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Expr* a = __col.data[__i]; (void)a; if (i > 0) { qoz_emit_push(e, QOZ_STR_LIT(", ")); } qoz_emit_emit_expr(e, a); i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(")")); return;} 
+    qoz_emit_push(e, _qoz_bv_433); qoz_Vec__qoz_TypeExpr payload_hints = qoz_emit_variant_payload_hints(e, enum_name, variant_name, hint_args); int64_t i = 0; { qoz_Vec__qoz_Expr __col = args; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Expr* a = __col.data[__i]; (void)a; if (i > 0) { qoz_emit_push(e, QOZ_STR_LIT(", ")); } if (i < (payload_hints.len)) { qoz_emit_emit_value_with_hint(e, a, payload_hints.data[i]); }  else { qoz_emit_emit_expr(e, a); } i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(")")); return;} 
     }
     0;  break; } case qoz_Option__qoz_string_None: { NULL;  break; } } 0; } qoz_emit_emit_call(e, callee, type_args, args); 
     return;
+}
+
+qoz_Vec__qoz_TypeExpr qoz_emit_variant_payload_hints(qoz_Emitter* e, qoz_string enum_name, qoz_string variant, qoz_Vec__qoz_TypeExpr hint_args) {
+    int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
+    qoz_frame_push("emit_variant_payload_hints");
+    qoz_gc_push_root(&e);
+    qoz_Vec__qoz_TypeExpr out = qoz_vec_make__qoz_TypeExpr(); qoz_Option__qoz_Decl* _qoz_ms_1 = qoz_map_get__qoz_string__qoz_Decl(&e->enum_decls, enum_name); qoz_Vec__qoz_TypeExpr _qoz_mv_1 = ((qoz_Vec__qoz_TypeExpr){0}); switch (_qoz_ms_1->tag) { case qoz_Option__qoz_Decl_None: { _qoz_mv_1 = (out);  break; } case qoz_Option__qoz_Decl_Some: { qoz_Decl* d = _qoz_ms_1->payload.Some.f0; qoz_Decl* _qoz_ms_2 = d; qoz_Vec__qoz_TypeExpr _qoz_mv_2 = ((qoz_Vec__qoz_TypeExpr){0}); switch (_qoz_ms_2->tag) { case qoz_Decl_DEnum: { qoz_Vec__qoz_string tparams = _qoz_ms_2->payload.DEnum.f2; qoz_Vec__qoz_VariantDecl variants = _qoz_ms_2->payload.DEnum.f3; qoz_Vec__qoz_TypeExpr _qoz_bv_434;
+    {
+        { qoz_Vec__qoz_VariantDecl __col = variants; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_VariantDecl v = __col.data[__i]; (void)v; if (qoz_strings_eq_raw(v.name, variant)) { { qoz_Vec__qoz_TypeExpr __col = v.pos; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_TypeExpr* pte = __col.data[__i]; (void)pte; if (((tparams.len) > 0) && ((hint_args.len) == (tparams.len))) { qoz_vec_push__qoz_TypeExpr(&out, qoz_emit_substitute_type(e, pte, tparams, hint_args)); }  else { qoz_vec_push__qoz_TypeExpr(&out, pte); } } }} } }_qoz_bv_434 = out;
+    }
+    _qoz_mv_2 = (_qoz_bv_434);  break; } default: { _qoz_mv_2 = (out);  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_Vec__qoz_TypeExpr qoz_emit_hint_args_for_enum(qoz_TypeExpr* hint, qoz_string enum_name) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("emit_hint_args_for_enum");
     qoz_gc_push_root(&hint);
-    qoz_TypeExpr* _qoz_ms_1 = hint; qoz_Vec__qoz_TypeExpr _qoz_mv_1 = ((qoz_Vec__qoz_TypeExpr){0}); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_Vec__qoz_TypeExpr _qoz_bv_434;
+    qoz_TypeExpr* _qoz_ms_1 = hint; qoz_Vec__qoz_TypeExpr _qoz_mv_1 = ((qoz_Vec__qoz_TypeExpr){0}); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_Vec__qoz_TypeExpr _qoz_bv_435;
     {
-        if ((path.len) >= 1) { qoz_string last = path.data[(path.len) - 1]; if (qoz_strings_eq_raw(last, enum_name)) { return args;} } _qoz_bv_434 = qoz_vec_make__qoz_TypeExpr();
+        if ((path.len) >= 1) { qoz_string last = path.data[(path.len) - 1]; if (qoz_strings_eq_raw(last, enum_name)) { return args;} } _qoz_bv_435 = qoz_vec_make__qoz_TypeExpr();
     }
-    _qoz_mv_1 = (_qoz_bv_434);  break; } default: { _qoz_mv_1 = (qoz_vec_make__qoz_TypeExpr());  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_435);  break; } default: { _qoz_mv_1 = (qoz_vec_make__qoz_TypeExpr());  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_record_lit_with_hint(qoz_Emitter* e, qoz_TypeExpr* te, qoz_Vec__qoz_RecordFieldLit fields, qoz_TypeExpr* hint) {
@@ -10456,15 +10468,15 @@ void qoz_emit_emit_record_lit_with_hint(qoz_Emitter* e, qoz_TypeExpr* te, qoz_Ve
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
     qoz_gc_push_root(&hint);
-    qoz_TypeExpr* effective = qoz_emit_pick_type_with_args(te, hint); qoz_gc_push_root(&effective); qoz_Vec__qoz_RecordFieldLit expanded = qoz_emit_expand_record_spread_fields(e, effective, fields); qoz_string ec = qoz_emit_c_type_for(e, effective); qoz_string _qoz_bv_435;
+    qoz_TypeExpr* effective = qoz_emit_pick_type_with_args(te, hint); qoz_gc_push_root(&effective); qoz_Vec__qoz_RecordFieldLit expanded = qoz_emit_expand_record_spread_fields(e, effective, fields); qoz_string ec = qoz_emit_c_type_for(e, effective); qoz_string _qoz_bv_436;
     {
-        void* _qoz_sb_4756_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4756_13); qoz_interp_push_str(_qoz_sb_4756_13, QOZ_STR_LIT("((")); qoz_interp_push_str(_qoz_sb_4756_13, ec); qoz_interp_push_str(_qoz_sb_4756_13, QOZ_STR_LIT("){ ")); _qoz_bv_435 = qoz_interp_finish(_qoz_sb_4756_13);
+        void* _qoz_sb_4797_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4797_13); qoz_interp_push_str(_qoz_sb_4797_13, QOZ_STR_LIT("((")); qoz_interp_push_str(_qoz_sb_4797_13, ec); qoz_interp_push_str(_qoz_sb_4797_13, QOZ_STR_LIT("){ ")); _qoz_bv_436 = qoz_interp_finish(_qoz_sb_4797_13);
     }
-    qoz_emit_push(e, _qoz_bv_435); int64_t i = 0; { qoz_Vec__qoz_RecordFieldLit __col = expanded; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_RecordFieldLit f = __col.data[__i]; (void)f; if (i > 0) { qoz_emit_push(e, QOZ_STR_LIT(", ")); } qoz_string fn = f.name; qoz_string _qoz_bv_436;
+    qoz_emit_push(e, _qoz_bv_436); int64_t i = 0; { qoz_Vec__qoz_RecordFieldLit __col = expanded; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_RecordFieldLit f = __col.data[__i]; (void)f; if (i > 0) { qoz_emit_push(e, QOZ_STR_LIT(", ")); } qoz_string fn = f.name; qoz_string _qoz_bv_437;
     {
-        void* _qoz_sb_4761_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4761_17); qoz_interp_push_str(_qoz_sb_4761_17, QOZ_STR_LIT(".")); qoz_interp_push_str(_qoz_sb_4761_17, fn); qoz_interp_push_str(_qoz_sb_4761_17, QOZ_STR_LIT(" = ")); _qoz_bv_436 = qoz_interp_finish(_qoz_sb_4761_17);
+        void* _qoz_sb_4802_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4802_17); qoz_interp_push_str(_qoz_sb_4802_17, QOZ_STR_LIT(".")); qoz_interp_push_str(_qoz_sb_4802_17, fn); qoz_interp_push_str(_qoz_sb_4802_17, QOZ_STR_LIT(" = ")); _qoz_bv_437 = qoz_interp_finish(_qoz_sb_4802_17);
     }
-    qoz_emit_push(e, _qoz_bv_436); qoz_TypeExpr* field_hint = qoz_emit_field_type_hint(e, effective, f.name); qoz_gc_push_root(&field_hint); qoz_emit_emit_value_with_hint(e, f.value, field_hint); i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(" })")); 
+    qoz_emit_push(e, _qoz_bv_437); qoz_TypeExpr* field_hint = qoz_emit_field_type_hint(e, effective, f.name); qoz_gc_push_root(&field_hint); qoz_emit_emit_value_with_hint(e, f.value, field_hint); i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(" })")); 
     return;
 }
 
@@ -10502,15 +10514,15 @@ qoz_TypeExpr* qoz_emit_field_type_hint(qoz_Emitter* e, qoz_TypeExpr* te, qoz_str
     qoz_frame_push("emit_field_type_hint");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_437;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_438;
     {
-        if ((path.len) < 1) { return te;} qoz_string name = qoz_emit_type_lookup_key(e, path); if (!qoz_map_contains__qoz_string__qoz_Decl(&e->generic_decls, name)) { return te;} qoz_Option__qoz_Decl* _qoz_ms_2 = qoz_map_get__qoz_string__qoz_Decl(&e->generic_decls, name); qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_Option__qoz_Decl_Some: { qoz_Decl* decl = _qoz_ms_2->payload.Some.f0; qoz_Decl* _qoz_ms_3 = decl; qoz_TypeExpr* _qoz_mv_3 = NULL; switch (_qoz_ms_3->tag) { case qoz_Decl_DStruct: { qoz_Vec__qoz_string params = _qoz_ms_3->payload.DStruct.f2; qoz_Vec__qoz_StructField fields = _qoz_ms_3->payload.DStruct.f3; qoz_TypeExpr* _qoz_bv_438;
+        if ((path.len) < 1) { return te;} qoz_string name = qoz_emit_type_lookup_key(e, path); if (!qoz_map_contains__qoz_string__qoz_Decl(&e->generic_decls, name)) { return te;} qoz_Option__qoz_Decl* _qoz_ms_2 = qoz_map_get__qoz_string__qoz_Decl(&e->generic_decls, name); qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_Option__qoz_Decl_Some: { qoz_Decl* decl = _qoz_ms_2->payload.Some.f0; qoz_Decl* _qoz_ms_3 = decl; qoz_TypeExpr* _qoz_mv_3 = NULL; switch (_qoz_ms_3->tag) { case qoz_Decl_DStruct: { qoz_Vec__qoz_string params = _qoz_ms_3->payload.DStruct.f2; qoz_Vec__qoz_StructField fields = _qoz_ms_3->payload.DStruct.f3; qoz_TypeExpr* _qoz_bv_439;
     {
-        { qoz_Vec__qoz_StructField __col = fields; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_StructField sf = __col.data[__i]; (void)sf; if (qoz_strings_eq_raw(sf.name, field_name)) { if ((args.len) == (params.len)) { return qoz_emit_substitute_type(e, sf.ty, params, args);} return sf.ty;} } }_qoz_bv_438 = te;
+        { qoz_Vec__qoz_StructField __col = fields; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_StructField sf = __col.data[__i]; (void)sf; if (qoz_strings_eq_raw(sf.name, field_name)) { if ((args.len) == (params.len)) { return qoz_emit_substitute_type(e, sf.ty, params, args);} return sf.ty;} } }_qoz_bv_439 = te;
     }
-    _qoz_mv_3 = (_qoz_bv_438);  break; } default: { _qoz_mv_3 = (te);  break; } } _qoz_mv_2 = (_qoz_mv_3);  break; } case qoz_Option__qoz_Decl_None: { _qoz_mv_2 = (te);  break; } } _qoz_bv_437 = _qoz_mv_2;
+    _qoz_mv_3 = (_qoz_bv_439);  break; } default: { _qoz_mv_3 = (te);  break; } } _qoz_mv_2 = (_qoz_mv_3);  break; } case qoz_Option__qoz_Decl_None: { _qoz_mv_2 = (te);  break; } } _qoz_bv_438 = _qoz_mv_2;
     }
-    _qoz_mv_1 = (_qoz_bv_437);  break; } default: { _qoz_mv_1 = (te);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_438);  break; } default: { _qoz_mv_1 = (te);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_TypeExpr* qoz_emit_pick_type_with_args(qoz_TypeExpr* te, qoz_TypeExpr* hint) {
@@ -10518,15 +10530,15 @@ qoz_TypeExpr* qoz_emit_pick_type_with_args(qoz_TypeExpr* te, qoz_TypeExpr* hint)
     qoz_frame_push("emit_pick_type_with_args");
     qoz_gc_push_root(&te);
     qoz_gc_push_root(&hint);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string te_path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr te_args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_439;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string te_path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr te_args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_440;
     {
-        if ((te_args.len) > 0) { return te;} qoz_TypeExpr* _qoz_ms_2 = hint; qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string h_path = _qoz_ms_2->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr h_args = _qoz_ms_2->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_440;
+        if ((te_args.len) > 0) { return te;} qoz_TypeExpr* _qoz_ms_2 = hint; qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string h_path = _qoz_ms_2->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr h_args = _qoz_ms_2->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_441;
     {
-        if ((h_args.len) == 0) { return te;} if ((((h_path.len) == 1) && ((te_path.len) == 1)) && qoz_strings_eq_raw(h_path.data[0], te_path.data[0])) { return hint;} _qoz_bv_440 = te;
+        if ((h_args.len) == 0) { return te;} if ((((h_path.len) == 1) && ((te_path.len) == 1)) && qoz_strings_eq_raw(h_path.data[0], te_path.data[0])) { return hint;} _qoz_bv_441 = te;
     }
-    _qoz_mv_2 = (_qoz_bv_440);  break; } default: { _qoz_mv_2 = (te);  break; } } _qoz_bv_439 = _qoz_mv_2;
+    _qoz_mv_2 = (_qoz_bv_441);  break; } default: { _qoz_mv_2 = (te);  break; } } _qoz_bv_440 = _qoz_mv_2;
     }
-    _qoz_mv_1 = (_qoz_bv_439);  break; } default: { _qoz_mv_1 = (te);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_440);  break; } default: { _qoz_mv_1 = (te);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_for_loop_one(qoz_Emitter* e, qoz_string binding, qoz_string binding2, qoz_Expr* iter, qoz_Expr* body) {
@@ -10535,19 +10547,19 @@ void qoz_emit_emit_for_loop_one(qoz_Emitter* e, qoz_string binding, qoz_string b
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&iter);
     qoz_gc_push_root(&body);
-    qoz_Expr* _qoz_ms_1 = iter; switch (_qoz_ms_1->tag) { case qoz_Expr_EBinary: { qoz_BinaryOp* op = _qoz_ms_1->payload.EBinary.f1; qoz_Expr* lo = _qoz_ms_1->payload.EBinary.f2; qoz_Expr* hi = _qoz_ms_1->payload.EBinary.f3; if (qoz_emit_is_range_op(op)) { qoz_string _qoz_bv_441;
+    qoz_Expr* _qoz_ms_1 = iter; switch (_qoz_ms_1->tag) { case qoz_Expr_EBinary: { qoz_BinaryOp* op = _qoz_ms_1->payload.EBinary.f1; qoz_Expr* lo = _qoz_ms_1->payload.EBinary.f2; qoz_Expr* hi = _qoz_ms_1->payload.EBinary.f3; if (qoz_emit_is_range_op(op)) { qoz_string _qoz_bv_442;
     {
-        void* _qoz_sb_4922_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4922_21); qoz_interp_push_str(_qoz_sb_4922_21, QOZ_STR_LIT("for (int64_t ")); qoz_interp_push_str(_qoz_sb_4922_21, binding); qoz_interp_push_str(_qoz_sb_4922_21, QOZ_STR_LIT(" = ")); _qoz_bv_441 = qoz_interp_finish(_qoz_sb_4922_21);
+        void* _qoz_sb_4963_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4963_21); qoz_interp_push_str(_qoz_sb_4963_21, QOZ_STR_LIT("for (int64_t ")); qoz_interp_push_str(_qoz_sb_4963_21, binding); qoz_interp_push_str(_qoz_sb_4963_21, QOZ_STR_LIT(" = ")); _qoz_bv_442 = qoz_interp_finish(_qoz_sb_4963_21);
     }
-    qoz_emit_push(e, _qoz_bv_441); qoz_emit_emit_expr(e, lo); qoz_string cmp = qoz_emit_range_cmp_op(op); qoz_string _qoz_bv_442;
+    qoz_emit_push(e, _qoz_bv_442); qoz_emit_emit_expr(e, lo); qoz_string cmp = qoz_emit_range_cmp_op(op); qoz_string _qoz_bv_443;
     {
-        void* _qoz_sb_4925_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4925_21); qoz_interp_push_str(_qoz_sb_4925_21, QOZ_STR_LIT("; ")); qoz_interp_push_str(_qoz_sb_4925_21, binding); qoz_interp_push_str(_qoz_sb_4925_21, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4925_21, cmp); qoz_interp_push_str(_qoz_sb_4925_21, QOZ_STR_LIT(" ")); _qoz_bv_442 = qoz_interp_finish(_qoz_sb_4925_21);
+        void* _qoz_sb_4966_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4966_21); qoz_interp_push_str(_qoz_sb_4966_21, QOZ_STR_LIT("; ")); qoz_interp_push_str(_qoz_sb_4966_21, binding); qoz_interp_push_str(_qoz_sb_4966_21, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4966_21, cmp); qoz_interp_push_str(_qoz_sb_4966_21, QOZ_STR_LIT(" ")); _qoz_bv_443 = qoz_interp_finish(_qoz_sb_4966_21);
     }
-    qoz_emit_push(e, _qoz_bv_442); qoz_emit_emit_expr(e, hi); qoz_string _qoz_bv_443;
+    qoz_emit_push(e, _qoz_bv_443); qoz_emit_emit_expr(e, hi); qoz_string _qoz_bv_444;
     {
-        void* _qoz_sb_4927_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4927_21); qoz_interp_push_str(_qoz_sb_4927_21, QOZ_STR_LIT("; ")); qoz_interp_push_str(_qoz_sb_4927_21, binding); qoz_interp_push_str(_qoz_sb_4927_21, QOZ_STR_LIT("++) ")); _qoz_bv_443 = qoz_interp_finish(_qoz_sb_4927_21);
+        void* _qoz_sb_4968_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4968_21); qoz_interp_push_str(_qoz_sb_4968_21, QOZ_STR_LIT("; ")); qoz_interp_push_str(_qoz_sb_4968_21, binding); qoz_interp_push_str(_qoz_sb_4968_21, QOZ_STR_LIT("++) ")); _qoz_bv_444 = qoz_interp_finish(_qoz_sb_4968_21);
     }
-    qoz_emit_push(e, _qoz_bv_443); qoz_emit_emit_branch_as_statement(e, body); return;} 0;  break; } default: { NULL;  break; } } 0; if (qoz_strings_eq_raw(binding2, QOZ_STR_LIT(""))) { qoz_emit_emit_vec_for(e, binding, iter, body); }  else { qoz_emit_emit_map_for(e, binding, binding2, iter, body); } 
+    qoz_emit_push(e, _qoz_bv_444); qoz_emit_emit_branch_as_statement(e, body); return;} 0;  break; } default: { NULL;  break; } } 0; if (qoz_strings_eq_raw(binding2, QOZ_STR_LIT(""))) { qoz_emit_emit_vec_for(e, binding, iter, body); }  else { qoz_emit_emit_map_for(e, binding, binding2, iter, body); } 
     return;
 }
 
@@ -10557,15 +10569,15 @@ void qoz_emit_emit_vec_for(qoz_Emitter* e, qoz_string binding, qoz_Expr* iter, q
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&iter);
     qoz_gc_push_root(&body);
-    qoz_TypeExpr* elem_te = qoz_emit_vec_element_typeexpr(e, iter); qoz_gc_push_root(&elem_te); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, binding, elem_te); qoz_string col_ct = qoz_emit_c_type_for(e, qoz_emit_infer_base_typeexpr(e, iter)); qoz_string elem_ct = qoz_emit_c_type_for(e, elem_te); qoz_string _qoz_bv_444;
+    qoz_TypeExpr* elem_te = qoz_emit_vec_element_typeexpr(e, iter); qoz_gc_push_root(&elem_te); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, binding, elem_te); qoz_string col_ct = qoz_emit_c_type_for(e, qoz_emit_infer_base_typeexpr(e, iter)); qoz_string elem_ct = qoz_emit_c_type_for(e, elem_te); qoz_string _qoz_bv_445;
     {
-        void* _qoz_sb_4947_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4947_13); qoz_interp_push_str(_qoz_sb_4947_13, QOZ_STR_LIT("{ ")); qoz_interp_push_str(_qoz_sb_4947_13, col_ct); qoz_interp_push_str(_qoz_sb_4947_13, QOZ_STR_LIT(" __col = ")); _qoz_bv_444 = qoz_interp_finish(_qoz_sb_4947_13);
+        void* _qoz_sb_4988_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4988_13); qoz_interp_push_str(_qoz_sb_4988_13, QOZ_STR_LIT("{ ")); qoz_interp_push_str(_qoz_sb_4988_13, col_ct); qoz_interp_push_str(_qoz_sb_4988_13, QOZ_STR_LIT(" __col = ")); _qoz_bv_445 = qoz_interp_finish(_qoz_sb_4988_13);
     }
-    qoz_emit_push(e, _qoz_bv_444); qoz_emit_emit_expr(e, iter); qoz_string _qoz_bv_445;
+    qoz_emit_push(e, _qoz_bv_445); qoz_emit_emit_expr(e, iter); qoz_string _qoz_bv_446;
     {
-        void* _qoz_sb_4949_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4949_13); qoz_interp_push_str(_qoz_sb_4949_13, QOZ_STR_LIT("; for (int64_t __i = 0; __i < __col.len; __i++) { ")); qoz_interp_push_str(_qoz_sb_4949_13, elem_ct); qoz_interp_push_str(_qoz_sb_4949_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4949_13, binding); qoz_interp_push_str(_qoz_sb_4949_13, QOZ_STR_LIT(" = __col.data[__i]; (void)")); qoz_interp_push_str(_qoz_sb_4949_13, binding); qoz_interp_push_str(_qoz_sb_4949_13, QOZ_STR_LIT("; ")); _qoz_bv_445 = qoz_interp_finish(_qoz_sb_4949_13);
+        void* _qoz_sb_4990_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4990_13); qoz_interp_push_str(_qoz_sb_4990_13, QOZ_STR_LIT("; for (int64_t __i = 0; __i < __col.len; __i++) { ")); qoz_interp_push_str(_qoz_sb_4990_13, elem_ct); qoz_interp_push_str(_qoz_sb_4990_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4990_13, binding); qoz_interp_push_str(_qoz_sb_4990_13, QOZ_STR_LIT(" = __col.data[__i]; (void)")); qoz_interp_push_str(_qoz_sb_4990_13, binding); qoz_interp_push_str(_qoz_sb_4990_13, QOZ_STR_LIT("; ")); _qoz_bv_446 = qoz_interp_finish(_qoz_sb_4990_13);
     }
-    qoz_emit_push(e, _qoz_bv_445); qoz_emit_emit_branch_body_inline(e, body); qoz_emit_push(e, QOZ_STR_LIT("} }")); 
+    qoz_emit_push(e, _qoz_bv_446); qoz_emit_emit_branch_body_inline(e, body); qoz_emit_push(e, QOZ_STR_LIT("} }")); 
     return;
 }
 
@@ -10574,11 +10586,11 @@ qoz_TypeExpr* qoz_emit_vec_element_typeexpr(qoz_Emitter* e, qoz_Expr* iter) {
     qoz_frame_push("emit_vec_element_typeexpr");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&iter);
-    qoz_TypeExpr* te = qoz_emit_infer_base_typeexpr(e, iter); qoz_gc_push_root(&te); qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_446;
+    qoz_TypeExpr* te = qoz_emit_infer_base_typeexpr(e, iter); qoz_gc_push_root(&te); qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_447;
     {
-        if ((((args.len) >= 1) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Vec"))) { return args.data[0];} _qoz_bv_446 = qoz_make_TypeExpr_TEUnit(sp);
+        if ((((args.len) >= 1) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Vec"))) { return args.data[0];} _qoz_bv_447 = qoz_make_TypeExpr_TEUnit(sp);
     }
-    _qoz_mv_1 = (_qoz_bv_446);  break; } case qoz_TypeExpr_TEPtr: { qoz_TypeExpr* inner = _qoz_ms_1->payload.TEPtr.f1; _qoz_mv_1 = (inner);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(qoz_emit_span_of_expr(iter)));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_447);  break; } case qoz_TypeExpr_TEPtr: { qoz_TypeExpr* inner = _qoz_ms_1->payload.TEPtr.f1; _qoz_mv_1 = (inner);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(qoz_emit_span_of_expr(iter)));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_map_for(qoz_Emitter* e, qoz_string binding, qoz_string binding2, qoz_Expr* iter, qoz_Expr* body) {
@@ -10587,15 +10599,15 @@ void qoz_emit_emit_map_for(qoz_Emitter* e, qoz_string binding, qoz_string bindin
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&iter);
     qoz_gc_push_root(&body);
-    qoz_TypeExpr* iter_te = qoz_emit_infer_base_typeexpr(e, iter); qoz_gc_push_root(&iter_te); qoz_string col_ct = qoz_emit_c_type_for(e, iter_te); qoz_TypeExpr* key_te = qoz_emit_map_key_typeexpr(e, iter_te); qoz_gc_push_root(&key_te); qoz_TypeExpr* val_te = qoz_emit_map_val_typeexpr(e, iter_te); qoz_gc_push_root(&val_te); qoz_string key_ct = qoz_emit_c_type_for(e, key_te); qoz_string val_ct = qoz_emit_c_type_for(e, val_te); qoz_string _qoz_bv_447;
+    qoz_TypeExpr* iter_te = qoz_emit_infer_base_typeexpr(e, iter); qoz_gc_push_root(&iter_te); qoz_string col_ct = qoz_emit_c_type_for(e, iter_te); qoz_TypeExpr* key_te = qoz_emit_map_key_typeexpr(e, iter_te); qoz_gc_push_root(&key_te); qoz_TypeExpr* val_te = qoz_emit_map_val_typeexpr(e, iter_te); qoz_gc_push_root(&val_te); qoz_string key_ct = qoz_emit_c_type_for(e, key_te); qoz_string val_ct = qoz_emit_c_type_for(e, val_te); qoz_string _qoz_bv_448;
     {
-        void* _qoz_sb_4973_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4973_13); qoz_interp_push_str(_qoz_sb_4973_13, QOZ_STR_LIT("{ ")); qoz_interp_push_str(_qoz_sb_4973_13, col_ct); qoz_interp_push_str(_qoz_sb_4973_13, QOZ_STR_LIT(" __col = ")); _qoz_bv_447 = qoz_interp_finish(_qoz_sb_4973_13);
+        void* _qoz_sb_5014_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5014_13); qoz_interp_push_str(_qoz_sb_5014_13, QOZ_STR_LIT("{ ")); qoz_interp_push_str(_qoz_sb_5014_13, col_ct); qoz_interp_push_str(_qoz_sb_5014_13, QOZ_STR_LIT(" __col = ")); _qoz_bv_448 = qoz_interp_finish(_qoz_sb_5014_13);
     }
-    qoz_emit_push(e, _qoz_bv_447); qoz_emit_emit_expr(e, iter); qoz_string _qoz_bv_448;
+    qoz_emit_push(e, _qoz_bv_448); qoz_emit_emit_expr(e, iter); qoz_string _qoz_bv_449;
     {
-        void* _qoz_sb_4975_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_4975_13); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT("; for (int64_t __i = 0; __i < __col.cap; __i++) { if (!__col.slots[__i].occupied || __col.slots[__i].deleted) continue; ")); qoz_interp_push_str(_qoz_sb_4975_13, key_ct); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4975_13, binding); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT(" = __col.slots[__i].key; ")); qoz_interp_push_str(_qoz_sb_4975_13, val_ct); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_4975_13, binding2); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT(" = __col.slots[__i].value; (void)")); qoz_interp_push_str(_qoz_sb_4975_13, binding); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_4975_13, binding2); qoz_interp_push_str(_qoz_sb_4975_13, QOZ_STR_LIT("; ")); _qoz_bv_448 = qoz_interp_finish(_qoz_sb_4975_13);
+        void* _qoz_sb_5016_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5016_13); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT("; for (int64_t __i = 0; __i < __col.cap; __i++) { if (!__col.slots[__i].occupied || __col.slots[__i].deleted) continue; ")); qoz_interp_push_str(_qoz_sb_5016_13, key_ct); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5016_13, binding); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT(" = __col.slots[__i].key; ")); qoz_interp_push_str(_qoz_sb_5016_13, val_ct); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5016_13, binding2); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT(" = __col.slots[__i].value; (void)")); qoz_interp_push_str(_qoz_sb_5016_13, binding); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5016_13, binding2); qoz_interp_push_str(_qoz_sb_5016_13, QOZ_STR_LIT("; ")); _qoz_bv_449 = qoz_interp_finish(_qoz_sb_5016_13);
     }
-    qoz_emit_push(e, _qoz_bv_448); qoz_emit_emit_branch_body_inline(e, body); qoz_emit_push(e, QOZ_STR_LIT("} }")); 
+    qoz_emit_push(e, _qoz_bv_449); qoz_emit_emit_branch_body_inline(e, body); qoz_emit_push(e, QOZ_STR_LIT("} }")); 
     return;
 }
 
@@ -10604,11 +10616,11 @@ qoz_TypeExpr* qoz_emit_map_key_typeexpr(qoz_Emitter* e, qoz_TypeExpr* te) {
     qoz_frame_push("emit_map_key_typeexpr");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_449;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_450;
     {
-        if ((((args.len) >= 2) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Map"))) { return args.data[0];} _qoz_bv_449 = qoz_make_TypeExpr_TEUnit(sp);
+        if ((((args.len) >= 2) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Map"))) { return args.data[0];} _qoz_bv_450 = qoz_make_TypeExpr_TEUnit(sp);
     }
-    _qoz_mv_1 = (_qoz_bv_449);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 })));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_450);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 })));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_TypeExpr* qoz_emit_map_val_typeexpr(qoz_Emitter* e, qoz_TypeExpr* te) {
@@ -10616,11 +10628,11 @@ qoz_TypeExpr* qoz_emit_map_val_typeexpr(qoz_Emitter* e, qoz_TypeExpr* te) {
     qoz_frame_push("emit_map_val_typeexpr");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_450;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_TypeExpr* _qoz_bv_451;
     {
-        if ((((args.len) >= 2) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Map"))) { return args.data[1];} _qoz_bv_450 = qoz_make_TypeExpr_TEUnit(sp);
+        if ((((args.len) >= 2) && ((path.len) >= 1)) && qoz_strings_eq_raw(path.data[(path.len) - 1], QOZ_STR_LIT("Map"))) { return args.data[1];} _qoz_bv_451 = qoz_make_TypeExpr_TEUnit(sp);
     }
-    _qoz_mv_1 = (_qoz_bv_450);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 })));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_451);  break; } default: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 })));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_branch_body_inline(qoz_Emitter* e, qoz_Expr* body) {
@@ -10672,27 +10684,27 @@ void qoz_emit_emit_match_as_expr(qoz_Emitter* e, qoz_Span span, qoz_Expr* scrut,
     qoz_frame_push("emit_emit_match_as_expr");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&scrut);
-    if (qoz_emit_any_arm_has_guard(arms)) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} if (qoz_emit_any_arm_is_literal(arms)) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} qoz_string bare_enum = qoz_emit_find_enum_from_arms(e, arms); if (qoz_strings_eq_raw(bare_enum, QOZ_STR_LIT(""))) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} qoz_string enum_name = qoz_emit_enum_lookup_name(e, scrut, bare_enum); e->match_counter = e->match_counter + 1; qoz_string _qoz_bv_451;
+    if (qoz_emit_any_arm_has_guard(arms)) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} if (qoz_emit_any_arm_is_literal(arms)) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} qoz_string bare_enum = qoz_emit_find_enum_from_arms(e, arms); if (qoz_strings_eq_raw(bare_enum, QOZ_STR_LIT(""))) { qoz_emit_emit_match_as_if_chain(e, span, scrut, arms); return;} qoz_string enum_name = qoz_emit_enum_lookup_name(e, scrut, bare_enum); e->match_counter = e->match_counter + 1; qoz_string _qoz_bv_452;
     {
-        void* _qoz_sb_5086_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5086_21); qoz_interp_push_str(_qoz_sb_5086_21, QOZ_STR_LIT("_qoz_ms_")); qoz_interp_push_i64(_qoz_sb_5086_21, e->match_counter); _qoz_bv_451 = qoz_interp_finish(_qoz_sb_5086_21);
+        void* _qoz_sb_5127_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5127_21); qoz_interp_push_str(_qoz_sb_5127_21, QOZ_STR_LIT("_qoz_ms_")); qoz_interp_push_i64(_qoz_sb_5127_21, e->match_counter); _qoz_bv_452 = qoz_interp_finish(_qoz_sb_5127_21);
     }
-    qoz_string scrut_tmp = _qoz_bv_451; qoz_string _qoz_bv_452;
+    qoz_string scrut_tmp = _qoz_bv_452; qoz_string _qoz_bv_453;
     {
-        void* _qoz_sb_5087_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5087_21); qoz_interp_push_str(_qoz_sb_5087_21, QOZ_STR_LIT("_qoz_mv_")); qoz_interp_push_i64(_qoz_sb_5087_21, e->match_counter); _qoz_bv_452 = qoz_interp_finish(_qoz_sb_5087_21);
+        void* _qoz_sb_5128_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5128_21); qoz_interp_push_str(_qoz_sb_5128_21, QOZ_STR_LIT("_qoz_mv_")); qoz_interp_push_i64(_qoz_sb_5128_21, e->match_counter); _qoz_bv_453 = qoz_interp_finish(_qoz_sb_5128_21);
     }
-    qoz_string res_tmp = _qoz_bv_452; qoz_string res_ctype = qoz_emit_match_result_ctype_with_hint(e, enum_name, arms); bool is_void = qoz_strings_eq_raw(res_ctype, QOZ_STR_LIT("void")); int64_t start = qoz_strings_sb_len(&e->out); qoz_string _qoz_bv_453;
+    qoz_string res_tmp = _qoz_bv_453; qoz_string res_ctype = qoz_emit_match_result_ctype_with_hint(e, enum_name, arms); bool is_void = qoz_strings_eq_raw(res_ctype, QOZ_STR_LIT("void")); int64_t start = qoz_strings_sb_len(&e->out); qoz_string _qoz_bv_454;
     {
-        void* _qoz_sb_5096_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5096_13); qoz_interp_push_str(_qoz_sb_5096_13, QOZ_STR_LIT("qoz_")); qoz_interp_push_str(_qoz_sb_5096_13, enum_name); qoz_interp_push_str(_qoz_sb_5096_13, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5096_13, scrut_tmp); qoz_interp_push_str(_qoz_sb_5096_13, QOZ_STR_LIT(" = ")); _qoz_bv_453 = qoz_interp_finish(_qoz_sb_5096_13);
+        void* _qoz_sb_5137_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5137_13); qoz_interp_push_str(_qoz_sb_5137_13, QOZ_STR_LIT("qoz_")); qoz_interp_push_str(_qoz_sb_5137_13, enum_name); qoz_interp_push_str(_qoz_sb_5137_13, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5137_13, scrut_tmp); qoz_interp_push_str(_qoz_sb_5137_13, QOZ_STR_LIT(" = ")); _qoz_bv_454 = qoz_interp_finish(_qoz_sb_5137_13);
     }
-    qoz_emit_push(e, _qoz_bv_453); qoz_emit_emit_expr(e, scrut); qoz_emit_push(e, QOZ_STR_LIT("; ")); if (!is_void) { qoz_string dv = qoz_emit_default_value_for(res_ctype); qoz_string _qoz_bv_454;
+    qoz_emit_push(e, _qoz_bv_454); qoz_emit_emit_expr(e, scrut); qoz_emit_push(e, QOZ_STR_LIT("; ")); if (!is_void) { qoz_string dv = qoz_emit_default_value_for(res_ctype); qoz_string _qoz_bv_455;
     {
-        void* _qoz_sb_5101_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5101_17); qoz_interp_push_str(_qoz_sb_5101_17, res_ctype); qoz_interp_push_str(_qoz_sb_5101_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5101_17, res_tmp); qoz_interp_push_str(_qoz_sb_5101_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5101_17, dv); qoz_interp_push_str(_qoz_sb_5101_17, QOZ_STR_LIT("; ")); _qoz_bv_454 = qoz_interp_finish(_qoz_sb_5101_17);
+        void* _qoz_sb_5142_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5142_17); qoz_interp_push_str(_qoz_sb_5142_17, res_ctype); qoz_interp_push_str(_qoz_sb_5142_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5142_17, res_tmp); qoz_interp_push_str(_qoz_sb_5142_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5142_17, dv); qoz_interp_push_str(_qoz_sb_5142_17, QOZ_STR_LIT("; ")); _qoz_bv_455 = qoz_interp_finish(_qoz_sb_5142_17);
     }
-    qoz_emit_push(e, _qoz_bv_454); } qoz_string _qoz_bv_455;
+    qoz_emit_push(e, _qoz_bv_455); } qoz_string _qoz_bv_456;
     {
-        void* _qoz_sb_5103_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5103_13); qoz_interp_push_str(_qoz_sb_5103_13, QOZ_STR_LIT("switch (")); qoz_interp_push_str(_qoz_sb_5103_13, scrut_tmp); qoz_interp_push_str(_qoz_sb_5103_13, QOZ_STR_LIT("->tag) { ")); _qoz_bv_455 = qoz_interp_finish(_qoz_sb_5103_13);
+        void* _qoz_sb_5144_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5144_13); qoz_interp_push_str(_qoz_sb_5144_13, QOZ_STR_LIT("switch (")); qoz_interp_push_str(_qoz_sb_5144_13, scrut_tmp); qoz_interp_push_str(_qoz_sb_5144_13, QOZ_STR_LIT("->tag) { ")); _qoz_bv_456 = qoz_interp_finish(_qoz_sb_5144_13);
     }
-    qoz_emit_push(e, _qoz_bv_455); { qoz_Vec__qoz_MatchArm __col = arms; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_MatchArm arm = __col.data[__i]; (void)arm; qoz_emit_emit_match_arm_with_kind(e, enum_name, scrut_tmp, res_tmp, arm, is_void); } }qoz_emit_push(e, QOZ_STR_LIT("} ")); qoz_emit_hoist_to_prologue(e, start); if (is_void) { qoz_emit_push(e, QOZ_STR_LIT("0")); }  else { qoz_emit_push(e, res_tmp); } 
+    qoz_emit_push(e, _qoz_bv_456); { qoz_Vec__qoz_MatchArm __col = arms; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_MatchArm arm = __col.data[__i]; (void)arm; qoz_emit_emit_match_arm_with_kind(e, enum_name, scrut_tmp, res_tmp, arm, is_void); } }qoz_emit_push(e, QOZ_STR_LIT("} ")); qoz_emit_hoist_to_prologue(e, start); if (is_void) { qoz_emit_push(e, QOZ_STR_LIT("0")); }  else { qoz_emit_push(e, res_tmp); } 
     return;
 }
 
@@ -10701,11 +10713,11 @@ qoz_string qoz_emit_enum_name_of_te(qoz_Emitter* e, qoz_TypeExpr* te) {
     qoz_frame_push("emit_enum_name_of_te");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_string _qoz_bv_456;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_string _qoz_bv_457;
     {
-        if ((path.len) >= 1) { qoz_string last = path.data[(path.len) - 1]; if ((args.len) > 0) { return qoz_emit_mangle_inst(e, last, args);} return last;} _qoz_bv_456 = QOZ_STR_LIT("");
+        if ((path.len) >= 1) { qoz_string last = path.data[(path.len) - 1]; if ((args.len) > 0) { return qoz_emit_mangle_inst(e, last, args);} return last;} _qoz_bv_457 = QOZ_STR_LIT("");
     }
-    _qoz_mv_1 = (_qoz_bv_456);  break; } default: { _qoz_mv_1 = (QOZ_STR_LIT(""));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_457);  break; } default: { _qoz_mv_1 = (QOZ_STR_LIT(""));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_pat_match_cond(qoz_Emitter* e, qoz_Pattern* p, qoz_string value_expr, qoz_TypeExpr* value_te) {
@@ -10715,40 +10727,40 @@ void qoz_emit_emit_pat_match_cond(qoz_Emitter* e, qoz_Pattern* p, qoz_string val
     qoz_gc_push_root(&p);
     qoz_gc_push_root(&value_te);
     qoz_Pattern* _qoz_ms_1 = p; switch (_qoz_ms_1->tag) { case qoz_Pattern_PatWild: { NULL;  break; } case qoz_Pattern_PatBind: { NULL;  break; } case qoz_Pattern_PatLitInt: { qoz_string text = _qoz_ms_1->payload.PatLitInt.f1; {
-        qoz_string tn = qoz_emit_strip_numeric_underscores(text); qoz_string _qoz_bv_457;
+        qoz_string tn = qoz_emit_strip_numeric_underscores(text); qoz_string _qoz_bv_458;
     {
-        void* _qoz_sb_5145_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5145_17); qoz_interp_push_str(_qoz_sb_5145_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5145_17, value_expr); qoz_interp_push_str(_qoz_sb_5145_17, QOZ_STR_LIT(" == ")); qoz_interp_push_str(_qoz_sb_5145_17, tn); _qoz_bv_457 = qoz_interp_finish(_qoz_sb_5145_17);
+        void* _qoz_sb_5186_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5186_17); qoz_interp_push_str(_qoz_sb_5186_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5186_17, value_expr); qoz_interp_push_str(_qoz_sb_5186_17, QOZ_STR_LIT(" == ")); qoz_interp_push_str(_qoz_sb_5186_17, tn); _qoz_bv_458 = qoz_interp_finish(_qoz_sb_5186_17);
     }
-    qoz_emit_push(e, _qoz_bv_457); 
+    qoz_emit_push(e, _qoz_bv_458); 
     }
-    0;  break; } case qoz_Pattern_PatLitBool: { bool b = _qoz_ms_1->payload.PatLitBool.f1; if (b) { qoz_string _qoz_bv_458;
+    0;  break; } case qoz_Pattern_PatLitBool: { bool b = _qoz_ms_1->payload.PatLitBool.f1; if (b) { qoz_string _qoz_bv_459;
     {
-        void* _qoz_sb_5148_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5148_24); qoz_interp_push_str(_qoz_sb_5148_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5148_24, value_expr); qoz_interp_push_str(_qoz_sb_5148_24, QOZ_STR_LIT(" == true")); _qoz_bv_458 = qoz_interp_finish(_qoz_sb_5148_24);
+        void* _qoz_sb_5189_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5189_24); qoz_interp_push_str(_qoz_sb_5189_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5189_24, value_expr); qoz_interp_push_str(_qoz_sb_5189_24, QOZ_STR_LIT(" == true")); _qoz_bv_459 = qoz_interp_finish(_qoz_sb_5189_24);
     }
-    qoz_emit_push(e, _qoz_bv_458); }  else { qoz_string _qoz_bv_459;
+    qoz_emit_push(e, _qoz_bv_459); }  else { qoz_string _qoz_bv_460;
     {
-        void* _qoz_sb_5149_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5149_24); qoz_interp_push_str(_qoz_sb_5149_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5149_24, value_expr); qoz_interp_push_str(_qoz_sb_5149_24, QOZ_STR_LIT(" == false")); _qoz_bv_459 = qoz_interp_finish(_qoz_sb_5149_24);
+        void* _qoz_sb_5190_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5190_24); qoz_interp_push_str(_qoz_sb_5190_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5190_24, value_expr); qoz_interp_push_str(_qoz_sb_5190_24, QOZ_STR_LIT(" == false")); _qoz_bv_460 = qoz_interp_finish(_qoz_sb_5190_24);
     }
-    qoz_emit_push(e, _qoz_bv_459); } 0;  break; } case qoz_Pattern_PatLitString: { qoz_string text = _qoz_ms_1->payload.PatLitString.f1; qoz_string _qoz_bv_460;
+    qoz_emit_push(e, _qoz_bv_460); } 0;  break; } case qoz_Pattern_PatLitString: { qoz_string text = _qoz_ms_1->payload.PatLitString.f1; qoz_string _qoz_bv_461;
     {
-        void* _qoz_sb_5152_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5152_17); qoz_interp_push_str(_qoz_sb_5152_17, QOZ_STR_LIT(" && qoz_string_eq(")); qoz_interp_push_str(_qoz_sb_5152_17, value_expr); qoz_interp_push_str(_qoz_sb_5152_17, QOZ_STR_LIT(", QOZ_STR_LIT(")); qoz_interp_push_str(_qoz_sb_5152_17, text); qoz_interp_push_str(_qoz_sb_5152_17, QOZ_STR_LIT("))")); _qoz_bv_460 = qoz_interp_finish(_qoz_sb_5152_17);
+        void* _qoz_sb_5193_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5193_17); qoz_interp_push_str(_qoz_sb_5193_17, QOZ_STR_LIT(" && qoz_string_eq(")); qoz_interp_push_str(_qoz_sb_5193_17, value_expr); qoz_interp_push_str(_qoz_sb_5193_17, QOZ_STR_LIT(", QOZ_STR_LIT(")); qoz_interp_push_str(_qoz_sb_5193_17, text); qoz_interp_push_str(_qoz_sb_5193_17, QOZ_STR_LIT("))")); _qoz_bv_461 = qoz_interp_finish(_qoz_sb_5193_17);
     }
-    qoz_emit_push(e, _qoz_bv_460);  break; } case qoz_Pattern_PatVariant: { qoz_Span sp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
-        if ((path.len) == 0) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string inner_enum = qoz_emit_enum_name_of_te(e, value_te); if (qoz_strings_eq_raw(inner_enum, QOZ_STR_LIT(""))) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("nested variant pattern on a scrutinee whose type is not an enum"))); return;} qoz_string _qoz_bv_461;
+    qoz_emit_push(e, _qoz_bv_461);  break; } case qoz_Pattern_PatVariant: { qoz_Span sp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
+        if ((path.len) == 0) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string inner_enum = qoz_emit_enum_name_of_te(e, value_te); if (qoz_strings_eq_raw(inner_enum, QOZ_STR_LIT(""))) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("nested variant pattern on a scrutinee whose type is not an enum"))); return;} qoz_string _qoz_bv_462;
     {
-        void* _qoz_sb_5165_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5165_17); qoz_interp_push_str(_qoz_sb_5165_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5165_17, value_expr); qoz_interp_push_str(_qoz_sb_5165_17, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5165_17, inner_enum); qoz_interp_push_str(_qoz_sb_5165_17, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5165_17, vname); _qoz_bv_461 = qoz_interp_finish(_qoz_sb_5165_17);
+        void* _qoz_sb_5206_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5206_17); qoz_interp_push_str(_qoz_sb_5206_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5206_17, value_expr); qoz_interp_push_str(_qoz_sb_5206_17, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5206_17, inner_enum); qoz_interp_push_str(_qoz_sb_5206_17, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5206_17, vname); _qoz_bv_462 = qoz_interp_finish(_qoz_sb_5206_17);
     }
-    qoz_emit_push(e, _qoz_bv_461); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, inner_enum, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_462;
+    qoz_emit_push(e, _qoz_bv_462); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, inner_enum, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_463;
     {
-        void* _qoz_sb_5170_28 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5170_28); qoz_interp_push_str(_qoz_sb_5170_28, value_expr); qoz_interp_push_str(_qoz_sb_5170_28, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5170_28, vname); qoz_interp_push_str(_qoz_sb_5170_28, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5170_28, is); _qoz_bv_462 = qoz_interp_finish(_qoz_sb_5170_28);
+        void* _qoz_sb_5211_28 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5211_28); qoz_interp_push_str(_qoz_sb_5211_28, value_expr); qoz_interp_push_str(_qoz_sb_5211_28, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5211_28, vname); qoz_interp_push_str(_qoz_sb_5211_28, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5211_28, is); _qoz_bv_463 = qoz_interp_finish(_qoz_sb_5211_28);
     }
-    qoz_string sub_expr = _qoz_bv_462; qoz_emit_emit_pat_match_cond(e, spat, sub_expr, sub_te); i = i + 1; } }
+    qoz_string sub_expr = _qoz_bv_463; qoz_emit_emit_pat_match_cond(e, spat, sub_expr, sub_te); i = i + 1; } }
     }
-    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span sp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_463;
+    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span sp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_464;
     {
-        (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_463 = NULL;
+        (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_464 = NULL;
     }
-    _qoz_bv_463;  break; } } 0; 
+    _qoz_bv_464;  break; } } 0; 
     return;
 }
 
@@ -10759,24 +10771,24 @@ void qoz_emit_emit_pat_bindings(qoz_Emitter* e, qoz_Pattern* p, qoz_string value
     qoz_gc_push_root(&p);
     qoz_gc_push_root(&value_te);
     qoz_Pattern* _qoz_ms_1 = p; switch (_qoz_ms_1->tag) { case qoz_Pattern_PatBind: { qoz_string bname = _qoz_ms_1->payload.PatBind.f1; {
-        qoz_string ct = qoz_emit_c_type_for(e, value_te); qoz_string _qoz_bv_464;
+        qoz_string ct = qoz_emit_c_type_for(e, value_te); qoz_string _qoz_bv_465;
     {
-        void* _qoz_sb_5189_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5189_17); qoz_interp_push_str(_qoz_sb_5189_17, ct); qoz_interp_push_str(_qoz_sb_5189_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5189_17, bname); qoz_interp_push_str(_qoz_sb_5189_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5189_17, value_expr); qoz_interp_push_str(_qoz_sb_5189_17, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5189_17, bname); qoz_interp_push_str(_qoz_sb_5189_17, QOZ_STR_LIT("; ")); _qoz_bv_464 = qoz_interp_finish(_qoz_sb_5189_17);
+        void* _qoz_sb_5230_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5230_17); qoz_interp_push_str(_qoz_sb_5230_17, ct); qoz_interp_push_str(_qoz_sb_5230_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5230_17, bname); qoz_interp_push_str(_qoz_sb_5230_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5230_17, value_expr); qoz_interp_push_str(_qoz_sb_5230_17, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5230_17, bname); qoz_interp_push_str(_qoz_sb_5230_17, QOZ_STR_LIT("; ")); _qoz_bv_465 = qoz_interp_finish(_qoz_sb_5230_17);
     }
-    qoz_emit_push(e, _qoz_bv_464); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, bname, value_te); 
+    qoz_emit_push(e, _qoz_bv_465); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, bname, value_te); 
     }
     0;  break; } case qoz_Pattern_PatVariant: { qoz_Span sp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
-        if ((path.len) == 0) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string inner_enum = qoz_emit_enum_name_of_te(e, value_te); if (qoz_strings_eq_raw(inner_enum, QOZ_STR_LIT(""))) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("nested variant pattern on a scrutinee whose type is not an enum"))); return;} int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, inner_enum, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_465;
+        if ((path.len) == 0) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string inner_enum = qoz_emit_enum_name_of_te(e, value_te); if (qoz_strings_eq_raw(inner_enum, QOZ_STR_LIT(""))) { (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("nested variant pattern on a scrutinee whose type is not an enum"))); return;} int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, inner_enum, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_466;
     {
-        void* _qoz_sb_5207_28 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5207_28); qoz_interp_push_str(_qoz_sb_5207_28, value_expr); qoz_interp_push_str(_qoz_sb_5207_28, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5207_28, vname); qoz_interp_push_str(_qoz_sb_5207_28, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5207_28, is); _qoz_bv_465 = qoz_interp_finish(_qoz_sb_5207_28);
+        void* _qoz_sb_5248_28 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5248_28); qoz_interp_push_str(_qoz_sb_5248_28, value_expr); qoz_interp_push_str(_qoz_sb_5248_28, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5248_28, vname); qoz_interp_push_str(_qoz_sb_5248_28, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5248_28, is); _qoz_bv_466 = qoz_interp_finish(_qoz_sb_5248_28);
     }
-    qoz_string sub_expr = _qoz_bv_465; qoz_emit_emit_pat_bindings(e, spat, sub_expr, sub_te); i = i + 1; } }
+    qoz_string sub_expr = _qoz_bv_466; qoz_emit_emit_pat_bindings(e, spat, sub_expr, sub_te); i = i + 1; } }
     }
-    0;  break; } case qoz_Pattern_PatWild: { NULL;  break; } case qoz_Pattern_PatLitInt: { NULL;  break; } case qoz_Pattern_PatLitString: { NULL;  break; } case qoz_Pattern_PatLitBool: { NULL;  break; } case qoz_Pattern_PatTuple: { qoz_Span sp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_466;
+    0;  break; } case qoz_Pattern_PatWild: { NULL;  break; } case qoz_Pattern_PatLitInt: { NULL;  break; } case qoz_Pattern_PatLitString: { NULL;  break; } case qoz_Pattern_PatLitBool: { NULL;  break; } case qoz_Pattern_PatTuple: { qoz_Span sp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_467;
     {
-        (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_466 = NULL;
+        (void)(qoz_emit_emit_die(sp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_467 = NULL;
     }
-    _qoz_bv_466;  break; } } 0; 
+    _qoz_bv_467;  break; } } 0; 
     return;
 }
 
@@ -10785,35 +10797,35 @@ void qoz_emit_emit_match_as_if_chain(qoz_Emitter* e, qoz_Span span, qoz_Expr* sc
     qoz_frame_push("emit_emit_match_as_if_chain");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&scrut);
-    qoz_string bare_enum = qoz_emit_find_enum_from_arms(e, arms); bool is_enum_match = !qoz_strings_eq_raw(bare_enum, QOZ_STR_LIT("")); qoz_string enum_name = QOZ_STR_LIT(""); if (is_enum_match) { enum_name = qoz_emit_enum_lookup_name(e, scrut, bare_enum); } qoz_string scrut_ctype = qoz_emit_infer_expr_ctype(e, scrut); qoz_TypeExpr* scrut_te = qoz_emit_infer_value_te(e, scrut); qoz_gc_push_root(&scrut_te); e->match_counter = e->match_counter + 1; qoz_string _qoz_bv_467;
+    qoz_string bare_enum = qoz_emit_find_enum_from_arms(e, arms); bool is_enum_match = !qoz_strings_eq_raw(bare_enum, QOZ_STR_LIT("")); qoz_string enum_name = QOZ_STR_LIT(""); if (is_enum_match) { enum_name = qoz_emit_enum_lookup_name(e, scrut, bare_enum); } qoz_string scrut_ctype = qoz_emit_infer_expr_ctype(e, scrut); qoz_TypeExpr* scrut_te = qoz_emit_infer_value_te(e, scrut); qoz_gc_push_root(&scrut_te); e->match_counter = e->match_counter + 1; qoz_string _qoz_bv_468;
     {
-        void* _qoz_sb_5227_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5227_21); qoz_interp_push_str(_qoz_sb_5227_21, QOZ_STR_LIT("_qoz_ms_")); qoz_interp_push_i64(_qoz_sb_5227_21, e->match_counter); _qoz_bv_467 = qoz_interp_finish(_qoz_sb_5227_21);
+        void* _qoz_sb_5268_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5268_21); qoz_interp_push_str(_qoz_sb_5268_21, QOZ_STR_LIT("_qoz_ms_")); qoz_interp_push_i64(_qoz_sb_5268_21, e->match_counter); _qoz_bv_468 = qoz_interp_finish(_qoz_sb_5268_21);
     }
-    qoz_string scrut_tmp = _qoz_bv_467; qoz_string _qoz_bv_468;
+    qoz_string scrut_tmp = _qoz_bv_468; qoz_string _qoz_bv_469;
     {
-        void* _qoz_sb_5228_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5228_21); qoz_interp_push_str(_qoz_sb_5228_21, QOZ_STR_LIT("_qoz_mv_")); qoz_interp_push_i64(_qoz_sb_5228_21, e->match_counter); _qoz_bv_468 = qoz_interp_finish(_qoz_sb_5228_21);
+        void* _qoz_sb_5269_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5269_21); qoz_interp_push_str(_qoz_sb_5269_21, QOZ_STR_LIT("_qoz_mv_")); qoz_interp_push_i64(_qoz_sb_5269_21, e->match_counter); _qoz_bv_469 = qoz_interp_finish(_qoz_sb_5269_21);
     }
-    qoz_string res_tmp = _qoz_bv_468; qoz_string _qoz_bv_469;
+    qoz_string res_tmp = _qoz_bv_469; qoz_string _qoz_bv_470;
     {
-        void* _qoz_sb_5229_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5229_21); qoz_interp_push_str(_qoz_sb_5229_21, QOZ_STR_LIT("_qoz_mm_")); qoz_interp_push_i64(_qoz_sb_5229_21, e->match_counter); _qoz_bv_469 = qoz_interp_finish(_qoz_sb_5229_21);
+        void* _qoz_sb_5270_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5270_21); qoz_interp_push_str(_qoz_sb_5270_21, QOZ_STR_LIT("_qoz_mm_")); qoz_interp_push_i64(_qoz_sb_5270_21, e->match_counter); _qoz_bv_470 = qoz_interp_finish(_qoz_sb_5270_21);
     }
-    qoz_string mflag = _qoz_bv_469; qoz_string res_ctype = qoz_emit_match_result_ctype_with_hint(e, enum_name, arms); bool is_void = qoz_strings_eq_raw(res_ctype, QOZ_STR_LIT("void")); int64_t start = qoz_strings_sb_len(&e->out); if (is_enum_match) { qoz_string _qoz_bv_470;
+    qoz_string mflag = _qoz_bv_470; qoz_string res_ctype = qoz_emit_match_result_ctype_with_hint(e, enum_name, arms); bool is_void = qoz_strings_eq_raw(res_ctype, QOZ_STR_LIT("void")); int64_t start = qoz_strings_sb_len(&e->out); if (is_enum_match) { qoz_string _qoz_bv_471;
     {
-        void* _qoz_sb_5234_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5234_17); qoz_interp_push_str(_qoz_sb_5234_17, QOZ_STR_LIT("qoz_")); qoz_interp_push_str(_qoz_sb_5234_17, enum_name); qoz_interp_push_str(_qoz_sb_5234_17, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5234_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5234_17, QOZ_STR_LIT(" = ")); _qoz_bv_470 = qoz_interp_finish(_qoz_sb_5234_17);
+        void* _qoz_sb_5275_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5275_17); qoz_interp_push_str(_qoz_sb_5275_17, QOZ_STR_LIT("qoz_")); qoz_interp_push_str(_qoz_sb_5275_17, enum_name); qoz_interp_push_str(_qoz_sb_5275_17, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5275_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5275_17, QOZ_STR_LIT(" = ")); _qoz_bv_471 = qoz_interp_finish(_qoz_sb_5275_17);
     }
-    qoz_emit_push(e, _qoz_bv_470); }  else { qoz_string _qoz_bv_471;
+    qoz_emit_push(e, _qoz_bv_471); }  else { qoz_string _qoz_bv_472;
     {
-        void* _qoz_sb_5236_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5236_17); qoz_interp_push_str(_qoz_sb_5236_17, scrut_ctype); qoz_interp_push_str(_qoz_sb_5236_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5236_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5236_17, QOZ_STR_LIT(" = ")); _qoz_bv_471 = qoz_interp_finish(_qoz_sb_5236_17);
+        void* _qoz_sb_5277_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5277_17); qoz_interp_push_str(_qoz_sb_5277_17, scrut_ctype); qoz_interp_push_str(_qoz_sb_5277_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5277_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5277_17, QOZ_STR_LIT(" = ")); _qoz_bv_472 = qoz_interp_finish(_qoz_sb_5277_17);
     }
-    qoz_emit_push(e, _qoz_bv_471); } qoz_emit_emit_expr(e, scrut); qoz_emit_push(e, QOZ_STR_LIT("; ")); if (!is_void) { qoz_string dv = qoz_emit_default_value_for(res_ctype); qoz_string _qoz_bv_472;
+    qoz_emit_push(e, _qoz_bv_472); } qoz_emit_emit_expr(e, scrut); qoz_emit_push(e, QOZ_STR_LIT("; ")); if (!is_void) { qoz_string dv = qoz_emit_default_value_for(res_ctype); qoz_string _qoz_bv_473;
     {
-        void* _qoz_sb_5242_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5242_17); qoz_interp_push_str(_qoz_sb_5242_17, res_ctype); qoz_interp_push_str(_qoz_sb_5242_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5242_17, res_tmp); qoz_interp_push_str(_qoz_sb_5242_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5242_17, dv); qoz_interp_push_str(_qoz_sb_5242_17, QOZ_STR_LIT("; ")); _qoz_bv_472 = qoz_interp_finish(_qoz_sb_5242_17);
+        void* _qoz_sb_5283_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5283_17); qoz_interp_push_str(_qoz_sb_5283_17, res_ctype); qoz_interp_push_str(_qoz_sb_5283_17, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5283_17, res_tmp); qoz_interp_push_str(_qoz_sb_5283_17, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5283_17, dv); qoz_interp_push_str(_qoz_sb_5283_17, QOZ_STR_LIT("; ")); _qoz_bv_473 = qoz_interp_finish(_qoz_sb_5283_17);
     }
-    qoz_emit_push(e, _qoz_bv_472); } qoz_string _qoz_bv_473;
+    qoz_emit_push(e, _qoz_bv_473); } qoz_string _qoz_bv_474;
     {
-        void* _qoz_sb_5244_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5244_13); qoz_interp_push_str(_qoz_sb_5244_13, QOZ_STR_LIT("bool ")); qoz_interp_push_str(_qoz_sb_5244_13, mflag); qoz_interp_push_str(_qoz_sb_5244_13, QOZ_STR_LIT(" = false; ")); _qoz_bv_473 = qoz_interp_finish(_qoz_sb_5244_13);
+        void* _qoz_sb_5285_13 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5285_13); qoz_interp_push_str(_qoz_sb_5285_13, QOZ_STR_LIT("bool ")); qoz_interp_push_str(_qoz_sb_5285_13, mflag); qoz_interp_push_str(_qoz_sb_5285_13, QOZ_STR_LIT(" = false; ")); _qoz_bv_474 = qoz_interp_finish(_qoz_sb_5285_13);
     }
-    qoz_emit_push(e, _qoz_bv_473); { qoz_Vec__qoz_MatchArm __col = arms; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_MatchArm arm = __col.data[__i]; (void)arm; qoz_emit_emit_arm_in_chain_with_te(e, enum_name, scrut_tmp, scrut_te, res_tmp, mflag, arm, is_void); } }qoz_emit_hoist_to_prologue(e, start); if (is_void) { qoz_emit_push(e, QOZ_STR_LIT("0")); }  else { qoz_emit_push(e, res_tmp); } 
+    qoz_emit_push(e, _qoz_bv_474); { qoz_Vec__qoz_MatchArm __col = arms; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_MatchArm arm = __col.data[__i]; (void)arm; qoz_emit_emit_arm_in_chain_with_te(e, enum_name, scrut_tmp, scrut_te, res_tmp, mflag, arm, is_void); } }qoz_emit_hoist_to_prologue(e, start); if (is_void) { qoz_emit_push(e, QOZ_STR_LIT("0")); }  else { qoz_emit_push(e, res_tmp); } 
     return;
 }
 
@@ -10822,60 +10834,60 @@ void qoz_emit_emit_arm_in_chain_with_te(qoz_Emitter* e, qoz_string enum_name, qo
     qoz_frame_push("emit_emit_arm_in_chain_with_te");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&scrut_te);
-    qoz_TypeExpr* body_hint = qoz_emit_match_body_hint(e, enum_name, arm.body); qoz_gc_push_root(&body_hint); bool is_enum_match = !qoz_strings_eq_raw(enum_name, QOZ_STR_LIT("")); qoz_emit_push(e, QOZ_STR_LIT("if (!")); qoz_emit_push(e, mflag); qoz_Pattern* _qoz_ms_1 = arm.pat; switch (_qoz_ms_1->tag) { case qoz_Pattern_PatWild: { qoz_emit_push(e, QOZ_STR_LIT(") { "));  break; } case qoz_Pattern_PatBind: { qoz_string name = _qoz_ms_1->payload.PatBind.f1; if (is_enum_match) { qoz_Option__qoz_string* _qoz_ms_2 = qoz_map_get__qoz_string__qoz_string(&e->variant_of, name); switch (_qoz_ms_2->tag) { case qoz_Option__qoz_string_Some: { qoz_string _qoz_bv_474;
+    qoz_TypeExpr* body_hint = qoz_emit_match_body_hint(e, enum_name, arm.body); qoz_gc_push_root(&body_hint); bool is_enum_match = !qoz_strings_eq_raw(enum_name, QOZ_STR_LIT("")); qoz_emit_push(e, QOZ_STR_LIT("if (!")); qoz_emit_push(e, mflag); qoz_Pattern* _qoz_ms_1 = arm.pat; switch (_qoz_ms_1->tag) { case qoz_Pattern_PatWild: { qoz_emit_push(e, QOZ_STR_LIT(") { "));  break; } case qoz_Pattern_PatBind: { qoz_string name = _qoz_ms_1->payload.PatBind.f1; if (is_enum_match) { qoz_Option__qoz_string* _qoz_ms_2 = qoz_map_get__qoz_string__qoz_string(&e->variant_of, name); switch (_qoz_ms_2->tag) { case qoz_Option__qoz_string_Some: { qoz_string _qoz_bv_475;
     {
-        void* _qoz_sb_5266_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5266_25); qoz_interp_push_str(_qoz_sb_5266_25, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5266_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5266_25, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5266_25, enum_name); qoz_interp_push_str(_qoz_sb_5266_25, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5266_25, name); qoz_interp_push_str(_qoz_sb_5266_25, QOZ_STR_LIT(") { ")); _qoz_bv_474 = qoz_interp_finish(_qoz_sb_5266_25);
+        void* _qoz_sb_5307_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5307_25); qoz_interp_push_str(_qoz_sb_5307_25, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5307_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5307_25, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5307_25, enum_name); qoz_interp_push_str(_qoz_sb_5307_25, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5307_25, name); qoz_interp_push_str(_qoz_sb_5307_25, QOZ_STR_LIT(") { ")); _qoz_bv_475 = qoz_interp_finish(_qoz_sb_5307_25);
     }
-    qoz_emit_push(e, _qoz_bv_474);  break; } default: { {
-        qoz_string _qoz_bv_475;
+    qoz_emit_push(e, _qoz_bv_475);  break; } default: { {
+        qoz_string _qoz_bv_476;
     {
-        void* _qoz_sb_5271_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5271_25); qoz_interp_push_str(_qoz_sb_5271_25, QOZ_STR_LIT(") { qoz_")); qoz_interp_push_str(_qoz_sb_5271_25, enum_name); qoz_interp_push_str(_qoz_sb_5271_25, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5271_25, name); qoz_interp_push_str(_qoz_sb_5271_25, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5271_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5271_25, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5271_25, name); qoz_interp_push_str(_qoz_sb_5271_25, QOZ_STR_LIT("; ")); _qoz_bv_475 = qoz_interp_finish(_qoz_sb_5271_25);
+        void* _qoz_sb_5312_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5312_25); qoz_interp_push_str(_qoz_sb_5312_25, QOZ_STR_LIT(") { qoz_")); qoz_interp_push_str(_qoz_sb_5312_25, enum_name); qoz_interp_push_str(_qoz_sb_5312_25, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5312_25, name); qoz_interp_push_str(_qoz_sb_5312_25, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5312_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5312_25, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5312_25, name); qoz_interp_push_str(_qoz_sb_5312_25, QOZ_STR_LIT("; ")); _qoz_bv_476 = qoz_interp_finish(_qoz_sb_5312_25);
     }
-    qoz_emit_push(e, _qoz_bv_475); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, scrut_te); 
+    qoz_emit_push(e, _qoz_bv_476); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, scrut_te); 
     }
-    0;  break; } } 0; }  else { qoz_string sc = qoz_emit_c_type_for(e, scrut_te); qoz_string _qoz_bv_476;
+    0;  break; } } 0; }  else { qoz_string sc = qoz_emit_c_type_for(e, scrut_te); qoz_string _qoz_bv_477;
     {
-        void* _qoz_sb_5276_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5276_21); qoz_interp_push_str(_qoz_sb_5276_21, QOZ_STR_LIT(") { ")); qoz_interp_push_str(_qoz_sb_5276_21, sc); qoz_interp_push_str(_qoz_sb_5276_21, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5276_21, name); qoz_interp_push_str(_qoz_sb_5276_21, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5276_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5276_21, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5276_21, name); qoz_interp_push_str(_qoz_sb_5276_21, QOZ_STR_LIT("; ")); _qoz_bv_476 = qoz_interp_finish(_qoz_sb_5276_21);
+        void* _qoz_sb_5317_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5317_21); qoz_interp_push_str(_qoz_sb_5317_21, QOZ_STR_LIT(") { ")); qoz_interp_push_str(_qoz_sb_5317_21, sc); qoz_interp_push_str(_qoz_sb_5317_21, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5317_21, name); qoz_interp_push_str(_qoz_sb_5317_21, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5317_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5317_21, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5317_21, name); qoz_interp_push_str(_qoz_sb_5317_21, QOZ_STR_LIT("; ")); _qoz_bv_477 = qoz_interp_finish(_qoz_sb_5317_21);
     }
-    qoz_emit_push(e, _qoz_bv_476); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, scrut_te); } 0;  break; } case qoz_Pattern_PatLitInt: { qoz_string text = _qoz_ms_1->payload.PatLitInt.f1; {
-        qoz_string tn = qoz_emit_strip_numeric_underscores(text); qoz_string _qoz_bv_477;
+    qoz_emit_push(e, _qoz_bv_477); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, scrut_te); } 0;  break; } case qoz_Pattern_PatLitInt: { qoz_string text = _qoz_ms_1->payload.PatLitInt.f1; {
+        qoz_string tn = qoz_emit_strip_numeric_underscores(text); qoz_string _qoz_bv_478;
     {
-        void* _qoz_sb_5282_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5282_17); qoz_interp_push_str(_qoz_sb_5282_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5282_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5282_17, QOZ_STR_LIT(" == ")); qoz_interp_push_str(_qoz_sb_5282_17, tn); qoz_interp_push_str(_qoz_sb_5282_17, QOZ_STR_LIT(") { ")); _qoz_bv_477 = qoz_interp_finish(_qoz_sb_5282_17);
+        void* _qoz_sb_5323_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5323_17); qoz_interp_push_str(_qoz_sb_5323_17, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5323_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5323_17, QOZ_STR_LIT(" == ")); qoz_interp_push_str(_qoz_sb_5323_17, tn); qoz_interp_push_str(_qoz_sb_5323_17, QOZ_STR_LIT(") { ")); _qoz_bv_478 = qoz_interp_finish(_qoz_sb_5323_17);
     }
-    qoz_emit_push(e, _qoz_bv_477); 
+    qoz_emit_push(e, _qoz_bv_478); 
     }
-    0;  break; } case qoz_Pattern_PatLitBool: { bool b = _qoz_ms_1->payload.PatLitBool.f1; if (b) { qoz_string _qoz_bv_478;
+    0;  break; } case qoz_Pattern_PatLitBool: { bool b = _qoz_ms_1->payload.PatLitBool.f1; if (b) { qoz_string _qoz_bv_479;
     {
-        void* _qoz_sb_5285_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5285_24); qoz_interp_push_str(_qoz_sb_5285_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5285_24, scrut_tmp); qoz_interp_push_str(_qoz_sb_5285_24, QOZ_STR_LIT(" == true) { ")); _qoz_bv_478 = qoz_interp_finish(_qoz_sb_5285_24);
+        void* _qoz_sb_5326_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5326_24); qoz_interp_push_str(_qoz_sb_5326_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5326_24, scrut_tmp); qoz_interp_push_str(_qoz_sb_5326_24, QOZ_STR_LIT(" == true) { ")); _qoz_bv_479 = qoz_interp_finish(_qoz_sb_5326_24);
     }
-    qoz_emit_push(e, _qoz_bv_478); }  else { qoz_string _qoz_bv_479;
+    qoz_emit_push(e, _qoz_bv_479); }  else { qoz_string _qoz_bv_480;
     {
-        void* _qoz_sb_5286_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5286_24); qoz_interp_push_str(_qoz_sb_5286_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5286_24, scrut_tmp); qoz_interp_push_str(_qoz_sb_5286_24, QOZ_STR_LIT(" == false) { ")); _qoz_bv_479 = qoz_interp_finish(_qoz_sb_5286_24);
+        void* _qoz_sb_5327_24 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5327_24); qoz_interp_push_str(_qoz_sb_5327_24, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5327_24, scrut_tmp); qoz_interp_push_str(_qoz_sb_5327_24, QOZ_STR_LIT(" == false) { ")); _qoz_bv_480 = qoz_interp_finish(_qoz_sb_5327_24);
     }
-    qoz_emit_push(e, _qoz_bv_479); } 0;  break; } case qoz_Pattern_PatLitString: { qoz_string text = _qoz_ms_1->payload.PatLitString.f1; qoz_string _qoz_bv_480;
+    qoz_emit_push(e, _qoz_bv_480); } 0;  break; } case qoz_Pattern_PatLitString: { qoz_string text = _qoz_ms_1->payload.PatLitString.f1; qoz_string _qoz_bv_481;
     {
-        void* _qoz_sb_5289_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5289_17); qoz_interp_push_str(_qoz_sb_5289_17, QOZ_STR_LIT(" && qoz_string_eq(")); qoz_interp_push_str(_qoz_sb_5289_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5289_17, QOZ_STR_LIT(", QOZ_STR_LIT(")); qoz_interp_push_str(_qoz_sb_5289_17, text); qoz_interp_push_str(_qoz_sb_5289_17, QOZ_STR_LIT("))) { ")); _qoz_bv_480 = qoz_interp_finish(_qoz_sb_5289_17);
+        void* _qoz_sb_5330_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5330_17); qoz_interp_push_str(_qoz_sb_5330_17, QOZ_STR_LIT(" && qoz_string_eq(")); qoz_interp_push_str(_qoz_sb_5330_17, scrut_tmp); qoz_interp_push_str(_qoz_sb_5330_17, QOZ_STR_LIT(", QOZ_STR_LIT(")); qoz_interp_push_str(_qoz_sb_5330_17, text); qoz_interp_push_str(_qoz_sb_5330_17, QOZ_STR_LIT("))) { ")); _qoz_bv_481 = qoz_interp_finish(_qoz_sb_5330_17);
     }
-    qoz_emit_push(e, _qoz_bv_480);  break; } case qoz_Pattern_PatVariant: { qoz_Span psp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
-        if ((path.len) == 0) { (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("variant pattern has no name"))); } if ((path.len) > 0) { qoz_string vname = path.data[(path.len) - 1]; qoz_string _qoz_bv_481;
+    qoz_emit_push(e, _qoz_bv_481);  break; } case qoz_Pattern_PatVariant: { qoz_Span psp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
+        if ((path.len) == 0) { (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("variant pattern has no name"))); } if ((path.len) > 0) { qoz_string vname = path.data[(path.len) - 1]; qoz_string _qoz_bv_482;
     {
-        void* _qoz_sb_5297_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5297_21); qoz_interp_push_str(_qoz_sb_5297_21, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5297_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5297_21, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5297_21, enum_name); qoz_interp_push_str(_qoz_sb_5297_21, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5297_21, vname); _qoz_bv_481 = qoz_interp_finish(_qoz_sb_5297_21);
+        void* _qoz_sb_5338_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5338_21); qoz_interp_push_str(_qoz_sb_5338_21, QOZ_STR_LIT(" && ")); qoz_interp_push_str(_qoz_sb_5338_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5338_21, QOZ_STR_LIT("->tag == qoz_")); qoz_interp_push_str(_qoz_sb_5338_21, enum_name); qoz_interp_push_str(_qoz_sb_5338_21, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5338_21, vname); _qoz_bv_482 = qoz_interp_finish(_qoz_sb_5338_21);
     }
-    qoz_emit_push(e, _qoz_bv_481); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* sp = __col.data[__i]; (void)sp; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, enum_name, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_482;
+    qoz_emit_push(e, _qoz_bv_482); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* sp = __col.data[__i]; (void)sp; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, enum_name, vname, i); qoz_gc_push_root(&sub_te); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_483;
     {
-        void* _qoz_sb_5302_32 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5302_32); qoz_interp_push_str(_qoz_sb_5302_32, scrut_tmp); qoz_interp_push_str(_qoz_sb_5302_32, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5302_32, vname); qoz_interp_push_str(_qoz_sb_5302_32, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5302_32, is); _qoz_bv_482 = qoz_interp_finish(_qoz_sb_5302_32);
+        void* _qoz_sb_5343_32 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5343_32); qoz_interp_push_str(_qoz_sb_5343_32, scrut_tmp); qoz_interp_push_str(_qoz_sb_5343_32, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5343_32, vname); qoz_interp_push_str(_qoz_sb_5343_32, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5343_32, is); _qoz_bv_483 = qoz_interp_finish(_qoz_sb_5343_32);
     }
-    qoz_string sub_expr = _qoz_bv_482; qoz_emit_emit_pat_match_cond(e, sp, sub_expr, sub_te); i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(") { ")); int64_t j = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* sp = __col.data[__i]; (void)sp; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, enum_name, vname, j); qoz_gc_push_root(&sub_te); qoz_string js = qoz_emit_int_to_string(j); qoz_string _qoz_bv_483;
+    qoz_string sub_expr = _qoz_bv_483; qoz_emit_emit_pat_match_cond(e, sp, sub_expr, sub_te); i = i + 1; } }qoz_emit_push(e, QOZ_STR_LIT(") { ")); int64_t j = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* sp = __col.data[__i]; (void)sp; qoz_TypeExpr* sub_te = qoz_emit_variant_payload_typeexpr(e, enum_name, vname, j); qoz_gc_push_root(&sub_te); qoz_string js = qoz_emit_int_to_string(j); qoz_string _qoz_bv_484;
     {
-        void* _qoz_sb_5311_32 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5311_32); qoz_interp_push_str(_qoz_sb_5311_32, scrut_tmp); qoz_interp_push_str(_qoz_sb_5311_32, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5311_32, vname); qoz_interp_push_str(_qoz_sb_5311_32, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5311_32, js); _qoz_bv_483 = qoz_interp_finish(_qoz_sb_5311_32);
+        void* _qoz_sb_5352_32 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5352_32); qoz_interp_push_str(_qoz_sb_5352_32, scrut_tmp); qoz_interp_push_str(_qoz_sb_5352_32, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5352_32, vname); qoz_interp_push_str(_qoz_sb_5352_32, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5352_32, js); _qoz_bv_484 = qoz_interp_finish(_qoz_sb_5352_32);
     }
-    qoz_string sub_expr = _qoz_bv_483; qoz_emit_emit_pat_bindings(e, sp, sub_expr, sub_te); j = j + 1; } }}  else { qoz_emit_push(e, QOZ_STR_LIT(") { ")); } 
+    qoz_string sub_expr = _qoz_bv_484; qoz_emit_emit_pat_bindings(e, sp, sub_expr, sub_te); j = j + 1; } }}  else { qoz_emit_push(e, QOZ_STR_LIT(") { ")); } 
     }
-    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span psp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_484;
+    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span psp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_485;
     {
-        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_484 = NULL;
+        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_485 = NULL;
     }
-    _qoz_bv_484;  break; } } 0; if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); } if (is_void) { qoz_emit_emit_stmt_expr(e, arm.body); }  else { qoz_emit_push(e, res_tmp); qoz_emit_push(e, QOZ_STR_LIT(" = (")); qoz_emit_emit_value_with_hint(e, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("); ")); } qoz_emit_push(e, mflag); qoz_emit_push(e, QOZ_STR_LIT(" = true; ")); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("} ")); } qoz_emit_push(e, QOZ_STR_LIT("} ")); 
+    _qoz_bv_485;  break; } } 0; if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); } if (is_void) { qoz_emit_emit_stmt_expr(e, arm.body); }  else { qoz_emit_push(e, res_tmp); qoz_emit_push(e, QOZ_STR_LIT(" = (")); qoz_emit_emit_value_with_hint(e, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("); ")); } qoz_emit_push(e, mflag); qoz_emit_push(e, QOZ_STR_LIT(" = true; ")); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("} ")); } qoz_emit_push(e, QOZ_STR_LIT("} ")); 
     return;
 }
 
@@ -10897,54 +10909,54 @@ void qoz_emit_emit_match_arm_with_kind(qoz_Emitter* e, qoz_string enum_name, qoz
         qoz_emit_push(e, QOZ_STR_LIT("default: { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
     }
     0;  break; } case qoz_Pattern_PatBind: { qoz_string name = _qoz_ms_1->payload.PatBind.f1; qoz_Option__qoz_string* _qoz_ms_2 = qoz_map_get__qoz_string__qoz_string(&e->variant_of, name); switch (_qoz_ms_2->tag) { case qoz_Option__qoz_string_Some: { {
-        qoz_string _qoz_bv_485;
-    {
-        void* _qoz_sb_5373_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5373_21); qoz_interp_push_str(_qoz_sb_5373_21, QOZ_STR_LIT("case qoz_")); qoz_interp_push_str(_qoz_sb_5373_21, enum_name); qoz_interp_push_str(_qoz_sb_5373_21, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5373_21, name); qoz_interp_push_str(_qoz_sb_5373_21, QOZ_STR_LIT(": { ")); _qoz_bv_485 = qoz_interp_finish(_qoz_sb_5373_21);
-    }
-    qoz_emit_push(e, _qoz_bv_485); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
-    }
-    0;  break; } case qoz_Option__qoz_string_None: { {
         qoz_string _qoz_bv_486;
     {
-        void* _qoz_sb_5391_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5391_21); qoz_interp_push_str(_qoz_sb_5391_21, QOZ_STR_LIT("default: { qoz_")); qoz_interp_push_str(_qoz_sb_5391_21, enum_name); qoz_interp_push_str(_qoz_sb_5391_21, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5391_21, name); qoz_interp_push_str(_qoz_sb_5391_21, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5391_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5391_21, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5391_21, name); qoz_interp_push_str(_qoz_sb_5391_21, QOZ_STR_LIT("; ")); _qoz_bv_486 = qoz_interp_finish(_qoz_sb_5391_21);
+        void* _qoz_sb_5414_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5414_21); qoz_interp_push_str(_qoz_sb_5414_21, QOZ_STR_LIT("case qoz_")); qoz_interp_push_str(_qoz_sb_5414_21, enum_name); qoz_interp_push_str(_qoz_sb_5414_21, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5414_21, name); qoz_interp_push_str(_qoz_sb_5414_21, QOZ_STR_LIT(": { ")); _qoz_bv_486 = qoz_interp_finish(_qoz_sb_5414_21);
     }
-    qoz_emit_push(e, _qoz_bv_486); qoz_Span sp = ((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 }); qoz_Vec__qoz_string segs = qoz_vec_make__qoz_string(); qoz_vec_push__qoz_string(&segs, enum_name); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, qoz_make_TypeExpr_TENamed(sp, segs, qoz_vec_make__qoz_TypeExpr())); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
+    qoz_emit_push(e, _qoz_bv_486); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
+    }
+    0;  break; } case qoz_Option__qoz_string_None: { {
+        qoz_string _qoz_bv_487;
+    {
+        void* _qoz_sb_5432_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5432_21); qoz_interp_push_str(_qoz_sb_5432_21, QOZ_STR_LIT("default: { qoz_")); qoz_interp_push_str(_qoz_sb_5432_21, enum_name); qoz_interp_push_str(_qoz_sb_5432_21, QOZ_STR_LIT("* ")); qoz_interp_push_str(_qoz_sb_5432_21, name); qoz_interp_push_str(_qoz_sb_5432_21, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5432_21, scrut_tmp); qoz_interp_push_str(_qoz_sb_5432_21, QOZ_STR_LIT("; (void)")); qoz_interp_push_str(_qoz_sb_5432_21, name); qoz_interp_push_str(_qoz_sb_5432_21, QOZ_STR_LIT("; ")); _qoz_bv_487 = qoz_interp_finish(_qoz_sb_5432_21);
+    }
+    qoz_emit_push(e, _qoz_bv_487); qoz_Span sp = ((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 }); qoz_Vec__qoz_string segs = qoz_vec_make__qoz_string(); qoz_vec_push__qoz_string(&segs, enum_name); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, name, qoz_make_TypeExpr_TENamed(sp, segs, qoz_vec_make__qoz_TypeExpr())); if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
     }
     0;  break; } } 0;  break; } case qoz_Pattern_PatVariant: { qoz_Span psp = _qoz_ms_1->payload.PatVariant.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.PatVariant.f1; qoz_Vec__qoz_Pattern sub_pats = _qoz_ms_1->payload.PatVariant.f2; {
-        if ((path.len) == 0) { (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string _qoz_bv_487;
+        if ((path.len) == 0) { (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("variant pattern has no name"))); return;} qoz_string vname = path.data[(path.len) - 1]; qoz_string _qoz_bv_488;
     {
-        void* _qoz_sb_5415_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5415_17); qoz_interp_push_str(_qoz_sb_5415_17, QOZ_STR_LIT("case qoz_")); qoz_interp_push_str(_qoz_sb_5415_17, enum_name); qoz_interp_push_str(_qoz_sb_5415_17, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5415_17, vname); qoz_interp_push_str(_qoz_sb_5415_17, QOZ_STR_LIT(": { ")); _qoz_bv_487 = qoz_interp_finish(_qoz_sb_5415_17);
+        void* _qoz_sb_5456_17 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5456_17); qoz_interp_push_str(_qoz_sb_5456_17, QOZ_STR_LIT("case qoz_")); qoz_interp_push_str(_qoz_sb_5456_17, enum_name); qoz_interp_push_str(_qoz_sb_5456_17, QOZ_STR_LIT("_")); qoz_interp_push_str(_qoz_sb_5456_17, vname); qoz_interp_push_str(_qoz_sb_5456_17, QOZ_STR_LIT(": { ")); _qoz_bv_488 = qoz_interp_finish(_qoz_sb_5456_17);
     }
-    qoz_emit_push(e, _qoz_bv_487); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_Pattern* _qoz_ms_3 = spat; switch (_qoz_ms_3->tag) { case qoz_Pattern_PatBind: { qoz_string bname = _qoz_ms_3->payload.PatBind.f1; {
-        qoz_string pc = qoz_emit_variant_payload_ctype(e, enum_name, vname, i); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_488;
+    qoz_emit_push(e, _qoz_bv_488); int64_t i = 0; { qoz_Vec__qoz_Pattern __col = sub_pats; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Pattern* spat = __col.data[__i]; (void)spat; qoz_Pattern* _qoz_ms_3 = spat; switch (_qoz_ms_3->tag) { case qoz_Pattern_PatBind: { qoz_string bname = _qoz_ms_3->payload.PatBind.f1; {
+        qoz_string pc = qoz_emit_variant_payload_ctype(e, enum_name, vname, i); qoz_string is = qoz_emit_int_to_string(i); qoz_string _qoz_bv_489;
     {
-        void* _qoz_sb_5422_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5422_25); qoz_interp_push_str(_qoz_sb_5422_25, pc); qoz_interp_push_str(_qoz_sb_5422_25, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5422_25, bname); qoz_interp_push_str(_qoz_sb_5422_25, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5422_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5422_25, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5422_25, vname); qoz_interp_push_str(_qoz_sb_5422_25, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5422_25, is); qoz_interp_push_str(_qoz_sb_5422_25, QOZ_STR_LIT("; ")); _qoz_bv_488 = qoz_interp_finish(_qoz_sb_5422_25);
+        void* _qoz_sb_5463_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5463_25); qoz_interp_push_str(_qoz_sb_5463_25, pc); qoz_interp_push_str(_qoz_sb_5463_25, QOZ_STR_LIT(" ")); qoz_interp_push_str(_qoz_sb_5463_25, bname); qoz_interp_push_str(_qoz_sb_5463_25, QOZ_STR_LIT(" = ")); qoz_interp_push_str(_qoz_sb_5463_25, scrut_tmp); qoz_interp_push_str(_qoz_sb_5463_25, QOZ_STR_LIT("->payload.")); qoz_interp_push_str(_qoz_sb_5463_25, vname); qoz_interp_push_str(_qoz_sb_5463_25, QOZ_STR_LIT(".f")); qoz_interp_push_str(_qoz_sb_5463_25, is); qoz_interp_push_str(_qoz_sb_5463_25, QOZ_STR_LIT("; ")); _qoz_bv_489 = qoz_interp_finish(_qoz_sb_5463_25);
     }
-    qoz_emit_push(e, _qoz_bv_488); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, bname, qoz_emit_variant_payload_typeexpr(e, enum_name, vname, i)); 
+    qoz_emit_push(e, _qoz_bv_489); qoz_map_set__qoz_string__qoz_TypeExpr(&e->locals, bname, qoz_emit_variant_payload_typeexpr(e, enum_name, vname, i)); 
     }
-    0;  break; } case qoz_Pattern_PatWild: { NULL;  break; } default: { void* _qoz_bv_489;
+    0;  break; } case qoz_Pattern_PatWild: { NULL;  break; } default: { void* _qoz_bv_490;
     {
-        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("switch-style match arm received a sub-pattern that requires a runtime test; pat_needs_if_chain is out of sync"))); _qoz_bv_489 = NULL;
+        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("switch-style match arm received a sub-pattern that requires a runtime test; pat_needs_if_chain is out of sync"))); _qoz_bv_490 = NULL;
     }
-    _qoz_bv_489;  break; } } 0; i = i + 1; } }if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
+    _qoz_bv_490;  break; } } 0; i = i + 1; } }if (arm.has_guard) { qoz_emit_push(e, QOZ_STR_LIT("if (")); qoz_emit_emit_expr(e, arm.guard); qoz_emit_push(e, QOZ_STR_LIT(") { ")); qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); qoz_emit_push(e, QOZ_STR_LIT("} ")); }  else { qoz_emit_emit_arm_body_kind(e, is_void, res_tmp, arm.body, body_hint); } qoz_emit_push(e, QOZ_STR_LIT(" break; } ")); 
     }
-    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span psp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_490;
+    0;  break; } case qoz_Pattern_PatTuple: { qoz_Span psp = _qoz_ms_1->payload.PatTuple.f0; void* _qoz_bv_491;
     {
-        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_490 = NULL;
+        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("tuple patterns in match arms are not yet supported"))); _qoz_bv_491 = NULL;
     }
-    _qoz_bv_490;  break; } case qoz_Pattern_PatLitInt: { qoz_Span psp = _qoz_ms_1->payload.PatLitInt.f0; void* _qoz_bv_491;
-    {
-        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("literal pattern reached switch-style match dispatch; pat_needs_if_chain is out of sync"))); _qoz_bv_491 = NULL;
-    }
-    _qoz_bv_491;  break; } case qoz_Pattern_PatLitString: { qoz_Span psp = _qoz_ms_1->payload.PatLitString.f0; void* _qoz_bv_492;
+    _qoz_bv_491;  break; } case qoz_Pattern_PatLitInt: { qoz_Span psp = _qoz_ms_1->payload.PatLitInt.f0; void* _qoz_bv_492;
     {
         (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("literal pattern reached switch-style match dispatch; pat_needs_if_chain is out of sync"))); _qoz_bv_492 = NULL;
     }
-    _qoz_bv_492;  break; } case qoz_Pattern_PatLitBool: { qoz_Span psp = _qoz_ms_1->payload.PatLitBool.f0; void* _qoz_bv_493;
+    _qoz_bv_492;  break; } case qoz_Pattern_PatLitString: { qoz_Span psp = _qoz_ms_1->payload.PatLitString.f0; void* _qoz_bv_493;
     {
         (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("literal pattern reached switch-style match dispatch; pat_needs_if_chain is out of sync"))); _qoz_bv_493 = NULL;
     }
-    _qoz_bv_493;  break; } } 0; 
+    _qoz_bv_493;  break; } case qoz_Pattern_PatLitBool: { qoz_Span psp = _qoz_ms_1->payload.PatLitBool.f0; void* _qoz_bv_494;
+    {
+        (void)(qoz_emit_emit_die(psp, QOZ_STR_LIT("literal pattern reached switch-style match dispatch; pat_needs_if_chain is out of sync"))); _qoz_bv_494 = NULL;
+    }
+    _qoz_bv_494;  break; } } 0; 
     return;
 }
 
@@ -10961,11 +10973,11 @@ qoz_string qoz_emit_enum_name_from_type(qoz_Emitter* e, qoz_TypeExpr* te, qoz_st
     qoz_frame_push("emit_enum_name_from_type");
     qoz_gc_push_root(&e);
     qoz_gc_push_root(&te);
-    qoz_TypeExpr* _qoz_ms_1 = te; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_string _qoz_bv_494;
+    qoz_TypeExpr* _qoz_ms_1 = te; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TENamed: { qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_Vec__qoz_TypeExpr args = _qoz_ms_1->payload.TENamed.f2; qoz_string _qoz_bv_495;
     {
-        if (((args.len) > 0) && ((path.len) >= 1)) { qoz_string last = path.data[(path.len) - 1]; if (qoz_strings_eq_raw(last, bare_enum)) { return qoz_emit_mangle_inst(e, bare_enum, args);} } _qoz_bv_494 = bare_enum;
+        if (((args.len) > 0) && ((path.len) >= 1)) { qoz_string last = path.data[(path.len) - 1]; if (qoz_strings_eq_raw(last, bare_enum)) { return qoz_emit_mangle_inst(e, bare_enum, args);} } _qoz_bv_495 = bare_enum;
     }
-    _qoz_mv_1 = (_qoz_bv_494);  break; } default: { _qoz_mv_1 = (bare_enum);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_495);  break; } default: { _qoz_mv_1 = (bare_enum);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_Vec__qoz_TypeExpr qoz_emit_variant_inst_args(qoz_Emitter* e, qoz_string enum_name, qoz_string bare) {
@@ -10979,22 +10991,22 @@ qoz_TypeExpr* qoz_emit_variant_payload_typeexpr(qoz_Emitter* e, qoz_string enum_
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("emit_variant_payload_typeexpr");
     qoz_gc_push_root(&e);
-    qoz_string bare = qoz_emit_strip_mangled(enum_name); qoz_Span unit_sp = ((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 }); qoz_Option__qoz_Decl* _qoz_ms_1 = qoz_map_get__qoz_string__qoz_Decl(&e->enum_decls, bare); qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_Option__qoz_Decl_None: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(unit_sp));  break; } case qoz_Option__qoz_Decl_Some: { qoz_Decl* d = _qoz_ms_1->payload.Some.f0; qoz_Decl* _qoz_ms_2 = d; qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_Decl_DEnum: { qoz_Vec__qoz_string tparams = _qoz_ms_2->payload.DEnum.f2; qoz_Vec__qoz_VariantDecl variants = _qoz_ms_2->payload.DEnum.f3; qoz_TypeExpr* _qoz_bv_495;
+    qoz_string bare = qoz_emit_strip_mangled(enum_name); qoz_Span unit_sp = ((qoz_Span){ .file = QOZ_STR_LIT(""), .line = 0, .col = 0 }); qoz_Option__qoz_Decl* _qoz_ms_1 = qoz_map_get__qoz_string__qoz_Decl(&e->enum_decls, bare); qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_Option__qoz_Decl_None: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(unit_sp));  break; } case qoz_Option__qoz_Decl_Some: { qoz_Decl* d = _qoz_ms_1->payload.Some.f0; qoz_Decl* _qoz_ms_2 = d; qoz_TypeExpr* _qoz_mv_2 = NULL; switch (_qoz_ms_2->tag) { case qoz_Decl_DEnum: { qoz_Vec__qoz_string tparams = _qoz_ms_2->payload.DEnum.f2; qoz_Vec__qoz_VariantDecl variants = _qoz_ms_2->payload.DEnum.f3; qoz_TypeExpr* _qoz_bv_496;
     {
-        qoz_Vec__qoz_TypeExpr inst_args = qoz_emit_variant_inst_args(e, enum_name, bare); { qoz_Vec__qoz_VariantDecl __col = variants; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_VariantDecl v = __col.data[__i]; (void)v; if (qoz_strings_eq_raw(v.name, variant)) { if ((pos >= 0) && (pos < (v.pos.len))) { if (((tparams.len) > 0) && ((inst_args.len) == (tparams.len))) { return qoz_emit_substitute_type(e, v.pos.data[pos], tparams, inst_args);} return v.pos.data[pos];} } } }_qoz_bv_495 = qoz_make_TypeExpr_TEUnit(unit_sp);
+        qoz_Vec__qoz_TypeExpr inst_args = qoz_emit_variant_inst_args(e, enum_name, bare); { qoz_Vec__qoz_VariantDecl __col = variants; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_VariantDecl v = __col.data[__i]; (void)v; if (qoz_strings_eq_raw(v.name, variant)) { if ((pos >= 0) && (pos < (v.pos.len))) { if (((tparams.len) > 0) && ((inst_args.len) == (tparams.len))) { return qoz_emit_substitute_type(e, v.pos.data[pos], tparams, inst_args);} return v.pos.data[pos];} } } }_qoz_bv_496 = qoz_make_TypeExpr_TEUnit(unit_sp);
     }
-    _qoz_mv_2 = (_qoz_bv_495);  break; } default: { _qoz_mv_2 = (qoz_make_TypeExpr_TEUnit(unit_sp));  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_2 = (_qoz_bv_496);  break; } default: { _qoz_mv_2 = (qoz_make_TypeExpr_TEUnit(unit_sp));  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_string qoz_emit_variant_payload_ctype(qoz_Emitter* e, qoz_string enum_name, qoz_string variant, int64_t pos) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("emit_variant_payload_ctype");
     qoz_gc_push_root(&e);
-    qoz_string bare = qoz_emit_strip_mangled(enum_name); qoz_Option__qoz_Decl* _qoz_ms_1 = qoz_map_get__qoz_string__qoz_Decl(&e->enum_decls, bare); qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_Option__qoz_Decl_None: { _qoz_mv_1 = (QOZ_STR_LIT("int64_t"));  break; } case qoz_Option__qoz_Decl_Some: { qoz_Decl* d = _qoz_ms_1->payload.Some.f0; qoz_Decl* _qoz_ms_2 = d; qoz_string _qoz_mv_2 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_2->tag) { case qoz_Decl_DEnum: { qoz_Vec__qoz_string tparams = _qoz_ms_2->payload.DEnum.f2; qoz_Vec__qoz_VariantDecl variants = _qoz_ms_2->payload.DEnum.f3; qoz_string _qoz_bv_496;
+    qoz_string bare = qoz_emit_strip_mangled(enum_name); qoz_Option__qoz_Decl* _qoz_ms_1 = qoz_map_get__qoz_string__qoz_Decl(&e->enum_decls, bare); qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_Option__qoz_Decl_None: { _qoz_mv_1 = (QOZ_STR_LIT("int64_t"));  break; } case qoz_Option__qoz_Decl_Some: { qoz_Decl* d = _qoz_ms_1->payload.Some.f0; qoz_Decl* _qoz_ms_2 = d; qoz_string _qoz_mv_2 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_2->tag) { case qoz_Decl_DEnum: { qoz_Vec__qoz_string tparams = _qoz_ms_2->payload.DEnum.f2; qoz_Vec__qoz_VariantDecl variants = _qoz_ms_2->payload.DEnum.f3; qoz_string _qoz_bv_497;
     {
-        qoz_Vec__qoz_TypeExpr inst_args = qoz_emit_variant_inst_args(e, enum_name, bare); { qoz_Vec__qoz_VariantDecl __col = variants; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_VariantDecl v = __col.data[__i]; (void)v; if (qoz_strings_eq_raw(v.name, variant)) { if ((pos >= 0) && (pos < (v.pos.len))) { qoz_TypeExpr* subst = ((((tparams.len) > 0) && ((inst_args.len) == (tparams.len))) ? qoz_emit_substitute_type(e, v.pos.data[pos], tparams, inst_args) : v.pos.data[pos]); qoz_gc_push_root(&subst); return qoz_emit_c_type_for(e, subst);} } } }_qoz_bv_496 = QOZ_STR_LIT("int64_t");
+        qoz_Vec__qoz_TypeExpr inst_args = qoz_emit_variant_inst_args(e, enum_name, bare); { qoz_Vec__qoz_VariantDecl __col = variants; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_VariantDecl v = __col.data[__i]; (void)v; if (qoz_strings_eq_raw(v.name, variant)) { if ((pos >= 0) && (pos < (v.pos.len))) { qoz_TypeExpr* subst = ((((tparams.len) > 0) && ((inst_args.len) == (tparams.len))) ? qoz_emit_substitute_type(e, v.pos.data[pos], tparams, inst_args) : v.pos.data[pos]); qoz_gc_push_root(&subst); return qoz_emit_c_type_for(e, subst);} } } }_qoz_bv_497 = QOZ_STR_LIT("int64_t");
     }
-    _qoz_mv_2 = (_qoz_bv_496);  break; } default: { _qoz_mv_2 = (QOZ_STR_LIT("int64_t"));  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_2 = (_qoz_bv_497);  break; } default: { _qoz_mv_2 = (QOZ_STR_LIT("int64_t"));  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_string qoz_emit_strip_mangled(qoz_string name) {
@@ -11060,23 +11072,23 @@ qoz_MainRetKind* qoz_emit_main_return_kind(qoz_TypeExpr* ret) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("emit_main_return_kind");
     qoz_gc_push_root(&ret);
-    qoz_TypeExpr* _qoz_ms_1 = ret; qoz_MainRetKind* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TEUnit: { _qoz_mv_1 = (qoz_make_MainRetKind_MainRetUnit());  break; } case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_MainRetKind* _qoz_bv_497;
+    qoz_TypeExpr* _qoz_ms_1 = ret; qoz_MainRetKind* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_TypeExpr_TEUnit: { _qoz_mv_1 = (qoz_make_MainRetKind_MainRetUnit());  break; } case qoz_TypeExpr_TENamed: { qoz_Span sp = _qoz_ms_1->payload.TENamed.f0; qoz_Vec__qoz_string path = _qoz_ms_1->payload.TENamed.f1; qoz_MainRetKind* _qoz_bv_498;
     {
-        if ((path.len) != 1) { qoz_string _qoz_bv_498;
+        if ((path.len) != 1) { qoz_string _qoz_bv_499;
     {
-        void* _qoz_sb_5676_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5676_25); qoz_interp_push_str(_qoz_sb_5676_25, sp.file); qoz_interp_push_str(_qoz_sb_5676_25, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5676_25, sp.line); qoz_interp_push_str(_qoz_sb_5676_25, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5676_25, sp.col); qoz_interp_push_str(_qoz_sb_5676_25, QOZ_STR_LIT(": main return type must be a primitive integer or unit")); _qoz_bv_498 = qoz_interp_finish(_qoz_sb_5676_25);
+        void* _qoz_sb_5717_25 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5717_25); qoz_interp_push_str(_qoz_sb_5717_25, sp.file); qoz_interp_push_str(_qoz_sb_5717_25, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5717_25, sp.line); qoz_interp_push_str(_qoz_sb_5717_25, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5717_25, sp.col); qoz_interp_push_str(_qoz_sb_5717_25, QOZ_STR_LIT(": main return type must be a primitive integer or unit")); _qoz_bv_499 = qoz_interp_finish(_qoz_sb_5717_25);
     }
-    qoz_fmt_println(_qoz_bv_498); return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));} qoz_string n = path.data[0]; if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i8"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int8_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i16"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int16_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i32"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int32_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i64"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u8"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint8_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u16"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint16_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u32"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint32_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u64"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint64_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("unit"))) { return qoz_make_MainRetKind_MainRetUnit();} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("void"))) { return qoz_make_MainRetKind_MainRetUnit();} qoz_string _qoz_bv_499;
+    qoz_fmt_println(_qoz_bv_499); return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));} qoz_string n = path.data[0]; if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i8"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int8_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i16"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int16_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i32"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int32_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("i64"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u8"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint8_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u16"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint16_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u32"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint32_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("u64"))) { return qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("uint64_t"));} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("unit"))) { return qoz_make_MainRetKind_MainRetUnit();} if (qoz_strings_eq_raw(n, QOZ_STR_LIT("void"))) { return qoz_make_MainRetKind_MainRetUnit();} qoz_string _qoz_bv_500;
     {
-        void* _qoz_sb_5690_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5690_21); qoz_interp_push_str(_qoz_sb_5690_21, sp.file); qoz_interp_push_str(_qoz_sb_5690_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5690_21, sp.line); qoz_interp_push_str(_qoz_sb_5690_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5690_21, sp.col); qoz_interp_push_str(_qoz_sb_5690_21, QOZ_STR_LIT(": main may return only integer types or unit, got '")); qoz_interp_push_str(_qoz_sb_5690_21, n); qoz_interp_push_str(_qoz_sb_5690_21, QOZ_STR_LIT("'")); _qoz_bv_499 = qoz_interp_finish(_qoz_sb_5690_21);
+        void* _qoz_sb_5731_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_5731_21); qoz_interp_push_str(_qoz_sb_5731_21, sp.file); qoz_interp_push_str(_qoz_sb_5731_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5731_21, sp.line); qoz_interp_push_str(_qoz_sb_5731_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_5731_21, sp.col); qoz_interp_push_str(_qoz_sb_5731_21, QOZ_STR_LIT(": main may return only integer types or unit, got '")); qoz_interp_push_str(_qoz_sb_5731_21, n); qoz_interp_push_str(_qoz_sb_5731_21, QOZ_STR_LIT("'")); _qoz_bv_500 = qoz_interp_finish(_qoz_sb_5731_21);
     }
-    qoz_fmt_println(_qoz_bv_499); _qoz_bv_497 = qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));
+    qoz_fmt_println(_qoz_bv_500); _qoz_bv_498 = qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));
     }
-    _qoz_mv_1 = (_qoz_bv_497);  break; } default: { qoz_MainRetKind* _qoz_bv_500;
+    _qoz_mv_1 = (_qoz_bv_498);  break; } default: { qoz_MainRetKind* _qoz_bv_501;
     {
-        qoz_fmt_println(QOZ_STR_LIT("main return type must be a primitive integer or unit")); _qoz_bv_500 = qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));
+        qoz_fmt_println(QOZ_STR_LIT("main return type must be a primitive integer or unit")); _qoz_bv_501 = qoz_make_MainRetKind_MainRetInt(QOZ_STR_LIT("int64_t"));
     }
-    _qoz_mv_1 = (_qoz_bv_500);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_501);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 void qoz_emit_emit_main_tail(qoz_Emitter* e, qoz_MainRetKind* kind, qoz_Expr* tail) {
@@ -11282,19 +11294,19 @@ qoz_TypeExpr* qoz_ty_ty_to_type_expr_at(qoz_Ty* t, qoz_Span sp) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("ty_ty_to_type_expr_at");
     qoz_gc_push_root(&t);
-    qoz_Ty* _qoz_ms_1 = t; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_Ty_TyInt: { qoz_IntInfo info = _qoz_ms_1->payload.TyInt.f0; _qoz_mv_1 = (qoz_make_TypeExpr_TENamed(sp, qoz_ty_ints_to_path(info.width, info.is_signed), qoz_vec_make__qoz_TypeExpr()));  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo info = _qoz_ms_1->payload.TyFloat.f0; qoz_TypeExpr* _qoz_bv_501;
+    qoz_Ty* _qoz_ms_1 = t; qoz_TypeExpr* _qoz_mv_1 = NULL; switch (_qoz_ms_1->tag) { case qoz_Ty_TyInt: { qoz_IntInfo info = _qoz_ms_1->payload.TyInt.f0; _qoz_mv_1 = (qoz_make_TypeExpr_TENamed(sp, qoz_ty_ints_to_path(info.width, info.is_signed), qoz_vec_make__qoz_TypeExpr()));  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo info = _qoz_ms_1->payload.TyFloat.f0; qoz_TypeExpr* _qoz_bv_502;
     {
-        qoz_Vec__qoz_string path = qoz_vec_make__qoz_string(); if (info.width == 32) { qoz_vec_push__qoz_string(&path, QOZ_STR_LIT("f32")); }  else { qoz_vec_push__qoz_string(&path, QOZ_STR_LIT("f64")); } _qoz_bv_501 = qoz_make_TypeExpr_TENamed(sp, path, qoz_vec_make__qoz_TypeExpr());
+        qoz_Vec__qoz_string path = qoz_vec_make__qoz_string(); if (info.width == 32) { qoz_vec_push__qoz_string(&path, QOZ_STR_LIT("f32")); }  else { qoz_vec_push__qoz_string(&path, QOZ_STR_LIT("f64")); } _qoz_bv_502 = qoz_make_TypeExpr_TENamed(sp, path, qoz_vec_make__qoz_TypeExpr());
     }
-    _qoz_mv_1 = (_qoz_bv_501);  break; } case qoz_Ty_TyBool: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("bool")));  break; } case qoz_Ty_TyChar: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("char")));  break; } case qoz_Ty_TyString: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("string")));  break; } case qoz_Ty_TyCstring: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("cstring")));  break; } case qoz_Ty_TyUnit: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(sp));  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("nil")));  break; } case qoz_Ty_TyError: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("?")));  break; } case qoz_Ty_TyPtr: { qoz_Ty* inner = _qoz_ms_1->payload.TyPtr.f0; _qoz_mv_1 = (qoz_make_TypeExpr_TEPtr(sp, qoz_ty_ty_to_type_expr_at(inner, sp)));  break; } case qoz_Ty_TyAdt: { qoz_string name = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyAdt.f1; _qoz_mv_1 = (qoz_ty_named_with_args(sp, name, args));  break; } case qoz_Ty_TyRecord: { qoz_string name = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyRecord.f1; _qoz_mv_1 = (qoz_ty_named_with_args(sp, name, args));  break; } case qoz_Ty_TyFn: { qoz_Vec__qoz_Ty fparams = _qoz_ms_1->payload.TyFn.f0; qoz_Ty* ret = _qoz_ms_1->payload.TyFn.f1; qoz_TypeExpr* _qoz_bv_502;
+    _qoz_mv_1 = (_qoz_bv_502);  break; } case qoz_Ty_TyBool: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("bool")));  break; } case qoz_Ty_TyChar: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("char")));  break; } case qoz_Ty_TyString: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("string")));  break; } case qoz_Ty_TyCstring: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("cstring")));  break; } case qoz_Ty_TyUnit: { _qoz_mv_1 = (qoz_make_TypeExpr_TEUnit(sp));  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("nil")));  break; } case qoz_Ty_TyError: { _qoz_mv_1 = (qoz_ty_single_path_te(sp, QOZ_STR_LIT("?")));  break; } case qoz_Ty_TyPtr: { qoz_Ty* inner = _qoz_ms_1->payload.TyPtr.f0; _qoz_mv_1 = (qoz_make_TypeExpr_TEPtr(sp, qoz_ty_ty_to_type_expr_at(inner, sp)));  break; } case qoz_Ty_TyAdt: { qoz_string name = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyAdt.f1; _qoz_mv_1 = (qoz_ty_named_with_args(sp, name, args));  break; } case qoz_Ty_TyRecord: { qoz_string name = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyRecord.f1; _qoz_mv_1 = (qoz_ty_named_with_args(sp, name, args));  break; } case qoz_Ty_TyFn: { qoz_Vec__qoz_Ty fparams = _qoz_ms_1->payload.TyFn.f0; qoz_Ty* ret = _qoz_ms_1->payload.TyFn.f1; qoz_TypeExpr* _qoz_bv_503;
     {
-        qoz_Vec__qoz_TypeExpr pte = qoz_vec_make__qoz_TypeExpr(); { qoz_Vec__qoz_Ty __col = fparams; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* p = __col.data[__i]; (void)p; qoz_vec_push__qoz_TypeExpr(&pte, qoz_ty_ty_to_type_expr_at(p, sp)); } }_qoz_bv_502 = qoz_make_TypeExpr_TEFn(sp, pte, qoz_ty_ty_to_type_expr_at(ret, sp));
+        qoz_Vec__qoz_TypeExpr pte = qoz_vec_make__qoz_TypeExpr(); { qoz_Vec__qoz_Ty __col = fparams; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* p = __col.data[__i]; (void)p; qoz_vec_push__qoz_TypeExpr(&pte, qoz_ty_ty_to_type_expr_at(p, sp)); } }_qoz_bv_503 = qoz_make_TypeExpr_TEFn(sp, pte, qoz_ty_ty_to_type_expr_at(ret, sp));
     }
-    _qoz_mv_1 = (_qoz_bv_502);  break; } case qoz_Ty_TyTuple: { qoz_Vec__qoz_Ty elems = _qoz_ms_1->payload.TyTuple.f0; qoz_TypeExpr* _qoz_bv_503;
+    _qoz_mv_1 = (_qoz_bv_503);  break; } case qoz_Ty_TyTuple: { qoz_Vec__qoz_Ty elems = _qoz_ms_1->payload.TyTuple.f0; qoz_TypeExpr* _qoz_bv_504;
     {
-        qoz_Vec__qoz_TypeExpr ete = qoz_vec_make__qoz_TypeExpr(); { qoz_Vec__qoz_Ty __col = elems; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* el = __col.data[__i]; (void)el; qoz_vec_push__qoz_TypeExpr(&ete, qoz_ty_ty_to_type_expr_at(el, sp)); } }_qoz_bv_503 = qoz_make_TypeExpr_TETuple(sp, ete);
+        qoz_Vec__qoz_TypeExpr ete = qoz_vec_make__qoz_TypeExpr(); { qoz_Vec__qoz_Ty __col = elems; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* el = __col.data[__i]; (void)el; qoz_vec_push__qoz_TypeExpr(&ete, qoz_ty_ty_to_type_expr_at(el, sp)); } }_qoz_bv_504 = qoz_make_TypeExpr_TETuple(sp, ete);
     }
-    _qoz_mv_1 = (_qoz_bv_503);  break; } case qoz_Ty_TyVar: { qoz_string name = _qoz_ms_1->payload.TyVar.f1; _qoz_mv_1 = (qoz_ty_single_path_te(sp, name));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_504);  break; } case qoz_Ty_TyVar: { qoz_string name = _qoz_ms_1->payload.TyVar.f1; _qoz_mv_1 = (qoz_ty_single_path_te(sp, name));  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 qoz_Vec__qoz_string qoz_ty_ints_to_path(int64_t width, bool is_signed) {
@@ -11325,27 +11337,27 @@ qoz_string qoz_ty_ty_show(qoz_Ty* t) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("ty_ty_show");
     qoz_gc_push_root(&t);
-    qoz_Ty* _qoz_ms_1 = t; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_Ty_TyInt: { qoz_IntInfo i = _qoz_ms_1->payload.TyInt.f0; qoz_string _qoz_bv_504;
+    qoz_Ty* _qoz_ms_1 = t; qoz_string _qoz_mv_1 = ((qoz_string){ NULL, 0 }); switch (_qoz_ms_1->tag) { case qoz_Ty_TyInt: { qoz_IntInfo i = _qoz_ms_1->payload.TyInt.f0; qoz_string _qoz_bv_505;
     {
-        qoz_string prefix = ((i.is_signed) ? QOZ_STR_LIT("i") : QOZ_STR_LIT("u")); qoz_string w = ((i.width == 8) ? QOZ_STR_LIT("8") : ((i.width == 16) ? QOZ_STR_LIT("16") : ((i.width == 32) ? QOZ_STR_LIT("32") : QOZ_STR_LIT("64")))); _qoz_bv_504 = qoz_strings_cat(prefix, w);
+        qoz_string prefix = ((i.is_signed) ? QOZ_STR_LIT("i") : QOZ_STR_LIT("u")); qoz_string w = ((i.width == 8) ? QOZ_STR_LIT("8") : ((i.width == 16) ? QOZ_STR_LIT("16") : ((i.width == 32) ? QOZ_STR_LIT("32") : QOZ_STR_LIT("64")))); _qoz_bv_505 = qoz_strings_cat(prefix, w);
     }
-    _qoz_mv_1 = (_qoz_bv_504);  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo f = _qoz_ms_1->payload.TyFloat.f0; _qoz_mv_1 = (((f.width == 32) ? QOZ_STR_LIT("f32") : QOZ_STR_LIT("f64")));  break; } case qoz_Ty_TyBool: { _qoz_mv_1 = (QOZ_STR_LIT("bool"));  break; } case qoz_Ty_TyChar: { _qoz_mv_1 = (QOZ_STR_LIT("char"));  break; } case qoz_Ty_TyString: { _qoz_mv_1 = (QOZ_STR_LIT("string"));  break; } case qoz_Ty_TyCstring: { _qoz_mv_1 = (QOZ_STR_LIT("cstring"));  break; } case qoz_Ty_TyUnit: { _qoz_mv_1 = (QOZ_STR_LIT("unit"));  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (QOZ_STR_LIT("nil"));  break; } case qoz_Ty_TyError: { _qoz_mv_1 = (QOZ_STR_LIT("<error>"));  break; } case qoz_Ty_TyVar: { qoz_string n = _qoz_ms_1->payload.TyVar.f1; _qoz_mv_1 = (n);  break; } case qoz_Ty_TyPtr: { qoz_Ty* inner = _qoz_ms_1->payload.TyPtr.f0; _qoz_mv_1 = (qoz_strings_cat(QOZ_STR_LIT("*"), qoz_ty_ty_show(inner)));  break; } case qoz_Ty_TyAdt: { qoz_string n = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyAdt.f1; qoz_string _qoz_bv_505;
-    {
-        if ((args.len) == 0) { return n;} qoz_string out = qoz_strings_cat(n, QOZ_STR_LIT("<")); int64_t i = 0; { qoz_Vec__qoz_Ty __col = args; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* a = __col.data[__i]; (void)a; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(a)); i = i + 1; } }_qoz_bv_505 = qoz_strings_cat(out, QOZ_STR_LIT(">"));
-    }
-    _qoz_mv_1 = (_qoz_bv_505);  break; } case qoz_Ty_TyRecord: { qoz_string n = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyRecord.f1; qoz_string _qoz_bv_506;
+    _qoz_mv_1 = (_qoz_bv_505);  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo f = _qoz_ms_1->payload.TyFloat.f0; _qoz_mv_1 = (((f.width == 32) ? QOZ_STR_LIT("f32") : QOZ_STR_LIT("f64")));  break; } case qoz_Ty_TyBool: { _qoz_mv_1 = (QOZ_STR_LIT("bool"));  break; } case qoz_Ty_TyChar: { _qoz_mv_1 = (QOZ_STR_LIT("char"));  break; } case qoz_Ty_TyString: { _qoz_mv_1 = (QOZ_STR_LIT("string"));  break; } case qoz_Ty_TyCstring: { _qoz_mv_1 = (QOZ_STR_LIT("cstring"));  break; } case qoz_Ty_TyUnit: { _qoz_mv_1 = (QOZ_STR_LIT("unit"));  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (QOZ_STR_LIT("nil"));  break; } case qoz_Ty_TyError: { _qoz_mv_1 = (QOZ_STR_LIT("<error>"));  break; } case qoz_Ty_TyVar: { qoz_string n = _qoz_ms_1->payload.TyVar.f1; _qoz_mv_1 = (n);  break; } case qoz_Ty_TyPtr: { qoz_Ty* inner = _qoz_ms_1->payload.TyPtr.f0; _qoz_mv_1 = (qoz_strings_cat(QOZ_STR_LIT("*"), qoz_ty_ty_show(inner)));  break; } case qoz_Ty_TyAdt: { qoz_string n = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyAdt.f1; qoz_string _qoz_bv_506;
     {
         if ((args.len) == 0) { return n;} qoz_string out = qoz_strings_cat(n, QOZ_STR_LIT("<")); int64_t i = 0; { qoz_Vec__qoz_Ty __col = args; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* a = __col.data[__i]; (void)a; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(a)); i = i + 1; } }_qoz_bv_506 = qoz_strings_cat(out, QOZ_STR_LIT(">"));
     }
-    _qoz_mv_1 = (_qoz_bv_506);  break; } case qoz_Ty_TyFn: { qoz_Vec__qoz_Ty params = _qoz_ms_1->payload.TyFn.f0; qoz_Ty* ret = _qoz_ms_1->payload.TyFn.f1; qoz_string _qoz_bv_507;
+    _qoz_mv_1 = (_qoz_bv_506);  break; } case qoz_Ty_TyRecord: { qoz_string n = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty args = _qoz_ms_1->payload.TyRecord.f1; qoz_string _qoz_bv_507;
     {
-        qoz_string out = QOZ_STR_LIT("fn("); int64_t i = 0; { qoz_Vec__qoz_Ty __col = params; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* p = __col.data[__i]; (void)p; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(p)); i = i + 1; } }out = qoz_strings_cat(out, QOZ_STR_LIT(") -> ")); _qoz_bv_507 = qoz_strings_cat(out, qoz_ty_ty_show(ret));
+        if ((args.len) == 0) { return n;} qoz_string out = qoz_strings_cat(n, QOZ_STR_LIT("<")); int64_t i = 0; { qoz_Vec__qoz_Ty __col = args; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* a = __col.data[__i]; (void)a; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(a)); i = i + 1; } }_qoz_bv_507 = qoz_strings_cat(out, QOZ_STR_LIT(">"));
     }
-    _qoz_mv_1 = (_qoz_bv_507);  break; } case qoz_Ty_TyTuple: { qoz_Vec__qoz_Ty elems = _qoz_ms_1->payload.TyTuple.f0; qoz_string _qoz_bv_508;
+    _qoz_mv_1 = (_qoz_bv_507);  break; } case qoz_Ty_TyFn: { qoz_Vec__qoz_Ty params = _qoz_ms_1->payload.TyFn.f0; qoz_Ty* ret = _qoz_ms_1->payload.TyFn.f1; qoz_string _qoz_bv_508;
     {
-        qoz_string out = QOZ_STR_LIT("("); int64_t i = 0; { qoz_Vec__qoz_Ty __col = elems; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* e = __col.data[__i]; (void)e; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(e)); i = i + 1; } }_qoz_bv_508 = qoz_strings_cat(out, QOZ_STR_LIT(")"));
+        qoz_string out = QOZ_STR_LIT("fn("); int64_t i = 0; { qoz_Vec__qoz_Ty __col = params; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* p = __col.data[__i]; (void)p; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(p)); i = i + 1; } }out = qoz_strings_cat(out, QOZ_STR_LIT(") -> ")); _qoz_bv_508 = qoz_strings_cat(out, qoz_ty_ty_show(ret));
     }
-    _qoz_mv_1 = (_qoz_bv_508);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_508);  break; } case qoz_Ty_TyTuple: { qoz_Vec__qoz_Ty elems = _qoz_ms_1->payload.TyTuple.f0; qoz_string _qoz_bv_509;
+    {
+        qoz_string out = QOZ_STR_LIT("("); int64_t i = 0; { qoz_Vec__qoz_Ty __col = elems; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_Ty* e = __col.data[__i]; (void)e; if (i > 0) { out = qoz_strings_cat(out, QOZ_STR_LIT(", ")); } out = qoz_strings_cat(out, qoz_ty_ty_show(e)); i = i + 1; } }_qoz_bv_509 = qoz_strings_cat(out, QOZ_STR_LIT(")"));
+    }
+    _qoz_mv_1 = (_qoz_bv_509);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 bool qoz_ty_arg_is_nil_accepted_by(qoz_Ty* param) {
@@ -11380,15 +11392,15 @@ bool qoz_ty_arg_passes_to_param(qoz_Ty* param, qoz_Ty* arg) {
     qoz_frame_push("ty_arg_passes_to_param");
     qoz_gc_push_root(&param);
     qoz_gc_push_root(&arg);
-    qoz_Ty* _qoz_ms_1 = arg; bool _qoz_mv_1 = false; switch (_qoz_ms_1->tag) { case qoz_Ty_TyError: { _qoz_mv_1 = (true);  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (qoz_ty_arg_is_nil_accepted_by(param));  break; } case qoz_Ty_TyInt: { qoz_IntInfo ai = _qoz_ms_1->payload.TyInt.f0; bool _qoz_bv_509;
+    qoz_Ty* _qoz_ms_1 = arg; bool _qoz_mv_1 = false; switch (_qoz_ms_1->tag) { case qoz_Ty_TyError: { _qoz_mv_1 = (true);  break; } case qoz_Ty_TyNil: { _qoz_mv_1 = (qoz_ty_arg_is_nil_accepted_by(param));  break; } case qoz_Ty_TyInt: { qoz_IntInfo ai = _qoz_ms_1->payload.TyInt.f0; bool _qoz_bv_510;
     {
-        if (ai.untyped && qoz_ty_untyped_int_fits(param)) { return true;} qoz_Ty* _qoz_ms_2 = param; bool _qoz_mv_2 = false; switch (_qoz_ms_2->tag) { case qoz_Ty_TyInt: { qoz_IntInfo pi = _qoz_ms_2->payload.TyInt.f0; _qoz_mv_2 = (qoz_ty_int_widens_to(pi, ai));  break; } default: { _qoz_mv_2 = (false);  break; } } _qoz_bv_509 = _qoz_mv_2;
+        if (ai.untyped && qoz_ty_untyped_int_fits(param)) { return true;} qoz_Ty* _qoz_ms_2 = param; bool _qoz_mv_2 = false; switch (_qoz_ms_2->tag) { case qoz_Ty_TyInt: { qoz_IntInfo pi = _qoz_ms_2->payload.TyInt.f0; _qoz_mv_2 = (qoz_ty_int_widens_to(pi, ai));  break; } default: { _qoz_mv_2 = (false);  break; } } _qoz_bv_510 = _qoz_mv_2;
     }
-    _qoz_mv_1 = (_qoz_bv_509);  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo af = _qoz_ms_1->payload.TyFloat.f0; bool _qoz_bv_510;
+    _qoz_mv_1 = (_qoz_bv_510);  break; } case qoz_Ty_TyFloat: { qoz_FloatInfo af = _qoz_ms_1->payload.TyFloat.f0; bool _qoz_bv_511;
     {
-        if (af.untyped && qoz_ty_untyped_float_fits(param)) { return true;} qoz_Ty* _qoz_ms_3 = param; bool _qoz_mv_3 = false; switch (_qoz_ms_3->tag) { case qoz_Ty_TyFloat: { qoz_FloatInfo pf = _qoz_ms_3->payload.TyFloat.f0; _qoz_mv_3 = (pf.width >= af.width);  break; } default: { _qoz_mv_3 = (false);  break; } } _qoz_bv_510 = _qoz_mv_3;
+        if (af.untyped && qoz_ty_untyped_float_fits(param)) { return true;} qoz_Ty* _qoz_ms_3 = param; bool _qoz_mv_3 = false; switch (_qoz_ms_3->tag) { case qoz_Ty_TyFloat: { qoz_FloatInfo pf = _qoz_ms_3->payload.TyFloat.f0; _qoz_mv_3 = (pf.width >= af.width);  break; } default: { _qoz_mv_3 = (false);  break; } } _qoz_bv_511 = _qoz_mv_3;
     }
-    _qoz_mv_1 = (_qoz_bv_510);  break; } default: { _qoz_mv_1 = (false);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_1 = (_qoz_bv_511);  break; } default: { _qoz_mv_1 = (false);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 bool qoz_ty_same_constructor_assignable(qoz_Ty* param, qoz_Ty* arg) {
@@ -11396,15 +11408,15 @@ bool qoz_ty_same_constructor_assignable(qoz_Ty* param, qoz_Ty* arg) {
     qoz_frame_push("ty_same_constructor_assignable");
     qoz_gc_push_root(&param);
     qoz_gc_push_root(&arg);
-    qoz_Ty* _qoz_ms_1 = param; bool _qoz_mv_1 = false; switch (_qoz_ms_1->tag) { case qoz_Ty_TyAdt: { qoz_string pn = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty pa = _qoz_ms_1->payload.TyAdt.f1; qoz_Ty* _qoz_ms_2 = arg; bool _qoz_mv_2 = false; switch (_qoz_ms_2->tag) { case qoz_Ty_TyAdt: { qoz_string an = _qoz_ms_2->payload.TyAdt.f0; qoz_Vec__qoz_Ty aa = _qoz_ms_2->payload.TyAdt.f1; bool _qoz_bv_511;
-    {
-        if (!qoz_strings_eq_raw(pn, an)) { return false;} if ((pa.len) != (aa.len)) { return false;} int64_t i = 0; while (i < (pa.len)) { if (!qoz_ty_ty_assignable(pa.data[i], aa.data[i])) { return false;} i = i + 1; } _qoz_bv_511 = true;
-    }
-    _qoz_mv_2 = (_qoz_bv_511);  break; } default: { _qoz_mv_2 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } case qoz_Ty_TyRecord: { qoz_string pn = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty pa = _qoz_ms_1->payload.TyRecord.f1; qoz_Ty* _qoz_ms_3 = arg; bool _qoz_mv_3 = false; switch (_qoz_ms_3->tag) { case qoz_Ty_TyRecord: { qoz_string an = _qoz_ms_3->payload.TyRecord.f0; qoz_Vec__qoz_Ty aa = _qoz_ms_3->payload.TyRecord.f1; bool _qoz_bv_512;
+    qoz_Ty* _qoz_ms_1 = param; bool _qoz_mv_1 = false; switch (_qoz_ms_1->tag) { case qoz_Ty_TyAdt: { qoz_string pn = _qoz_ms_1->payload.TyAdt.f0; qoz_Vec__qoz_Ty pa = _qoz_ms_1->payload.TyAdt.f1; qoz_Ty* _qoz_ms_2 = arg; bool _qoz_mv_2 = false; switch (_qoz_ms_2->tag) { case qoz_Ty_TyAdt: { qoz_string an = _qoz_ms_2->payload.TyAdt.f0; qoz_Vec__qoz_Ty aa = _qoz_ms_2->payload.TyAdt.f1; bool _qoz_bv_512;
     {
         if (!qoz_strings_eq_raw(pn, an)) { return false;} if ((pa.len) != (aa.len)) { return false;} int64_t i = 0; while (i < (pa.len)) { if (!qoz_ty_ty_assignable(pa.data[i], aa.data[i])) { return false;} i = i + 1; } _qoz_bv_512 = true;
     }
-    _qoz_mv_3 = (_qoz_bv_512);  break; } default: { _qoz_mv_3 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_3);  break; } case qoz_Ty_TyPtr: { qoz_Ty* pi = _qoz_ms_1->payload.TyPtr.f0; qoz_Ty* _qoz_ms_4 = arg; bool _qoz_mv_4 = false; switch (_qoz_ms_4->tag) { case qoz_Ty_TyPtr: { qoz_Ty* ai = _qoz_ms_4->payload.TyPtr.f0; _qoz_mv_4 = (qoz_ty_ty_assignable(pi, ai));  break; } default: { _qoz_mv_4 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_4);  break; } default: { _qoz_mv_1 = (false);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
+    _qoz_mv_2 = (_qoz_bv_512);  break; } default: { _qoz_mv_2 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_2);  break; } case qoz_Ty_TyRecord: { qoz_string pn = _qoz_ms_1->payload.TyRecord.f0; qoz_Vec__qoz_Ty pa = _qoz_ms_1->payload.TyRecord.f1; qoz_Ty* _qoz_ms_3 = arg; bool _qoz_mv_3 = false; switch (_qoz_ms_3->tag) { case qoz_Ty_TyRecord: { qoz_string an = _qoz_ms_3->payload.TyRecord.f0; qoz_Vec__qoz_Ty aa = _qoz_ms_3->payload.TyRecord.f1; bool _qoz_bv_513;
+    {
+        if (!qoz_strings_eq_raw(pn, an)) { return false;} if ((pa.len) != (aa.len)) { return false;} int64_t i = 0; while (i < (pa.len)) { if (!qoz_ty_ty_assignable(pa.data[i], aa.data[i])) { return false;} i = i + 1; } _qoz_bv_513 = true;
+    }
+    _qoz_mv_3 = (_qoz_bv_513);  break; } default: { _qoz_mv_3 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_3);  break; } case qoz_Ty_TyPtr: { qoz_Ty* pi = _qoz_ms_1->payload.TyPtr.f0; qoz_Ty* _qoz_ms_4 = arg; bool _qoz_mv_4 = false; switch (_qoz_ms_4->tag) { case qoz_Ty_TyPtr: { qoz_Ty* ai = _qoz_ms_4->payload.TyPtr.f0; _qoz_mv_4 = (qoz_ty_ty_assignable(pi, ai));  break; } default: { _qoz_mv_4 = (false);  break; } } _qoz_mv_1 = (_qoz_mv_4);  break; } default: { _qoz_mv_1 = (false);  break; } } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return _qoz_mv_1;
 }
 
 bool qoz_ty_ty_assignable(qoz_Ty* param, qoz_Ty* arg) {

@@ -4720,10 +4720,21 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
             if len(hint_args) > 0 {
                 let mangled = mangle_inst(e, enum_name, hint_args)
                 push(e, `qoz_make_{mangled}_{variant_name}(`)
+                // Substitute the enum's tparams with the hint's args so
+                // each positional payload gets the right concrete type
+                // hint propagated into its emission. Without this a
+                // nested variant constructor like `Some(None)` in a
+                // `Option<Option<i64>>` context loses the inner T and
+                // falls back to the wrong instantiation.
+                let payload_hints = variant_payload_hints(e, enum_name, variant_name, hint_args)
                 var i: i64 = 0
                 for a in args {
                     if i > 0 { push(e, ", ") }
-                    emit_expr(e, a)
+                    if i < len(payload_hints) {
+                        emit_value_with_hint(e, a, payload_hints[i])
+                    } else {
+                        emit_expr(e, a)
+                    }
                     i += 1
                 }
                 push(e, ")")
@@ -4734,6 +4745,36 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
         }
     }
     emit_call(e, callee, type_args, args)
+}
+
+// Resolve the positional payload TypeExprs of `variant` in `enum_name`,
+// substituted with `hint_args` for the enum's tparams. Used to hand a
+// concrete type hint to each argument of a nested variant
+// constructor.
+let variant_payload_hints(e: *Emitter, enum_name: string, variant: string, hint_args: Vec<TypeExpr>): Vec<TypeExpr> = {
+    var out: Vec<TypeExpr> = vec.make()
+    match map.get(&e.enum_decls, enum_name) {
+    | None    -> out
+    | Some(d) -> {
+        match d {
+        | DEnum(_, _, tparams, variants) -> {
+            for v in variants {
+                if strings.eq_raw(v.name, variant) {
+                    for pte in v.pos {
+                        if len(tparams) > 0 && len(hint_args) == len(tparams) {
+                            vec.push(&out, substitute_type(e, pte, tparams, hint_args))
+                        } else {
+                            vec.push(&out, pte)
+                        }
+                    }
+                }
+            }
+            out
+        }
+        | _ -> out
+        }
+    }
+    }
 }
 
 let hint_args_for_enum(hint: TypeExpr, enum_name: string): Vec<TypeExpr> = {
