@@ -29,6 +29,12 @@ type TyContext = {
     // a qualified path (Enum.Variant) is required at the call site
     // unless context pins the enum.
     variant_homes: Map<string, Vec<string>>,
+    // Owning package of every named type. Empty string means the
+    // type lives in the prelude or the user's entry package and is
+    // accessible by bare name. A non-empty home means the type came
+    // through an explicit import and must be reached as
+    // `<pkg>.<TypeName>`.
+    type_homes:    Map<string, string>,
     errors:       Vec<TypeError>,
     type_params:  Map<string, bool>,
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
@@ -49,6 +55,7 @@ let make_ctx(): TyContext = TyContext {
     packages:    map.make(),
     variant_of:  map.make(),
     variant_homes: map.make(),
+    type_homes:  map.make(),
     errors:      vec.make(),
     type_params: map.make(),
     expr_types:  map.make(),
@@ -2263,9 +2270,19 @@ let rewrite_container_builtin(tc: *TyContext, env: *Env, sp: Span, name: string,
     // binding annotation passed in `expected`. With no annotation the
     // call is ambiguous and we report it as such.
     if strings.eq_raw(name, "make") {
-        let info = unwrap_container_ty(expected)
+        // make<Vec<T>>() and make<Map<K, V>>() pin the container kind
+        // through the explicit type argument; the rest of the
+        // dispatch reads the container args from there. Falling back
+        // to the binding annotation is the concise form
+        // (`var xs: Vec<i64> = make()`).
+        let info = if len(type_args) == 1 {
+            let ta_ty = resolve_type(tc, type_args[0])
+            unwrap_container_ty(ta_ty)
+        } else {
+            unwrap_container_ty(expected)
+        }
         if strings.eq_raw(info.kind, "") {
-            record_error(tc, sp, `make() needs a type annotation; the surrounding let or var must declare 'Vec<T>' or 'Map<K, V>'`)
+            record_error(tc, sp, `make() needs a type annotation or an explicit type argument like 'make<Vec<i64>>()'`)
             return Some(ECall(sp, EIdent(sp, "make"), type_args, args))
         }
         let pkg = if strings.eq_raw(info.kind, "Vec") { "vec" } else { "map" }

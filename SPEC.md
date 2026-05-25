@@ -474,7 +474,7 @@ The following names are reserved for container primitives. Each dispatches on th
 
 | Builtin | Operand kind | Lowering |
 |---------|--------------|----------|
-| `make()` | binding-typed `Vec<T>` or `Map<K, V>` | constructs an empty container of the inferred type |
+| `make()` | binding-typed `Vec<T>` or `Map<K, V>` | constructs an empty container of the inferred type. The explicit form `make<Vec<T>>()` / `make<Map<K, V>>()` carries the kind at the call site when no annotation is available. |
 | `push(&xs, v)` | `&Vec<T>`, `v: T` | appends `v` to the vector |
 | `pop(&xs): Option<T>` | `&Vec<T>` | removes and returns the last element, `None` if empty |
 | `clear(&xs)` | `&Vec<T>` or `&Map<K, V>` | drops every element, length becomes zero |
