@@ -185,6 +185,39 @@ let variant_callee_name(e: *Emitter, callee: Expr): string = {
     }
 }
 
+// Pull the explicit enum name out of a qualified variant callee.
+// Returns the empty string when the callee is a bare identifier; the
+// caller falls back to the global variant_of mapping in that case.
+let variant_enum_from_callee(callee: Expr): string = {
+    match callee {
+    | EField(_, base, _) -> {
+        match base {
+        | EIdent(_, en) -> en
+        | _             -> ""
+        }
+    }
+    | EPath(_, segs) -> {
+        if len(segs) == 2 { segs[0] } else { "" }
+    }
+    | _ -> ""
+    }
+}
+
+// Resolve the enum that owns the variant call. The qualified form
+// (Enum.Variant) takes precedence so the path the user wrote is
+// respected even when the bare name is registered to a different
+// enum in variant_of.
+let resolve_variant_enum(e: *Emitter, callee: Expr, variant_name: string): string = {
+    let explicit = variant_enum_from_callee(callee)
+    if !strings.eq_raw(explicit, "") {
+        return explicit
+    }
+    match map.get(&e.variant_of, variant_name) {
+    | Some(en) -> en
+    | None     -> ""
+    }
+}
+
 let generic_callee_name(e: *Emitter, callee: Expr): string = {
     match callee {
     | EIdent(_, name) -> name
@@ -3107,8 +3140,8 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
     // All three lower to `qoz_make_<Enum>_<Variant>(...)`.
     let variant_name = variant_callee_name(e, callee)
     if !strings.eq_raw(variant_name, "") {
-        match map.get(&e.variant_of, variant_name) {
-        | Some(enum_name) -> {
+        let enum_name = resolve_variant_enum(e, callee, variant_name)
+        if !strings.eq_raw(enum_name, "") {
             push(e, `qoz_make_{enum_name}_{variant_name}(`)
             var i: i64 = 0
             for a in args {
@@ -3118,8 +3151,6 @@ let emit_call(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Exp
             }
             push(e, ")")
             return
-        }
-        | None -> { }
         }
     }
     // Generic function call: rewrite the callee to the mangled instantiation name.
@@ -4714,8 +4745,8 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
     // and qualified EPath `Enum::Variant(...)`.
     let variant_name = variant_callee_name(e, callee)
     if !strings.eq_raw(variant_name, "") {
-        match map.get(&e.variant_of, variant_name) {
-        | Some(enum_name) -> {
+        let enum_name = resolve_variant_enum(e, callee, variant_name)
+        if !strings.eq_raw(enum_name, "") {
             let hint_args = hint_args_for_enum(hint, enum_name)
             if len(hint_args) > 0 {
                 let mangled = mangle_inst(e, enum_name, hint_args)
@@ -4740,8 +4771,6 @@ let emit_call_with_hint(e: *Emitter, callee: Expr, type_args: Vec<TypeExpr>, arg
                 push(e, ")")
                 return
             }
-        }
-        | None -> { }
         }
     }
     emit_call(e, callee, type_args, args)

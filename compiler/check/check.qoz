@@ -21,7 +21,14 @@ type TyContext = {
     fns:          Map<string, Decl>,
     externs:      Map<string, Decl>,
     packages:     Map<string, bool>,
+    // First-home for each variant name. Single-home queries hit this
+    // map; ambiguity detection consults variant_homes.
     variant_of:   Map<string, string>,
+    // Every enum that declares a given variant name. Length 1 is the
+    // common case; longer entries mean the bare name is ambiguous and
+    // a qualified path (Enum.Variant) is required at the call site
+    // unless context pins the enum.
+    variant_homes: Map<string, Vec<string>>,
     errors:       Vec<TypeError>,
     type_params:  Map<string, bool>,
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
@@ -41,6 +48,7 @@ let make_ctx(): TyContext = TyContext {
     externs:     map.make(),
     packages:    map.make(),
     variant_of:  map.make(),
+    variant_homes: map.make(),
     errors:      vec.make(),
     type_params: map.make(),
     expr_types:  map.make(),
@@ -70,7 +78,19 @@ let register_decl(tc: *TyContext, d: Decl) = {
     | DEnum(_, name, _, variants)     -> {
         tc.enums[name] = d
         for v in variants {
-            tc.variant_of[v.name] = name
+            if !map.contains(&tc.variant_of, v.name) {
+                tc.variant_of[v.name] = name
+            }
+            var homes: Vec<string> = match map.get(&tc.variant_homes, v.name) {
+            | Some(h) -> h
+            | None    -> vec.make()
+            }
+            var seen = false
+            for h in homes { if strings.eq_raw(h, name) { seen = true } }
+            if !seen {
+                vec.push(&homes, name)
+                tc.variant_homes[v.name] = homes
+            }
         }
     }
     | DStruct(_, name, _, _)          -> { tc.structs[name] = d }
@@ -848,14 +868,19 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args
             // TyError silently.
             if map.contains(&tc.variant_of, fn_name) {
                 // Arity check: each variant constructor takes exactly
-                // its declared positional payload count.
-                let enum_n = variant_enum_name(tc, fn_name)
+                // its declared positional payload count. The qualified
+                // callee form (Enum.Variant) pins the enum name even
+                // when the bare variant is ambiguous.
+                let qual_enum = explicit_enum_from_callee(callee)
+                let enum_n = if strings.eq_raw(qual_enum, "") {
+                    variant_enum_name(tc, fn_name)
+                } else { qual_enum }
                 let want = len(variant_positional_types(tc, enum_n, fn_name))
                 let got  = len(arg_tys)
                 if want != got {
                     record_error(tc, sp, `variant '{enum_n}::{fn_name}' takes {want} argument(s), got {got}`)
                 }
-                return synth_variant_ctor_with_args(tc, fn_name, arg_tys)
+                return synth_variant_ctor_with_args_in(tc, fn_name, enum_n, arg_tys)
             }
             // The name may refer to a fn-typed local binding (a
             // captured closure, a higher-order parameter). Look up
@@ -1076,13 +1101,39 @@ let synth_variant_ctor(tc: *TyContext, name: string): Ty = {
     synth_variant_ctor_with_args(tc, name, vec.make())
 }
 
+// Pull an explicit enum name out of a qualified variant callee. The
+// EField form is what rewrite_call produces when it disambiguates a
+// bare variant call; the EPath form is what the parser produces for
+// `Enum::Variant` syntax. Returns "" for bare-identifier callees.
+let explicit_enum_from_callee(callee: Expr): string = {
+    match callee {
+    | EField(_, base, _) -> {
+        match base {
+        | EIdent(_, en) -> en
+        | _             -> ""
+        }
+    }
+    | EPath(_, segs) -> {
+        if len(segs) == 2 { segs[0] } else { "" }
+    }
+    | _ -> ""
+    }
+}
+
 // Like synth_variant_ctor, but unifies the value-argument types against
 // the variant's declared positional payload to bind the enum's type
 // parameters. `Option.Some(42)` returns `Option<i64>` rather than the
 // open `Option<T>`. Falls back to the open form when no args are
 // available or unification leaves a tparam unbound.
 let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<Ty>): Ty = {
-    let enum_name = variant_enum_name(tc, name)
+    synth_variant_ctor_with_args_in(tc, name, variant_enum_name(tc, name), arg_tys)
+}
+
+// Variant constructor synth with an explicit enum name. The enum
+// argument is the one chosen by qualified-call resolution; for the
+// unqualified path the caller passes variant_enum_name(tc, name) as
+// the default.
+let synth_variant_ctor_with_args_in(tc: *TyContext, name: string, enum_name: string, arg_tys: Vec<Ty>): Ty = {
     if strings.eq_raw(enum_name, "") { return ty.ty_error_() }
     let variant_pos = variant_positional_types(tc, enum_name, name)
     // Arity check. A diagnostic-bearing site that has a span (the
@@ -2078,6 +2129,26 @@ let is_ty_unit_or_error(t: Ty): bool = {
     }
 }
 
+// Pick the enum-home for an unqualified variant call. Returns the
+// enum the call should resolve against, or `""` when none of the
+// candidates matches the expected type.
+//
+// The expected type is the bidirectional hint: a let-binding's
+// annotation, a function parameter's declared type, or the
+// scrutinee type at a match site. When the hint pins exactly one
+// of the candidates, that enum wins. When the hint is open or
+// unrelated, the call site is ambiguous and the caller reports an
+// error with the candidate list.
+let pick_variant_home(homes: Vec<string>, expected: Ty): string = {
+    match expected {
+    | TyAdt(name, _) -> {
+        for h in homes { if strings.eq_raw(h, name) { return h } }
+        ""
+    }
+    | _ -> ""
+    }
+}
+
 let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Expr = {
     // The interpolation desugar emits every slot as a call to
     // __qoz_interp_push_str. Once the slot's value type is known,
@@ -2087,6 +2158,34 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
     let bare_name = match callee {
     | EIdent(_, n) -> n
     | _            -> ""
+    }
+    // Variant-name ambiguity. When two or more enums declare the same
+    // variant name, an unqualified call must be pinned by the
+    // expected type. Otherwise the call site is reported with the
+    // candidate list so the user can switch to Enum.Variant(...).
+    if !strings.eq_raw(bare_name, "") {
+        match map.get(&tc.variant_homes, bare_name) {
+        | Some(homes) -> {
+            if len(homes) > 1 {
+                let chosen = pick_variant_home(homes, expected)
+                if strings.eq_raw(chosen, "") {
+                    var msg = `variant '{bare_name}' is declared in `
+                    var i: i64 = 0
+                    for h in homes {
+                        if i > 0 { msg = strings.cat(msg, ", ") }
+                        msg = strings.cat(msg, h)
+                        i += 1
+                    }
+                    msg = strings.cat(msg, `; qualify the call as Enum.{bare_name}(...) or add a type annotation`)
+                    record_error(tc, sp, msg)
+                } else {
+                    let qualified: Expr = EField(sp, EIdent(sp, chosen), bare_name)
+                    return rewrite_call(tc, env, sp, qualified, type_args, args, expected)
+                }
+            }
+        }
+        | None -> { }
+        }
     }
     if strings.eq_raw(bare_name, "__qoz_interp_push_str") && len(args) == 2 {
         let val_ty = synth(tc, env, args[1])
