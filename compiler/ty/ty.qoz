@@ -16,8 +16,8 @@ type FloatInfo = {
 }
 
 type Ty =
-    | TyInt(IntInfo)
-    | TyFloat(FloatInfo)
+    | TyInt(ty.IntInfo)
+    | TyFloat(ty.FloatInfo)
     | TyBool
     | TyChar
     | TyString
@@ -25,43 +25,43 @@ type Ty =
     | TyUnit
     | TyNil
     | TyError
-    | TyPtr(Ty)
-    | TyAdt(string, Vec<Ty>)
-    | TyRecord(string, Vec<Ty>)
-    | TyFn(Vec<Ty>, Ty)
-    | TyTuple(Vec<Ty>)
+    | TyPtr(ty.Ty)
+    | TyAdt(string, Vec<ty.Ty>)
+    | TyRecord(string, Vec<ty.Ty>)
+    | TyFn(Vec<ty.Ty>, ty.Ty)
+    | TyTuple(Vec<ty.Ty>)
     | TyVar(i64, string)
 
-let ty_int_(width: i64, is_signed: bool): Ty = TyInt(IntInfo { width: width, is_signed: is_signed, untyped: false })
+let ty_int_(width: i64, is_signed: bool): ty.Ty = TyInt(IntInfo { width: width, is_signed: is_signed, untyped: false })
 
-let ty_int_untyped(): Ty = TyInt(IntInfo { width: 0, is_signed: true, untyped: true })
+let ty_int_untyped(): ty.Ty = TyInt(IntInfo { width: 0, is_signed: true, untyped: true })
 
-let ty_float_(width: i64): Ty = TyFloat(FloatInfo { width: width, untyped: false })
+let ty_float_(width: i64): ty.Ty = TyFloat(FloatInfo { width: width, untyped: false })
 
-let ty_float_untyped(): Ty = TyFloat(FloatInfo { width: 0, untyped: true })
+let ty_float_untyped(): ty.Ty = TyFloat(FloatInfo { width: 0, untyped: true })
 
-let ty_bool_(): Ty   = TyBool
-let ty_char_(): Ty   = TyChar
-let ty_string_(): Ty = TyString
-let ty_cstring_(): Ty = TyCstring
-let ty_unit_(): Ty   = TyUnit
-let ty_nil_(): Ty    = TyNil
-let ty_error_(): Ty  = TyError
+let ty_bool_(): ty.Ty   = TyBool
+let ty_char_(): ty.Ty   = TyChar
+let ty_string_(): ty.Ty = TyString
+let ty_cstring_(): ty.Ty = TyCstring
+let ty_unit_(): ty.Ty   = TyUnit
+let ty_nil_(): ty.Ty    = TyNil
+let ty_error_(): ty.Ty  = TyError
 
-let ty_ptr_(inner: Ty): Ty = TyPtr(inner)
+let ty_ptr_(inner: ty.Ty): ty.Ty = TyPtr(inner)
 
-let ty_adt_(name: string, args: Vec<Ty>): Ty = TyAdt(name, args)
-let ty_record_(name: string, args: Vec<Ty>): Ty = TyRecord(name, args)
-let ty_fn_(params: Vec<Ty>, ret: Ty): Ty = TyFn(params, ret)
-let ty_tuple_(elems: Vec<Ty>): Ty = TyTuple(elems)
+let ty_adt_(name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt(name, args)
+let ty_record_(name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord(name, args)
+let ty_fn_(params: Vec<ty.Ty>, ret: ty.Ty): ty.Ty = TyFn(params, ret)
+let ty_tuple_(elems: Vec<ty.Ty>): ty.Ty = TyTuple(elems)
 
-let ty_var_(name: string): Ty = TyVar(0, name)
+let ty_var_(name: string): ty.Ty = TyVar(0, name)
 
-let ty_is_error(t: Ty): bool = { match t { | TyError -> true | _ -> false } }
+let ty_is_error(t: ty.Ty): bool = { match t { | TyError -> true | _ -> false } }
 
-let ty_is_unit(t: Ty): bool = { match t { | TyUnit -> true | _ -> false } }
+let ty_is_unit(t: ty.Ty): bool = { match t { | TyUnit -> true | _ -> false } }
 
-let ty_is_nil(t: Ty): bool = { match t { | TyNil -> true | _ -> false } }
+let ty_is_nil(t: ty.Ty): bool = { match t { | TyNil -> true | _ -> false } }
 
 // Integer / float / bool predicates. Type variables are accepted as
 // "possibly integer / float / bool" because they stand for a type
@@ -69,27 +69,27 @@ let ty_is_nil(t: Ty): bool = { match t { | TyNil -> true | _ -> false } }
 // per instantiation, which catches a real mismatch then. Operator
 // overloads on user records also rely on the check being permissive
 // here.
-let ty_is_int(t: Ty): bool = { match t { | TyInt(_) -> true | TyVar(_, _) -> true | _ -> false } }
+let ty_is_int(t: ty.Ty): bool = { match t { | TyInt(_) -> true | TyVar(_, _) -> true | _ -> false } }
 
-let ty_is_float(t: Ty): bool = { match t { | TyFloat(_) -> true | TyVar(_, _) -> true | _ -> false } }
+let ty_is_float(t: ty.Ty): bool = { match t { | TyFloat(_) -> true | TyVar(_, _) -> true | _ -> false } }
 
-let ty_is_bool(t: Ty): bool = { match t { | TyBool -> true | TyVar(_, _) -> true | _ -> false } }
+let ty_is_bool(t: ty.Ty): bool = { match t { | TyBool -> true | TyVar(_, _) -> true | _ -> false } }
 
 // Numeric for arithmetic and comparison: integer (any width), float
 // (any width), and char (treated as an i8 for ordering and equality).
 // User records that overload `+`, `<`, etc. also pass here because
 // the dispatch is resolved later in emit; rejecting the record now
 // would block valid overloaded code.
-let ty_is_numeric(t: Ty): bool = {
+let ty_is_numeric(t: ty.Ty): bool = {
     match t {
     | TyInt(_) | TyFloat(_) | TyChar | TyVar(_, _) | TyRecord(_, _) -> true
     | _ -> false
     }
 }
 
-let ty_is_ptr(t: Ty): bool = { match t { | TyPtr(_) -> true | _ -> false } }
+let ty_is_ptr(t: ty.Ty): bool = { match t { | TyPtr(_) -> true | _ -> false } }
 
-let ty_eq(a: Ty, b: Ty): bool = {
+let ty_eq(a: ty.Ty, b: ty.Ty): bool = {
     match a {
     | TyInt(ai) -> {
         match b {
@@ -149,7 +149,7 @@ let ty_eq(a: Ty, b: Ty): bool = {
     }
 }
 
-let ty_to_type_expr_at(t: Ty, sp: Span): TypeExpr = {
+let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     match t {
     | TyInt(info) -> TENamed(sp, ints_to_path(info.width, info.is_signed), vec.make())
     | TyFloat(info) -> {
@@ -168,12 +168,12 @@ let ty_to_type_expr_at(t: Ty, sp: Span): TypeExpr = {
     | TyAdt(name, args) -> named_with_args(sp, name, args)
     | TyRecord(name, args) -> named_with_args(sp, name, args)
     | TyFn(fparams, ret) -> {
-        var pte: Vec<TypeExpr> = vec.make()
+        var pte: Vec<ast.TypeExpr> = vec.make()
         for p in fparams { vec.push(&pte, ty_to_type_expr_at(p, sp)) }
         TEFn(sp, pte, ty_to_type_expr_at(ret, sp))
     }
     | TyTuple(elems) -> {
-        var ete: Vec<TypeExpr> = vec.make()
+        var ete: Vec<ast.TypeExpr> = vec.make()
         for el in elems { vec.push(&ete, ty_to_type_expr_at(el, sp)) }
         TETuple(sp, ete)
     }
@@ -198,21 +198,21 @@ let ints_to_path(width: i64, is_signed: bool): Vec<string> = {
     path
 }
 
-let single_path_te(sp: Span, name: string): TypeExpr = {
+let single_path_te(sp: ast.Span, name: string): ast.TypeExpr = {
     var path: Vec<string> = vec.make()
     vec.push(&path, name)
     TENamed(sp, path, vec.make())
 }
 
-let named_with_args(sp: Span, name: string, args: Vec<Ty>): TypeExpr = {
+let named_with_args(sp: ast.Span, name: string, args: Vec<ty.Ty>): ast.TypeExpr = {
     var path: Vec<string> = vec.make()
     vec.push(&path, name)
-    var te_args: Vec<TypeExpr> = vec.make()
+    var te_args: Vec<ast.TypeExpr> = vec.make()
     for a in args { vec.push(&te_args, ty_to_type_expr_at(a, sp)) }
     TENamed(sp, path, te_args)
 }
 
-let ty_args_eq(a: Vec<Ty>, b: Vec<Ty>): bool = {
+let ty_args_eq(a: Vec<ty.Ty>, b: Vec<ty.Ty>): bool = {
     if len(a) != len(b) { return false }
     var i: i64 = 0
     while i < len(a) {
@@ -225,7 +225,7 @@ let ty_args_eq(a: Vec<Ty>, b: Vec<Ty>): bool = {
 // Render a Ty as a short, user-facing string for diagnostics. The
 // format mirrors the surface syntax: `i32`, `string`, `Vec<i64>`,
 // `Result<i64, string>`, `*Foo`, `(i32, i32)`, `fn(i32) -> i64`.
-let ty_show(t: Ty): string = {
+let ty_show(t: ty.Ty): string = {
     match t {
     | TyInt(i) -> {
         let prefix = if i.is_signed { "i" } else { "u" }
@@ -284,33 +284,33 @@ let ty_show(t: Ty): string = {
 // rule is stricter than full unification but looser than equality.
 // Type errors and the open type variable propagate as accepting any
 // type so a single mismatch does not cascade.
-let arg_is_nil_accepted_by(param: Ty): bool = {
+let arg_is_nil_accepted_by(param: ty.Ty): bool = {
     match param {
     | TyPtr(_) -> true
     | _        -> false
     }
 }
 
-let untyped_int_fits(param: Ty): bool = {
+let untyped_int_fits(param: ty.Ty): bool = {
     match param {
     | TyInt(_) -> true
     | _        -> false
     }
 }
 
-let untyped_float_fits(param: Ty): bool = {
+let untyped_float_fits(param: ty.Ty): bool = {
     match param {
     | TyFloat(_) -> true
     | _          -> false
     }
 }
 
-let int_widens_to(param_int: IntInfo, arg_int: IntInfo): bool = {
+let int_widens_to(param_int: ty.IntInfo, arg_int: ty.IntInfo): bool = {
     if param_int.is_signed != arg_int.is_signed { return false }
     arg_int.width <= param_int.width
 }
 
-let arg_passes_to_param(param: Ty, arg: Ty): bool = {
+let arg_passes_to_param(param: ty.Ty, arg: ty.Ty): bool = {
     match arg {
     | TyError -> true
     | TyNil   -> arg_is_nil_accepted_by(param)
@@ -338,7 +338,7 @@ let arg_passes_to_param(param: Ty, arg: Ty): bool = {
 // argument type is assignable. Lets `Option<T>` (an open type from a
 // variant constructor whose payload binds T) flow into an `Option<i64>`
 // parameter without first unifying the constructor's type arguments.
-let same_constructor_assignable(param: Ty, arg: Ty): bool = {
+let same_constructor_assignable(param: ty.Ty, arg: ty.Ty): bool = {
     match param {
     | TyAdt(pn, pa) -> {
         match arg {
@@ -377,7 +377,7 @@ let same_constructor_assignable(param: Ty, arg: Ty): bool = {
     }
 }
 
-let ty_assignable(param: Ty, arg: Ty): bool = {
+let ty_assignable(param: ty.Ty, arg: ty.Ty): bool = {
     if ty_eq(param, arg) { return true }
     if arg_passes_to_param(param, arg) { return true }
     // A type variable acts as a wildcard for generics not yet

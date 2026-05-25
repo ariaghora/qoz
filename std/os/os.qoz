@@ -46,7 +46,7 @@ external let process_exec_raw(argv: *string, n: i64,
 // stdout and stderr it produced. The first element of `argv` is the
 // program; the rest are its arguments. The function does not block on
 // other work, so very large output streams sit fully in memory.
-let process_exec(argv: Vec<string>): ProcessResult = {
+let process_exec(argv: Vec<string>): os.ProcessResult = {
     var exit_code: i64 = 0
     var so: string = ""
     var se: string = ""

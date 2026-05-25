@@ -20,21 +20,21 @@ import compiler/tokenize
 import compiler/ast
 
 type Parser = {
-    tokens:       Vec<Token>,
+    tokens:       Vec<tokenize.Token>,
     pos:          i64,
     file:         string,
     errors:       Vec<string>,
     in_match_arm: i64,
 }
 
-let make_parser(tokens: Vec<Token>, file: string): Parser =
+let make_parser(tokens: Vec<tokenize.Token>, file: string): Parser =
     Parser { tokens: tokens, pos: 0, file: file, errors: vec.make(), in_match_arm: 0 }
 
 let at_eof(p: *Parser): bool = p.pos >= len(p.tokens)
 
-let peek(p: *Parser): Token = {
+let peek(p: *Parser): tokenize.Token = {
     if p.pos >= len(p.tokens) {
-        return Token { kind: TokEOF, text: "", line: 0, col: 0 }
+        return tokenize.Token { kind: TokEOF, text: "", line: 0, col: 0 }
     }
     p.tokens[p.pos]
 }
@@ -45,55 +45,55 @@ let advance(p: *Parser) = {
 
 // --- Token predicates ---
 
-let is_kw(t: Token, kw: string): bool =
+let is_kw(t: tokenize.Token, kw: string): bool =
     match t.kind {
     | TokKeyword -> strings.eq_raw(t.text, kw)
     | _          -> false
     }
 
-let is_punct(t: Token, sym: string): bool =
+let is_punct(t: tokenize.Token, sym: string): bool =
     match t.kind {
     | TokPunct -> strings.eq_raw(t.text, sym)
     | _        -> false
     }
 
-let is_ident(t: Token): bool =
+let is_ident(t: tokenize.Token): bool =
     match t.kind {
     | TokIdent -> true
     | _        -> false
     }
 
-let is_int_lit(t: Token): bool =
+let is_int_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokInt -> true
     | _      -> false
     }
 
-let is_float_lit(t: Token): bool =
+let is_float_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokFloat -> true
     | _        -> false
     }
 
-let is_str_lit(t: Token): bool =
+let is_str_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokString | TokInterpString -> true
     | _                           -> false
     }
 
-let is_interp_str_lit(t: Token): bool =
+let is_interp_str_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokInterpString -> true
     | _               -> false
     }
 
-let is_char_lit(t: Token): bool =
+let is_char_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokChar -> true
     | _       -> false
     }
 
-let span_of(p: *Parser, t: Token): Span = ast.make_span(p.file, t.line, t.col)
+let span_of(p: *Parser, t: tokenize.Token): ast.Span = ast.make_span(p.file, t.line, t.col)
 
 // --- Error recording ---
 
@@ -101,7 +101,7 @@ let record_error(p: *Parser, msg: string) = {
     vec.push(&p.errors, msg)
 }
 
-let err_unexpected(p: *Parser, want: string, t: Token) = {
+let err_unexpected(p: *Parser, want: string, t: tokenize.Token) = {
     record_error(p, `expected {want} at line {t.line} (got '{t.text}')`)
 }
 
@@ -132,7 +132,7 @@ let expect_ident(p: *Parser): string = {
 
 // --- Type expressions ---
 
-let parse_type(p: *Parser): TypeExpr = {
+let parse_type(p: *Parser): ast.TypeExpr = {
     let t = peek(p)
     let span = span_of(p, t)
     if is_punct(t, "*") {
@@ -151,7 +151,7 @@ let parse_type(p: *Parser): TypeExpr = {
             }
             return TEUnit(span)
         }
-        var elems: Vec<TypeExpr> = vec.make()
+        var elems: Vec<ast.TypeExpr> = vec.make()
         vec.push(&elems, parse_type(p))
         while is_punct(peek(p), ",") {
             advance(p)
@@ -180,7 +180,7 @@ let parse_type(p: *Parser): TypeExpr = {
                 advance(p)
             }
         }
-        var args: Vec<TypeExpr> = vec.make()
+        var args: Vec<ast.TypeExpr> = vec.make()
         if is_punct(peek(p), "<") {
             advance(p)
             vec.push(&args, parse_type(p))
@@ -201,7 +201,7 @@ let parse_type(p: *Parser): TypeExpr = {
 
 // --- Expressions ---
 
-let parse_expr(p: *Parser): Expr = {
+let parse_expr(p: *Parser): ast.Expr = {
     let lhs = parse_logical_or(p)
     let t = peek(p)
     let span = span_of(p, t)
@@ -248,7 +248,7 @@ let parse_expr(p: *Parser): Expr = {
     lhs
 }
 
-let parse_logical_or(p: *Parser): Expr = {
+let parse_logical_or(p: *Parser): ast.Expr = {
     var lhs = parse_logical_and(p)
     while is_punct(peek(p), "||") {
         let span = span_of(p, peek(p))
@@ -259,7 +259,7 @@ let parse_logical_or(p: *Parser): Expr = {
     lhs
 }
 
-let parse_logical_and(p: *Parser): Expr = {
+let parse_logical_and(p: *Parser): ast.Expr = {
     var lhs = parse_bitor(p)
     while is_punct(peek(p), "&&") {
         let span = span_of(p, peek(p))
@@ -270,7 +270,7 @@ let parse_logical_and(p: *Parser): Expr = {
     lhs
 }
 
-let parse_bitor(p: *Parser): Expr = {
+let parse_bitor(p: *Parser): ast.Expr = {
     var lhs = parse_bitxor(p)
     while is_punct(peek(p), "|") && p.in_match_arm == 0 {
         let span = span_of(p, peek(p))
@@ -281,7 +281,7 @@ let parse_bitor(p: *Parser): Expr = {
     lhs
 }
 
-let parse_bitxor(p: *Parser): Expr = {
+let parse_bitxor(p: *Parser): ast.Expr = {
     var lhs = parse_bitand(p)
     while is_punct(peek(p), "^") {
         let span = span_of(p, peek(p))
@@ -292,7 +292,7 @@ let parse_bitxor(p: *Parser): Expr = {
     lhs
 }
 
-let parse_bitand(p: *Parser): Expr = {
+let parse_bitand(p: *Parser): ast.Expr = {
     var lhs = parse_compare(p)
     while is_punct(peek(p), "&") && !is_punct(peek(p), "&&") {
         let span = span_of(p, peek(p))
@@ -303,7 +303,7 @@ let parse_bitand(p: *Parser): Expr = {
     lhs
 }
 
-let bin_op_for(sym: string): BinaryOp = {
+let bin_op_for(sym: string): ast.BinaryOp = {
     if strings.eq_raw(sym, "==") { return BOpEq }
     if strings.eq_raw(sym, "!=") { return BOpNe }
     if strings.eq_raw(sym, "<=") { return BOpLe }
@@ -317,11 +317,11 @@ let bin_op_for(sym: string): BinaryOp = {
     BOpMod
 }
 
-let is_cmp_punct(t: Token): bool =
+let is_cmp_punct(t: tokenize.Token): bool =
     is_punct(t, "==") || is_punct(t, "!=") || is_punct(t, "<") ||
     is_punct(t, ">") || is_punct(t, "<=") || is_punct(t, ">=")
 
-let parse_compare(p: *Parser): Expr = {
+let parse_compare(p: *Parser): ast.Expr = {
     var lhs = parse_shift(p)
     while is_cmp_punct(peek(p)) {
         let tok = peek(p)
@@ -343,12 +343,12 @@ let is_double_gt_adjacent(p: *Parser): bool = {
     a.line == b.line && b.col == a.col + 1
 }
 
-let parse_shift(p: *Parser): Expr = {
+let parse_shift(p: *Parser): ast.Expr = {
     var lhs = parse_addsub(p)
     while is_punct(peek(p), "<<") || is_double_gt_adjacent(p) {
         let tok = peek(p)
         let span = span_of(p, tok)
-        let op: BinaryOp = if is_punct(tok, "<<") { BOpShl } else { BOpShr }
+        let op: ast.BinaryOp = if is_punct(tok, "<<") { BOpShl } else { BOpShr }
         if is_punct(tok, "<<") {
             advance(p)
         } else {
@@ -361,7 +361,7 @@ let parse_shift(p: *Parser): Expr = {
     lhs
 }
 
-let parse_addsub(p: *Parser): Expr = {
+let parse_addsub(p: *Parser): ast.Expr = {
     var lhs = parse_muldiv(p)
     while is_punct(peek(p), "+") || is_punct(peek(p), "-") {
         let tok = peek(p)
@@ -374,7 +374,7 @@ let parse_addsub(p: *Parser): Expr = {
     lhs
 }
 
-let parse_muldiv(p: *Parser): Expr = {
+let parse_muldiv(p: *Parser): ast.Expr = {
     var lhs = parse_unary(p)
     while is_punct(peek(p), "*") || is_punct(peek(p), "/") || is_punct(peek(p), "%") {
         let tok = peek(p)
@@ -387,7 +387,7 @@ let parse_muldiv(p: *Parser): Expr = {
     lhs
 }
 
-let parse_unary(p: *Parser): Expr = {
+let parse_unary(p: *Parser): ast.Expr = {
     let tok = peek(p)
     let span = span_of(p, tok)
     if is_punct(tok, "-") {
@@ -413,9 +413,9 @@ let parse_unary(p: *Parser): Expr = {
     parse_postfix(p)
 }
 
-let peek_at(p: *Parser, offset: i64): Token = {
+let peek_at(p: *Parser, offset: i64): tokenize.Token = {
     if p.pos + offset >= len(p.tokens) {
-        return Token { kind: TokEOF, text: "", line: 0, col: 0 }
+        return tokenize.Token { kind: TokEOF, text: "", line: 0, col: 0 }
     }
     p.tokens[p.pos + offset]
 }
@@ -449,7 +449,7 @@ let looks_like_call_type_args(p: *Parser): bool = {
     is_punct(peek_at(p, off), "(")
 }
 
-let is_token_eof(t: Token): bool =
+let is_token_eof(t: tokenize.Token): bool =
     match t.kind {
     | TokEOF -> true
     | _      -> false
@@ -465,9 +465,9 @@ let looks_like_record_literal(p: *Parser): bool = {
     false
 }
 
-let parse_record_literal(p: *Parser, span: Span, type_path: Vec<string>): Expr = {
+let parse_record_literal(p: *Parser, span: ast.Span, type_path: Vec<string>): ast.Expr = {
     expect_punct(p, "{")
-    var fields: Vec<RecordFieldLit> = vec.make()
+    var fields: Vec<ast.RecordFieldLit> = vec.make()
     while !is_punct(peek(p), "}") && !at_eof(p) {
         let start_pos = p.pos
         // `..base` introduces a partial-update: every field not listed
@@ -478,22 +478,22 @@ let parse_record_literal(p: *Parser, span: Span, type_path: Vec<string>): Expr =
         if is_punct(peek(p), "..") {
             advance(p)
             let base = parse_expr(p)
-            vec.push(&fields, RecordFieldLit { name: "..", value: base })
+            vec.push(&fields, ast.RecordFieldLit { name: "..", value: base })
         } else {
             let name = expect_ident(p)
             expect_punct(p, ":")
             let value = parse_expr(p)
-            vec.push(&fields, RecordFieldLit { name: name, value: value })
+            vec.push(&fields, ast.RecordFieldLit { name: name, value: value })
         }
         if is_punct(peek(p), ",") { advance(p) }
         if p.pos == start_pos { advance(p) }
     }
     expect_punct(p, "}")
-    let te: TypeExpr = TENamed(span, type_path, vec.make())
+    let te: ast.TypeExpr = TENamed(span, type_path, vec.make())
     ERecord(span, te, fields)
 }
 
-let parse_postfix(p: *Parser): Expr = {
+let parse_postfix(p: *Parser): ast.Expr = {
     var e = parse_atom(p)
     var more = true
     while more {
@@ -513,12 +513,28 @@ let parse_postfix(p: *Parser): Expr = {
                 e = parse_record_literal(p, span, segs)
                 handled = true
             }
+            | EField(_, base, field) -> {
+                // Qualified record literal: `TypeName { ... }`.
+                // The parser produces EField(EIdent(pkg), TypeName);
+                // re-flatten into a two-segment path the resolver can
+                // hand to the qualifier-aware type lookup.
+                match base {
+                | EIdent(_, pkg) -> {
+                    var path: Vec<string> = vec.make()
+                    vec.push(&path, pkg)
+                    vec.push(&path, field)
+                    e = parse_record_literal(p, span, path)
+                    handled = true
+                }
+                | _ -> { }
+                }
+            }
             | _ -> { }
             }
             if !handled { more = false }
         } else if is_punct(tok, "<") && looks_like_call_type_args(p) {
             advance(p)
-            var type_args: Vec<TypeExpr> = vec.make()
+            var type_args: Vec<ast.TypeExpr> = vec.make()
             vec.push(&type_args, parse_type(p))
             while is_punct(peek(p), ",") {
                 advance(p)
@@ -526,7 +542,7 @@ let parse_postfix(p: *Parser): Expr = {
             }
             expect_punct(p, ">")
             expect_punct(p, "(")
-            var args: Vec<Expr> = vec.make()
+            var args: Vec<ast.Expr> = vec.make()
             if !is_punct(peek(p), ")") {
                 vec.push(&args, parse_expr(p))
                 while is_punct(peek(p), ",") {
@@ -552,7 +568,7 @@ let parse_postfix(p: *Parser): Expr = {
             }
             if !handled_sizeof {
                 advance(p)
-                var args: Vec<Expr> = vec.make()
+                var args: Vec<ast.Expr> = vec.make()
                 if !is_punct(peek(p), ")") {
                     vec.push(&args, parse_expr(p))
                     // Trailing comma is allowed: `f(a, b,)` keeps the
@@ -614,11 +630,11 @@ let looks_like_closure(p: *Parser): bool = {
     false
 }
 
-let parse_closure(p: *Parser): Expr = {
+let parse_closure(p: *Parser): ast.Expr = {
     let open_tok = peek(p)
     let span = span_of(p, open_tok)
     advance(p)
-    var params: Vec<ClosureParam> = vec.make()
+    var params: Vec<ast.ClosureParam> = vec.make()
     if !is_punct(peek(p), ")") {
         var more = true
         while more {
@@ -626,7 +642,7 @@ let parse_closure(p: *Parser): Expr = {
             let name = expect_ident(p)
             expect_punct(p, ":")
             let ty = parse_type(p)
-            vec.push(&params, ClosureParam { name: name, ty: ty })
+            vec.push(&params, ast.ClosureParam { name: name, ty: ty })
             if is_punct(peek(p), ",") {
                 advance(p)
             } else {
@@ -639,7 +655,7 @@ let parse_closure(p: *Parser): Expr = {
         }
     }
     expect_punct(p, ")")
-    var ret_ty: TypeExpr = TEUnit(span)
+    var ret_ty: ast.TypeExpr = TEUnit(span)
     if is_punct(peek(p), ":") {
         advance(p)
         ret_ty = parse_type(p)
@@ -740,7 +756,7 @@ let scan_interp_end(body: string, start: i64): i64 = {
 // Re-tokenize the interpolation body and parse it as a single
 // expression. `text` is the substring inside the `{...}` (without the
 // braces). `span` locates the start for diagnostics.
-let build_interp_expr(text: string, span: Span): Expr = {
+let build_interp_expr(text: string, span: ast.Span): ast.Expr = {
     let tokens = tokenize.run(text)
     var sub = make_parser(tokens, span.file)
     parse_expr(&sub)
@@ -784,7 +800,7 @@ let str_byte_advance(body: string, i: i64): i64 = {
     1
 }
 
-let build_string_lit_or_interp(raw: string, span: Span): Expr = {
+let build_string_lit_or_interp(raw: string, span: ast.Span): ast.Expr = {
     let n = len(raw)
     if n < 2 { return EString(span, raw) }
     let body = strings.slice(raw, 1, n - 1)
@@ -823,7 +839,7 @@ let build_string_lit_or_interp(raw: string, span: Span): Expr = {
     }
 
     var template = "\""
-    var args: Vec<Expr> = vec.make()
+    var args: Vec<ast.Expr> = vec.make()
     i = 0
     while i < bn {
         let b = strings.byte_at(body, i)
@@ -861,7 +877,7 @@ let build_string_lit_or_interp(raw: string, span: Span): Expr = {
     interp_block(template, args, span)
 }
 
-let interp_var_name(span: Span): string = {
+let interp_var_name(span: ast.Span): string = {
     strings.cat("_qoz_sb_", strings.cat(`{span.line}`, strings.cat("_", `{span.col}`)))
 }
 
@@ -888,7 +904,7 @@ let split_template_chunks(template: string): Vec<string> = {
     chunks
 }
 
-let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
+let interp_block(template: string, args: Vec<ast.Expr>, span: ast.Span): ast.Expr = {
     let sb_name = interp_var_name(span)
 
     // The interpolation builder is a runtime-allocated, opaque buffer.
@@ -897,22 +913,22 @@ let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
     // user-callable surface, and no dependency on std/strings.
     var void_path: Vec<string> = vec.make()
     vec.push(&void_path, "void")
-    let void_te: TypeExpr = TENamed(span, void_path, vec.make())
-    let sb_te: TypeExpr   = TEPtr(span, void_te)
+    let void_te: ast.TypeExpr = TENamed(span, void_path, vec.make())
+    let sb_te: ast.TypeExpr   = TEPtr(span, void_te)
 
-    let init_call: Expr = builtin_call(span, "__qoz_interp_init", vec.make())
+    let init_call: ast.Expr = builtin_call(span, "__qoz_interp_init", vec.make())
 
-    var stmts: Vec<Stmt> = vec.make()
+    var stmts: Vec<ast.Stmt> = vec.make()
     vec.push(&stmts, SLet(span, sb_name, sb_te, init_call))
 
-    let sb_id: Expr = EIdent(span, sb_name)
+    let sb_id: ast.Expr = EIdent(span, sb_name)
 
     let chunks = split_template_chunks(template)
     var idx: i64 = 0
     while idx < len(args) {
         let chunk = chunks[idx]
         if len(chunk) > 0 {
-            let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(chunk, "\"")))
+            let lit_arg: ast.Expr = EString(span, strings.cat("\"", strings.cat(chunk, "\"")))
             vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, lit_arg))))
         }
         // The per-type push name is decided at check time once the
@@ -925,38 +941,38 @@ let interp_block(template: string, args: Vec<Expr>, span: Span): Expr = {
     }
     let tail_chunk = chunks[len(args)]
     if len(tail_chunk) > 0 {
-        let lit_arg: Expr = EString(span, strings.cat("\"", strings.cat(tail_chunk, "\"")))
+        let lit_arg: ast.Expr = EString(span, strings.cat("\"", strings.cat(tail_chunk, "\"")))
         vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, lit_arg))))
     }
-    let finish_call: Expr = builtin_call(span, "__qoz_interp_finish", append_args1(sb_id))
+    let finish_call: ast.Expr = builtin_call(span, "__qoz_interp_finish", append_args1(sb_id))
     EBlock(span, stmts, finish_call)
 }
 
-let builtin_call(span: Span, name: string, args: Vec<Expr>): Expr = {
-    let callee: Expr = EIdent(span, name)
+let builtin_call(span: ast.Span, name: string, args: Vec<ast.Expr>): ast.Expr = {
+    let callee: ast.Expr = EIdent(span, name)
     ECall(span, callee, vec.make(), args)
 }
 
-let append_args1(a: Expr): Vec<Expr> = {
-    var v: Vec<Expr> = vec.make()
+let append_args1(a: ast.Expr): Vec<ast.Expr> = {
+    var v: Vec<ast.Expr> = vec.make()
     vec.push(&v, a)
     v
 }
 
-let append_args2(a: Expr, b: Expr): Vec<Expr> = {
-    var v: Vec<Expr> = vec.make()
+let append_args2(a: ast.Expr, b: ast.Expr): Vec<ast.Expr> = {
+    var v: Vec<ast.Expr> = vec.make()
     vec.push(&v, a)
     vec.push(&v, b)
     v
 }
 
-let strings_call(method: string, span: Span, args: Vec<Expr>): Expr = {
-    let callee: Expr = EField(span, EIdent(span, "strings"), method)
-    var type_args: Vec<TypeExpr> = vec.make()
+let strings_call(method: string, span: ast.Span, args: Vec<ast.Expr>): ast.Expr = {
+    let callee: ast.Expr = EField(span, EIdent(span, "strings"), method)
+    var type_args: Vec<ast.TypeExpr> = vec.make()
     ECall(span, callee, type_args, args)
 }
 
-let parse_atom(p: *Parser): Expr = {
+let parse_atom(p: *Parser): ast.Expr = {
     let t = peek(p)
     let span = span_of(p, t)
     if is_punct(t, "#") {
@@ -1043,7 +1059,7 @@ let parse_atom(p: *Parser): Expr = {
         }
         let first = parse_expr(p)
         if is_punct(peek(p), ",") {
-            var elems: Vec<Expr> = vec.make()
+            var elems: Vec<ast.Expr> = vec.make()
             vec.push(&elems, first)
             while is_punct(peek(p), ",") {
                 advance(p)
@@ -1060,7 +1076,7 @@ let parse_atom(p: *Parser): Expr = {
     }
     if is_punct(t, "[") {
         advance(p)
-        var elems: Vec<Expr> = vec.make()
+        var elems: Vec<ast.Expr> = vec.make()
         if !is_punct(peek(p), "]") {
             vec.push(&elems, parse_expr(p))
             var done = false
@@ -1102,7 +1118,7 @@ let parse_atom(p: *Parser): Expr = {
     return ENil(span)
 }
 
-let parse_if(p: *Parser): Expr = {
+let parse_if(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1113,7 +1129,7 @@ let parse_if(p: *Parser): Expr = {
         expect_punct(p, "=")
         let scrut = parse_expr(p)
         let then_b = parse_block(p)
-        var else_b: Expr = EBlock(span, vec.make(), ENil(span))
+        var else_b: ast.Expr = EBlock(span, vec.make(), ENil(span))
         if is_kw(peek(p), "else") {
             advance(p)
             if is_kw(peek(p), "if") {
@@ -1122,14 +1138,14 @@ let parse_if(p: *Parser): Expr = {
                 else_b = parse_block(p)
             }
         }
-        var arms: Vec<MatchArm> = vec.make()
-        vec.push(&arms, MatchArm { pat: pat, body: then_b, has_guard: false, guard: ENil(span) })
-        vec.push(&arms, MatchArm { pat: PatWild(span), body: else_b, has_guard: false, guard: ENil(span) })
+        var arms: Vec<ast.MatchArm> = vec.make()
+        vec.push(&arms, ast.MatchArm { pat: pat, body: then_b, has_guard: false, guard: ENil(span) })
+        vec.push(&arms, ast.MatchArm { pat: PatWild(span), body: else_b, has_guard: false, guard: ENil(span) })
         return EMatch(span, scrut, arms)
     }
     let cond = parse_expr(p)
     let then_b = parse_block(p)
-    var else_b: Expr = ENil(span)
+    var else_b: ast.Expr = ENil(span)
     if is_kw(peek(p), "else") {
         advance(p)
         if is_kw(peek(p), "if") {
@@ -1141,7 +1157,7 @@ let parse_if(p: *Parser): Expr = {
     EIf(span, cond, then_b, else_b)
 }
 
-let parse_while(p: *Parser): Expr = {
+let parse_while(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1150,7 +1166,7 @@ let parse_while(p: *Parser): Expr = {
     EWhile(span, cond, body)
 }
 
-let parse_for(p: *Parser): Expr = {
+let parse_for(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1170,25 +1186,25 @@ let parse_for(p: *Parser): Expr = {
     EFor(span, binding, binding2, iter, body)
 }
 
-let parse_match(p: *Parser): Expr = {
+let parse_match(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
     let scrutinee = parse_expr(p)
     expect_punct(p, "{")
-    var arms: Vec<MatchArm> = vec.make()
+    var arms: Vec<ast.MatchArm> = vec.make()
     // Skip ASI-injected semicolons between match arms.
     while is_punct(peek(p), ";") { advance(p) }
     while is_punct(peek(p), "|") {
         advance(p)
-        var pats: Vec<Pattern> = vec.make()
+        var pats: Vec<ast.Pattern> = vec.make()
         vec.push(&pats, parse_pattern(p))
         while is_punct(peek(p), "|") {
             advance(p)
             vec.push(&pats, parse_pattern(p))
         }
         var has_guard = false
-        var guard: Expr = ENil(span)
+        var guard: ast.Expr = ENil(span)
         if is_kw(peek(p), "if") {
             advance(p)
             has_guard = true
@@ -1203,7 +1219,7 @@ let parse_match(p: *Parser): Expr = {
         let body = parse_expr(p)
         p.in_match_arm = p.in_match_arm - 1
         for pat in pats {
-            vec.push(&arms, MatchArm { pat: pat, body: body, has_guard: has_guard, guard: guard })
+            vec.push(&arms, ast.MatchArm { pat: pat, body: body, has_guard: has_guard, guard: guard })
         }
         // Skip ASI-injected semicolons between match arms.
         while is_punct(peek(p), ";") { advance(p) }
@@ -1212,18 +1228,18 @@ let parse_match(p: *Parser): Expr = {
     EMatch(span, scrutinee, arms)
 }
 
-let parse_return(p: *Parser): Expr = {
+let parse_return(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
-    var value: Expr = ENil(span)
+    var value: ast.Expr = ENil(span)
     if !is_punct(peek(p), "}") && !is_punct(peek(p), ";") && !at_eof(p) {
         value = parse_expr(p)
     }
     EReturn(span, value)
 }
 
-let parse_defer(p: *Parser): Expr = {
+let parse_defer(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1231,7 +1247,7 @@ let parse_defer(p: *Parser): Expr = {
     EDefer(span, body)
 }
 
-let parse_pattern(p: *Parser): Pattern = {
+let parse_pattern(p: *Parser): ast.Pattern = {
     let t = peek(p)
     let span = span_of(p, t)
     if is_int_lit(t) {
@@ -1268,7 +1284,7 @@ let parse_pattern(p: *Parser): Pattern = {
                 err_unexpected(p, "identifier after `.` in pattern path", part)
             }
         }
-        var pos: Vec<Pattern> = vec.make()
+        var pos: Vec<ast.Pattern> = vec.make()
         if is_punct(peek(p), "(") {
             advance(p)
             if !is_punct(peek(p), ")") {
@@ -1290,12 +1306,12 @@ let parse_pattern(p: *Parser): Pattern = {
     PatWild(span)
 }
 
-let parse_block(p: *Parser): Expr = {
+let parse_block(p: *Parser): ast.Expr = {
     let open = peek(p)
     let span = span_of(p, open)
     expect_punct(p, "{")
-    var stmts: Vec<Stmt> = vec.make()
-    var tail: Expr = ENil(span)
+    var stmts: Vec<ast.Stmt> = vec.make()
+    var tail: ast.Expr = ENil(span)
     var have_tail = false
     var done = false
     while !done && !is_punct(peek(p), "}") && !at_eof(p) {
@@ -1334,14 +1350,14 @@ let parse_block(p: *Parser): Expr = {
                 for bname in binds {
                     if !strings.eq_raw(bname, "_") {
                         let field = `_{bi}`
-                        let fld_expr: Expr = EField(stmt_span, EIdent(stmt_span, tmp), field)
+                        let fld_expr: ast.Expr = EField(stmt_span, EIdent(stmt_span, tmp), field)
                         vec.push(&stmts, SLet(stmt_span, bname, TEUnit(stmt_span), fld_expr))
                     }
                     bi += 1
                 }
             } else {
                 let name = expect_ident(p)
-                var ann: TypeExpr = TEUnit(stmt_span)
+                var ann: ast.TypeExpr = TEUnit(stmt_span)
                 if is_punct(peek(p), ":") {
                     advance(p)
                     ann = parse_type(p)
@@ -1353,7 +1369,7 @@ let parse_block(p: *Parser): Expr = {
         } else if is_kw(t, "var") {
             advance(p)
             let name = expect_ident(p)
-            var ann: TypeExpr = TEUnit(stmt_span)
+            var ann: ast.TypeExpr = TEUnit(stmt_span)
             if is_punct(peek(p), ":") {
                 advance(p)
                 ann = parse_type(p)
@@ -1379,7 +1395,7 @@ let parse_block(p: *Parser): Expr = {
         }
     }
     expect_punct(p, "}")
-    var final_tail: Expr = ENil(span)
+    var final_tail: ast.Expr = ENil(span)
     if have_tail {
         final_tail = tail
     }
@@ -1410,7 +1426,7 @@ let parse_path_segs(p: *Parser): Vec<string> = {
     segs
 }
 
-let parse_import(p: *Parser): Decl = {
+let parse_import(p: *Parser): ast.Decl = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1437,15 +1453,15 @@ let parse_type_params(p: *Parser): Vec<string> = {
     params
 }
 
-let parse_struct_fields(p: *Parser): Vec<StructField> = {
-    var fields: Vec<StructField> = vec.make()
+let parse_struct_fields(p: *Parser): Vec<ast.StructField> = {
+    var fields: Vec<ast.StructField> = vec.make()
     expect_punct(p, "{")
     while !is_punct(peek(p), "}") && !at_eof(p) {
         let start_pos = p.pos
         let name = expect_ident(p)
         expect_punct(p, ":")
         let ty = parse_type(p)
-        vec.push(&fields, StructField { name: name, ty: ty })
+        vec.push(&fields, ast.StructField { name: name, ty: ty })
         if is_punct(peek(p), ",") {
             advance(p)
         }
@@ -1457,7 +1473,7 @@ let parse_struct_fields(p: *Parser): Vec<StructField> = {
     fields
 }
 
-let parse_top_type(p: *Parser): Decl = {
+let parse_top_type(p: *Parser): ast.Decl = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1476,17 +1492,17 @@ let parse_top_type(p: *Parser): Decl = {
     DTypeAlias(span, name, type_params, target)
 }
 
-let parse_variants(p: *Parser): Vec<VariantDecl> = {
-    var out: Vec<VariantDecl> = vec.make()
+let parse_variants(p: *Parser): Vec<ast.VariantDecl> = {
+    var out: Vec<ast.VariantDecl> = vec.make()
     while is_punct(peek(p), ";") { advance(p) }
     while is_punct(peek(p), "|") {
         let bar_tok = peek(p)
         let v_span = span_of(p, bar_tok)
         advance(p)
         let vname = expect_ident(p)
-        var kind: VariantPayloadKind = VPKNone
-        var pos: Vec<TypeExpr> = vec.make()
-        var named: Vec<StructField> = vec.make()
+        var kind: ast.VariantPayloadKind = VPKNone
+        var pos: Vec<ast.TypeExpr> = vec.make()
+        var named: Vec<ast.StructField> = vec.make()
         if is_punct(peek(p), "(") {
             kind = VPKPositional
             advance(p)
@@ -1502,21 +1518,21 @@ let parse_variants(p: *Parser): Vec<VariantDecl> = {
             kind = VPKNamed
             named = parse_struct_fields(p)
         }
-        vec.push(&out, VariantDecl { span: v_span, name: vname, kind: kind, pos: pos, named: named })
+        vec.push(&out, ast.VariantDecl { span: v_span, name: vname, kind: kind, pos: pos, named: named })
         while is_punct(peek(p), ";") { advance(p) }
     }
     out
 }
 
-let parse_fn_params(p: *Parser): Vec<FnParam> = {
-    var params: Vec<FnParam> = vec.make()
+let parse_fn_params(p: *Parser): Vec<ast.FnParam> = {
+    var params: Vec<ast.FnParam> = vec.make()
     expect_punct(p, "(")
     while !is_punct(peek(p), ")") && !at_eof(p) {
         let start_pos = p.pos
         let name = expect_ident(p)
         expect_punct(p, ":")
         let ty = parse_type(p)
-        vec.push(&params, FnParam { name: name, ty: ty })
+        vec.push(&params, ast.FnParam { name: name, ty: ty })
         if is_punct(peek(p), ",") {
             advance(p)
         }
@@ -1528,7 +1544,7 @@ let parse_fn_params(p: *Parser): Vec<FnParam> = {
     params
 }
 
-let parse_top_let(p: *Parser): Decl = {
+let parse_top_let(p: *Parser): ast.Decl = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1538,7 +1554,7 @@ let parse_top_let(p: *Parser): Decl = {
     // Function declaration: name(...) [: T] = body
     if is_punct(peek(p), "(") {
         let params = parse_fn_params(p)
-        var ret_ty: TypeExpr = TEUnit(span)
+        var ret_ty: ast.TypeExpr = TEUnit(span)
         if is_punct(peek(p), ":") {
             advance(p)
             ret_ty = parse_type(p)
@@ -1549,7 +1565,7 @@ let parse_top_let(p: *Parser): Decl = {
     }
 
     // Const declaration: name [: T] = expr
-    var ann_ty: TypeExpr = TEUnit(span)
+    var ann_ty: ast.TypeExpr = TEUnit(span)
     if is_punct(peek(p), ":") {
         advance(p)
         ann_ty = parse_type(p)
@@ -1559,7 +1575,7 @@ let parse_top_let(p: *Parser): Decl = {
     DConst(span, name, ann_ty, value)
 }
 
-let parse_decl(p: *Parser): Decl = {
+let parse_decl(p: *Parser): ast.Decl = {
     var attr_link_name = ""
     var attr_operator = ""
     while is_punct(peek(p), "@") {
@@ -1618,7 +1634,7 @@ let strip_quotes(s: string): string = {
     s
 }
 
-let parse_external(p: *Parser, link_name: string): Decl = {
+let parse_external(p: *Parser, link_name: string): ast.Decl = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
@@ -1630,7 +1646,7 @@ let parse_external(p: *Parser, link_name: string): Decl = {
     let name = expect_ident(p)
     let symbol = if strings.eq_raw(link_name, "") { name } else { link_name }
     let params = parse_fn_params(p)
-    var ret_ty: TypeExpr = TEUnit(span)
+    var ret_ty: ast.TypeExpr = TEUnit(span)
     if is_punct(peek(p), ":") {
         advance(p)
         ret_ty = parse_type(p)
@@ -1638,7 +1654,7 @@ let parse_external(p: *Parser, link_name: string): Decl = {
     DExternal(span, name, symbol, params, ret_ty)
 }
 
-let parse_top_let_with_op(p: *Parser, operator: string): Decl = {
+let parse_top_let_with_op(p: *Parser, operator: string): ast.Decl = {
     let d = parse_top_let(p)
     if strings.eq_raw(operator, "") {
         return d
@@ -1655,7 +1671,7 @@ let parse_top_let_with_op(p: *Parser, operator: string): Decl = {
     }
 }
 
-let parse_link_directive(p: *Parser): Decl = {
+let parse_link_directive(p: *Parser): ast.Decl = {
     let hash_tok = peek(p)
     let span = span_of(p, hash_tok)
     advance(p)
@@ -1670,7 +1686,7 @@ let parse_link_directive(p: *Parser): Decl = {
         err_unexpected(p, "string literal", arg)
     }
     expect_punct(p, ")")
-    var kind: LinkKind = LinkLibrary
+    var kind: ast.LinkKind = LinkLibrary
     if strings.eq_raw(name, "link_framework") {
         kind = LinkFramework
     }
@@ -1678,13 +1694,13 @@ let parse_link_directive(p: *Parser): Decl = {
 }
 
 type ParseOutput = {
-    file:   File,
+    file:   ast.File,
     errors: Vec<string>,
 }
 
-let run(tokens: Vec<Token>, file: string): ParseOutput = {
+let run(tokens: Vec<tokenize.Token>, file: string): parse.ParseOutput = {
     var p = make_parser(tokens, file)
-    var decls: Vec<Decl> = vec.make()
+    var decls: Vec<ast.Decl> = vec.make()
     var running = true
     while running && !at_eof(&p) {
         // Skip ASI-injected semicolons between top-level declarations.
@@ -1699,5 +1715,5 @@ let run(tokens: Vec<Token>, file: string): ParseOutput = {
             }
         }
     }
-    ParseOutput { file: File { path: file, decls: decls }, errors: p.errors }
+    ParseOutput { file: ast.File { path: file, decls: decls }, errors: p.errors }
 }

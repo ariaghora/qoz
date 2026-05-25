@@ -348,20 +348,20 @@ let error_at(p: *Parser, msg: string): string = {
 // ---- Encoder ----
 
 let encode(v: Json): string = {
-    var sb: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
     encode_into(&sb, v)
     strings.sb_finish(&sb)
 }
 
 let encode_pretty(v: Json, indent: string): string = {
-    var sb: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
     encode_pretty_into(&sb, v, indent, 0)
     strings.sb_finish(&sb)
 }
 
-let encode_pretty_into(sb: *Strbuf, v: Json, indent: string, depth: i64) = {
+let encode_pretty_into(sb: *strings.Strbuf, v: Json, indent: string, depth: i64) = {
     match v {
     | Null    -> strings.sb_append(sb, "null")
     | Bool(b) -> {
@@ -411,7 +411,7 @@ let encode_pretty_into(sb: *Strbuf, v: Json, indent: string, depth: i64) = {
     }
 }
 
-let emit_indent(sb: *Strbuf, indent: string, depth: i64) = {
+let emit_indent(sb: *strings.Strbuf, indent: string, depth: i64) = {
     var k: i64 = 0
     while k < depth {
         strings.sb_append(sb, indent)
@@ -419,7 +419,7 @@ let emit_indent(sb: *Strbuf, indent: string, depth: i64) = {
     }
 }
 
-let encode_number(sb: *Strbuf, n: f64) = {
+let encode_number(sb: *strings.Strbuf, n: f64) = {
     if n != n {
         strings.sb_append(sb, "null")
     } else if n > 1.0e308 || n < -1.0e308 {
@@ -429,7 +429,7 @@ let encode_number(sb: *Strbuf, n: f64) = {
     }
 }
 
-let encode_into(sb: *Strbuf, v: Json) = {
+let encode_into(sb: *strings.Strbuf, v: Json) = {
     match v {
     | Null    -> strings.sb_append(sb, "null")
     | Bool(b) -> {
@@ -467,7 +467,7 @@ let encode_into(sb: *Strbuf, v: Json) = {
     }
 }
 
-let encode_string(sb: *Strbuf, s: string) = {
+let encode_string(sb: *strings.Strbuf, s: string) = {
     strings.sb_append(sb, "\"")
     let n = len(s)
     var i: i64 = 0

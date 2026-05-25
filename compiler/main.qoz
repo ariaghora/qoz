@@ -11,7 +11,7 @@ import compiler/parse
 import compiler/check
 import compiler/emit
 
-let decl_kind_name(d: Decl): string = {
+let decl_kind_name(d: ast.Decl): string = {
     match d {
     | DImport(_, _, _)                 -> "import"
     | DFn(_, _, _, _, _, _, _)         -> "fn"
@@ -24,7 +24,7 @@ let decl_kind_name(d: Decl): string = {
     }
 }
 
-let decl_name(d: Decl): string = {
+let decl_name(d: ast.Decl): string = {
     match d {
     | DImport(_, _, _)                  -> "<import>"
     | DFn(_, n, _, _, _, _, _)          -> n
@@ -131,7 +131,7 @@ let list_package_files(dir: string): Vec<string> = {
     out
 }
 
-let rename_with_pkg(d: Decl, pkg: string, local_fns: Map<string, bool>): Decl = {
+let rename_with_pkg(d: ast.Decl, pkg: string, local_fns: Map<string, bool>): ast.Decl = {
     if strings.eq_raw(pkg, "") { return d }
     match d {
     | DFn(sp, n, tp, fp, rt, body, attr) -> {
@@ -144,7 +144,7 @@ let rename_with_pkg(d: Decl, pkg: string, local_fns: Map<string, bool>): Decl = 
 }
 
 // Rewrite intra-package call sites in a fn body to the prefixed C name.
-let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr = {
+let rewrite_ident_refs(e: ast.Expr, pkg: string, local_fns: Map<string, bool>): ast.Expr = {
     match e {
     | EInt(_, _)              -> e
     | EFloat(_, _)            -> e
@@ -163,7 +163,7 @@ let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr
     | EBinary(sp, op, l, r)   -> EBinary(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
     | EAssign(sp, op, l, r)   -> EAssign(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
     | ECall(sp, callee, ta, args) -> {
-        var na: Vec<Expr> = vec.make()
+        var na: Vec<ast.Expr> = vec.make()
         for a in args { vec.push(&na, rewrite_ident_refs(a, pkg, local_fns)) }
         ECall(sp, rewrite_ident_refs(callee, pkg, local_fns), ta, na)
     }
@@ -172,25 +172,25 @@ let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr
     | ECast(sp, value, t)     -> ECast(sp, rewrite_ident_refs(value, pkg, local_fns), t)
     | ETry(sp, v)             -> ETry(sp, rewrite_ident_refs(v, pkg, local_fns))
     | ETuple(sp, elems)       -> {
-        var ne: Vec<Expr> = vec.make()
+        var ne: Vec<ast.Expr> = vec.make()
         for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
         ETuple(sp, ne)
     }
     | ERecord(sp, te, fields) -> {
-        var nf: Vec<RecordFieldLit> = vec.make()
-        for f in fields { vec.push(&nf, RecordFieldLit { name: f.name, value: rewrite_ident_refs(f.value, pkg, local_fns) }) }
+        var nf: Vec<ast.RecordFieldLit> = vec.make()
+        for f in fields { vec.push(&nf, ast.RecordFieldLit { name: f.name, value: rewrite_ident_refs(f.value, pkg, local_fns) }) }
         ERecord(sp, te, nf)
     }
     | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, rewrite_ident_refs(body, pkg, local_fns))
     | EBlock(sp, stmts, tail) -> {
-        var ns: Vec<Stmt> = vec.make()
+        var ns: Vec<ast.Stmt> = vec.make()
         for s in stmts { vec.push(&ns, rewrite_ident_refs_stmt(s, pkg, local_fns)) }
         EBlock(sp, ns, rewrite_ident_refs(tail, pkg, local_fns))
     }
     | EIf(sp, c, t, f) -> EIf(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(t, pkg, local_fns), rewrite_ident_refs(f, pkg, local_fns))
     | EMatch(sp, scrut, arms) -> {
-        var na: Vec<MatchArm> = vec.make()
-        for a in arms { vec.push(&na, MatchArm { pat: a.pat, body: rewrite_ident_refs(a.body, pkg, local_fns), has_guard: a.has_guard, guard: a.guard }) }
+        var na: Vec<ast.MatchArm> = vec.make()
+        for a in arms { vec.push(&na, ast.MatchArm { pat: a.pat, body: rewrite_ident_refs(a.body, pkg, local_fns), has_guard: a.has_guard, guard: a.guard }) }
         EMatch(sp, rewrite_ident_refs(scrut, pkg, local_fns), na)
     }
     | EWhile(sp, c, b) -> EWhile(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(b, pkg, local_fns))
@@ -199,14 +199,14 @@ let rewrite_ident_refs(e: Expr, pkg: string, local_fns: Map<string, bool>): Expr
     | EDefer(sp, v)           -> EDefer(sp, rewrite_ident_refs(v, pkg, local_fns))
     | ESizeOf(_, _)           -> e
     | EArrayLit(sp, elems)    -> {
-        var ne: Vec<Expr> = vec.make()
+        var ne: Vec<ast.Expr> = vec.make()
         for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
         EArrayLit(sp, ne)
     }
     }
 }
 
-let rewrite_ident_refs_stmt(s: Stmt, pkg: string, local_fns: Map<string, bool>): Stmt = {
+let rewrite_ident_refs_stmt(s: ast.Stmt, pkg: string, local_fns: Map<string, bool>): ast.Stmt = {
     match s {
     | SLet(sp, name, te, val) -> SLet(sp, name, te, rewrite_ident_refs(val, pkg, local_fns))
     | SVar(sp, name, te, val) -> SVar(sp, name, te, rewrite_ident_refs(val, pkg, local_fns))
@@ -215,14 +215,19 @@ let rewrite_ident_refs_stmt(s: Stmt, pkg: string, local_fns: Map<string, bool>):
 }
 
 type Loaded = {
-    file:       File,
+    file:       ast.File,
     sources:    Vec<string>,
     // Per-type-name owning package. Empty string means the type lives
     // in the prelude or the user's entry package and is reachable by
     // bare name from anywhere. A non-empty value means the type came
     // through an explicit `import` and must be referenced as
-    // `<pkg>.<TypeName>`.
+    // `<pkg>.<TypeName>` from outside its own package.
     type_homes: Map<string, string>,
+    // Per-fn-name (renamed C-style) owning package. Same convention
+    // as type_homes. The check phase reads this when entering each
+    // fn body so resolve_named knows whether bare access to a
+    // same-pkg type is allowed.
+    fn_homes:   Map<string, string>,
 }
 
 let load_all(entry: string, qoz_root: string): Loaded = {
@@ -238,9 +243,10 @@ let load_all(entry: string, qoz_root: string): Loaded = {
 let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): Loaded = {
     var queue: Vec<Pending> = vec.make()
     var visited: Map<string, bool> = map.make()
-    var aggregated_decls: Vec<Decl> = vec.make()
+    var aggregated_decls: Vec<ast.Decl> = vec.make()
     var sources: Vec<string> = vec.make()
     var type_homes: Map<string, string> = map.make()
+    var fn_homes:   Map<string, string> = map.make()
     // Prelude: Option, Result, Vec, and Map are in scope without an
     // explicit import. Types and variant constructors flow through
     // the global namespace either way; functions stay package-prefixed
@@ -271,13 +277,13 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
         qi += 1
         if !map.contains(&visited, cur.path) {
             visited[cur.path] = true
-            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, qoz_root)
+            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, qoz_root)
         }
     }
-    Loaded { file: File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes }
+    Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes }
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, qoz_root: string) = {
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, qoz_root: string) = {
     let src = fs.read_file(cur.path)
     if len(src) < 0 {
         fmt.println(`could not read {cur.path}`)
@@ -353,12 +359,18 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             | DTypeAlias(_, name, _, _) -> map.set(type_homes, name, home_for_type)
             | _ -> { }
             }
-            vec.push(aggregated_decls, rename_with_pkg(d, cur.pkg, local_fns))
+            let renamed = rename_with_pkg(d, cur.pkg, local_fns)
+            match renamed {
+            | DFn(_, rn, _, _, _, _, _) -> map.set(fn_homes, rn, home_for_type)
+            | DExternal(_, rn, _, _, _) -> map.set(fn_homes, rn, home_for_type)
+            | _ -> { }
+            }
+            vec.push(aggregated_decls, renamed)
         }
     }
 }
 
-let is_error_placeholder(d: Decl): bool = {
+let is_error_placeholder(d: ast.Decl): bool = {
     match d {
     | DConst(_, name, _, _) -> strings.eq_raw(name, "<error>")
     | _                     -> false
@@ -417,7 +429,7 @@ let resolve_entry_paths(path: string): EntryPaths = {
 // Count top-level `main` function declarations in the aggregated AST.
 // A package compiled as a build target must contain exactly one. Zero
 // means the program has no entry point; more than one is ambiguous.
-let count_main_decls(decls: Vec<Decl>): i64 = {
+let count_main_decls(decls: Vec<ast.Decl>): i64 = {
     var n: i64 = 0
     for d in decls {
         match d {
@@ -445,6 +457,8 @@ let cmd_build(path: string, qoz_root: string): string = {
         os.exit(1)
     }
     var tc = check.make_ctx()
+    tc.type_homes = loaded.type_homes
+    tc.fn_homes   = loaded.fn_homes
     check.register_file(&tc, file)
     check.validate_signatures(&tc, file)
     let inferred = check.infer_calls(&tc, file)
@@ -535,7 +549,7 @@ let normalise_whitespace(src: string): string = {
     // Split into lines, normalise each one, join back. Per-line work:
     // expand tabs to four spaces, drop \r, strip trailing spaces.
     let lines = strings.split(src, 10)
-    var out: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var out: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&out)
     var last_nonempty: i64 = -1
     var i: i64 = 0
@@ -557,7 +571,7 @@ let normalise_whitespace(src: string): string = {
 
 let clean_line(s: string): string = {
     let n = len(s)
-    var b: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var b: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&b)
     var i: i64 = 0
     while i < n {

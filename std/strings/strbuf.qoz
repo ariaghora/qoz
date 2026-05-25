@@ -19,20 +19,20 @@ external let string_data(s: string): *void
 @link_name("qoz_string_alias")
 external let string_alias(buf: *void, n: i64): string
 
-let sb_init(b: *Strbuf) = {
+let sb_init(b: *strings.Strbuf) = {
     b.buf = nil as *u8
     b.len = 0
     b.cap = 0
 }
 
-let sb_grow(b: *Strbuf, needed: i64) = {
+let sb_grow(b: *strings.Strbuf, needed: i64) = {
     var new_cap: i64 = if b.cap == 0 { 64 } else { b.cap }
     while new_cap < b.len + needed { new_cap = new_cap * 2 }
     b.buf = mem.realloc(b.buf as *void, new_cap) as *u8
     b.cap = new_cap
 }
 
-let sb_append(b: *Strbuf, s: string) = {
+let sb_append(b: *strings.Strbuf, s: string) = {
     let n: i64 = len(s)
     if n <= 0 { return }
     if b.len + n > b.cap { sb_grow(b, n) }
@@ -41,36 +41,36 @@ let sb_append(b: *Strbuf, s: string) = {
     b.len = b.len + n
 }
 
-let sb_len(b: *Strbuf): i64 = b.len
+let sb_len(b: *strings.Strbuf): i64 = b.len
 
-let sb_truncate(b: *Strbuf, new_len: i64) = {
+let sb_truncate(b: *strings.Strbuf, new_len: i64) = {
     if new_len < 0 { return }
     if new_len > b.len { return }
     b.len = new_len
 }
 
-let sb_finish(b: *Strbuf): string = string_alias(b.buf as *void, b.len)
+let sb_finish(b: *strings.Strbuf): string = string_alias(b.buf as *void, b.len)
 
 // Typed appenders. The i64 and bool variants render the value in
 // Qoz and forward to sb_append. The f64 variant forwards to a libc
 // helper that uses snprintf("%g", v). Qoz does not yet have its own
 // floating-point printer.
 
-let sb_append_i64(b: *Strbuf, v: i64) = sb_append(b, i64_to_string(v))
+let sb_append_i64(b: *strings.Strbuf, v: i64) = sb_append(b, i64_to_string(v))
 
-let sb_append_bool(b: *Strbuf, v: bool) = {
+let sb_append_bool(b: *strings.Strbuf, v: bool) = {
     if v { sb_append(b, "true") } else { sb_append(b, "false") }
 }
 
 @link_name("qoz_strbuf_append_f64")
 external let sb_append_f64_raw(b: *void, v: f64)
 
-let sb_append_f64(b: *Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
+let sb_append_f64(b: *strings.Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
 
 // Allocate a fresh GC-managed buffer holding bytes [from, to) of `b`
 // and return it as a string. Independent of `b`: later appends and
 // truncates do not affect the returned string.
-let sb_slice_copy(b: *Strbuf, from: i64, to: i64): string = {
+let sb_slice_copy(b: *strings.Strbuf, from: i64, to: i64): string = {
     var lo = from
     var hi = to
     if lo < 0 { lo = 0 }
