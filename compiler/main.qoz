@@ -38,8 +38,13 @@ let decl_name(d: Decl): string = {
 }
 
 type Pending = {
-    path: string,
-    pkg:  string,
+    path:       string,
+    pkg:        string,
+    // True for prelude files and for the user's own entry sources.
+    // Types declared in such files are accessible by bare name from
+    // any other file. False for explicitly-imported packages, whose
+    // types must be reached through a qualified path.
+    bare_types: bool,
 }
 
 // Return the directory portion of `path`. `a/b/c.qoz` -> `a/b`. A
@@ -229,23 +234,29 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string): L
     var visited: Map<string, bool> = map.make()
     var aggregated_decls: Vec<Decl> = vec.make()
     var sources: Vec<string> = vec.make()
-    // Prelude: Option and Result are in scope without an import.
+    // Prelude: Option, Result, Vec, and Map are in scope without an
+    // explicit import. Types and variant constructors flow through
+    // the global namespace either way; functions stay package-prefixed
+    // so vec.push / map.get keep their qualified form rather than
+    // colliding with arbitrary user identifiers named push / get.
     var prelude_paths: Vec<string> = vec.make()
     vec.push(&prelude_paths, "option")
     vec.push(&prelude_paths, "result")
+    vec.push(&prelude_paths, "vec")
+    vec.push(&prelude_paths, "map")
     for pp in prelude_paths {
         let resolved_dir = resolve_import_path(prelude_segs(pp), qoz_root)
         if !strings.eq_raw(resolved_dir, "") {
             let files = list_package_files(resolved_dir)
             for fpath in files {
                 if !map.contains(&visited, fpath) {
-                    vec.push(&queue, Pending { path: fpath, pkg: "" })
+                    vec.push(&queue, Pending { path: fpath, pkg: pp, bare_types: true })
                 }
             }
         }
     }
     for ep in entries {
-        vec.push(&queue, Pending { path: ep, pkg: "" })
+        vec.push(&queue, Pending { path: ep, pkg: "", bare_types: true })
     }
     var qi: i64 = 0
     while qi < len(queue) {
@@ -312,7 +323,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             let files = list_package_files(resolved_dir)
             for fpath in files {
                 if !map.contains(visited, fpath) {
-                    vec.push(queue, Pending { path: fpath, pkg: pkg })
+                    vec.push(queue, Pending { path: fpath, pkg: pkg, bare_types: false })
                 }
             }
         }

@@ -103,6 +103,15 @@ let register_decl(tc: *TyContext, d: Decl) = {
 }
 
 let register_file(tc: *TyContext, f: File) = {
+    // Prelude packages are always in scope regardless of whether the
+    // user's source contains an `import` for them. Register their
+    // names so qualified calls (`vec.push`, `map.insert`) resolve
+    // even when the user reaches them only through the bare
+    // container builtins.
+    tc.packages["vec"]    = true
+    tc.packages["map"]    = true
+    tc.packages["option"] = true
+    tc.packages["result"] = true
     for d in f.decls {
         register_decl(tc, d)
     }
@@ -2149,6 +2158,153 @@ let pick_variant_home(homes: Vec<string>, expected: Ty): string = {
     }
 }
 
+// True for any of the bare builtin verbs that target a prelude
+// container type. The recogniser is intentionally a closed list; an
+// open extension model would defeat the reserved-name property the
+// spec promises.
+let is_container_builtin(name: string): bool = {
+    strings.eq_raw(name, "make")     ||
+    strings.eq_raw(name, "push")     ||
+    strings.eq_raw(name, "insert")   ||
+    strings.eq_raw(name, "contains")
+}
+
+type ContainerInfo = {
+    kind: string,         // "Vec", "Map", or "" when not a container
+    args: Vec<Ty>,
+}
+
+// Look through one layer of `*` to find a container type. The
+// receiver-style builtins (push, insert, ...) always pass `&xs`, so
+// the actual recv type is a pointer to the container.
+let unwrap_container_ty(t: Ty): ContainerInfo = {
+    let inner = match t {
+    | TyPtr(x) -> x
+    | _        -> t
+    }
+    match inner {
+    | TyRecord(name, args) -> {
+        if strings.eq_raw(name, "Vec") || strings.eq_raw(name, "Map") {
+            return ContainerInfo { kind: name, args: args }
+        }
+        ContainerInfo { kind: "", args: vec.make() }
+    }
+    | _ -> ContainerInfo { kind: "", args: vec.make() }
+    }
+}
+
+// Convert a Ty back into a TypeExpr for use as an explicit type
+// argument on the rewritten qualified call. Names that participate
+// here are limited to those produced by container dispatch (the
+// prelude container element / key / value types), so we only need
+// the cases relevant to that path.
+let ty_to_type_expr_at(t: Ty, sp: Span): TypeExpr = {
+    match t {
+    | TyInt(i) -> {
+        let w = if i.width == 8 { "8" }
+                else { if i.width == 16 { "16" }
+                else { if i.width == 32 { "32" }
+                else { "64" } } }
+        let n = strings.cat(if i.is_signed { "i" } else { "u" }, w)
+        var path: Vec<string> = vec.make()
+        vec.push(&path, n)
+        TENamed(sp, path, vec.make())
+    }
+    | TyFloat(f) -> {
+        let n = if f.width == 32 { "f32" } else { "f64" }
+        var path: Vec<string> = vec.make()
+        vec.push(&path, n)
+        TENamed(sp, path, vec.make())
+    }
+    | TyBool   -> single_te(sp, "bool")
+    | TyChar   -> single_te(sp, "char")
+    | TyString -> single_te(sp, "string")
+    | TyCstring-> single_te(sp, "cstring")
+    | TyUnit   -> single_te(sp, "unit")
+    | TyNil    -> single_te(sp, "void")
+    | TyError  -> single_te(sp, "i64")
+    | TyVar(_, n) -> single_te(sp, n)
+    | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
+    | TyAdt(n, args) | TyRecord(n, args) -> {
+        var path: Vec<string> = vec.make()
+        vec.push(&path, n)
+        var te_args: Vec<TypeExpr> = vec.make()
+        for a in args { vec.push(&te_args, ty_to_type_expr_at(a, sp)) }
+        TENamed(sp, path, te_args)
+    }
+    | TyFn(_, _)  -> single_te(sp, "i64")
+    | TyTuple(elems) -> {
+        var es: Vec<TypeExpr> = vec.make()
+        for e in elems { vec.push(&es, ty_to_type_expr_at(e, sp)) }
+        TETuple(sp, es)
+    }
+    }
+}
+
+let single_te(sp: Span, name: string): TypeExpr = {
+    var path: Vec<string> = vec.make()
+    vec.push(&path, name)
+    TENamed(sp, path, vec.make())
+}
+
+// Dispatch a container builtin call to the underlying qualified
+// package function. The rewriter returns Some(rewritten_call) on
+// success and None when the dispatch cannot be performed (in which
+// case rewrite_call falls through and the user gets the standard
+// "undefined name" diagnostic).
+let rewrite_container_builtin(tc: *TyContext, env: *Env, sp: Span, name: string, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Option<Expr> = {
+    // make() has no receiver; its container kind comes from the
+    // binding annotation passed in `expected`. With no annotation the
+    // call is ambiguous and we report it as such.
+    if strings.eq_raw(name, "make") {
+        let info = unwrap_container_ty(expected)
+        if strings.eq_raw(info.kind, "") {
+            record_error(tc, sp, `make() needs a type annotation; the surrounding let or var must declare 'Vec<T>' or 'Map<K, V>'`)
+            return Some(ECall(sp, EIdent(sp, "make"), type_args, args))
+        }
+        let pkg = if strings.eq_raw(info.kind, "Vec") { "vec" } else { "map" }
+        let new_callee: Expr = EField(sp, EIdent(sp, pkg), "make")
+        var new_ta: Vec<TypeExpr> = vec.make()
+        for a in info.args { vec.push(&new_ta, ty_to_type_expr_at(a, sp)) }
+        return Some(rewrite_call(tc, env, sp, new_callee, new_ta, args, expected))
+    }
+    if len(args) == 0 {
+        record_error(tc, sp, `'{name}' needs a container as its first argument`)
+        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+    }
+    let recv_ty = synth(tc, env, args[0])
+    let info = unwrap_container_ty(recv_ty)
+    if strings.eq_raw(info.kind, "") {
+        record_error(tc, sp, `'{name}' expects a Vec or Map as its first argument; got {ty.ty_show(recv_ty)}`)
+        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+    }
+    let is_vec = strings.eq_raw(info.kind, "Vec")
+    let is_map = strings.eq_raw(info.kind, "Map")
+    // Verb-by-package dispatch. Verbs that apply to exactly one
+    // container produce a clear "wrong container" diagnostic when
+    // misapplied rather than a downstream unresolved-function error.
+    let target_pkg = match_builtin_pkg(name, is_vec, is_map)
+    if strings.eq_raw(target_pkg, "") {
+        let needed = if is_vec { "Map" } else { "Vec" }
+        record_error(tc, sp, `'{name}' is a {needed} operation; got Vec or Map per the first argument`)
+        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+    }
+    let new_callee: Expr = EField(sp, EIdent(sp, target_pkg), name)
+    var new_ta: Vec<TypeExpr> = vec.make()
+    for a in info.args { vec.push(&new_ta, ty_to_type_expr_at(a, sp)) }
+    Some(rewrite_call(tc, env, sp, new_callee, new_ta, args, expected))
+}
+
+let match_builtin_pkg(name: string, is_vec: bool, is_map: bool): string = {
+    if strings.eq_raw(name, "push") {
+        if is_vec { return "vec" } else { return "" }
+    }
+    if strings.eq_raw(name, "insert") || strings.eq_raw(name, "contains") {
+        if is_map { return "map" } else { return "" }
+    }
+    ""
+}
+
 let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: Vec<TypeExpr>, args: Vec<Expr>, expected: Ty): Expr = {
     // The interpolation desugar emits every slot as a call to
     // __qoz_interp_push_str. Once the slot's value type is known,
@@ -2187,27 +2343,52 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
         | None -> { }
         }
     }
+    // Container builtins. A small fixed set of bare names dispatches to
+    // the Vec / Map runtime helpers based on the receiver's type so the
+    // user surface reads uniformly with the prelude container types.
+    // Vec-only verbs (push, pop) and Map-only verbs (insert, contains,
+    // delete) pin the package by argument-type inspection; make and
+    // clear are polymorphic between Vec and Map and dispatch off the
+    // receiver type or the expected return type.
+    if is_container_builtin(bare_name) {
+        let rewritten = rewrite_container_builtin(tc, env, sp, bare_name, type_args, args, expected)
+        match rewritten {
+        | Some(e) -> return e
+        | None    -> { }
+        }
+    }
     if strings.eq_raw(bare_name, "__qoz_interp_push_str") && len(args) == 2 {
-        let val_ty = synth(tc, env, args[1])
+        // Rewrite the slot expression first so any container-builtin
+        // call inside it gets dispatched to the qualified package
+        // form before synth runs. synth on a bare `contains(...)`
+        // would otherwise fail to resolve and the slot would appear
+        // as TyError.
+        let rewritten_arg = infer_calls_expr(tc, env, args[1], ty.ty_error_())
+        let rewritten_sb  = infer_calls_expr(tc, env, args[0], ty.ty_error_())
+        let val_ty = synth(tc, env, rewritten_arg)
         match interp_push_method_for(val_ty) {
         | Some(method) -> {
             if !strings.eq_raw(method, "__qoz_interp_push_str") {
                 let new_callee2: Expr = EIdent(sp, method)
                 var new_args: Vec<Expr> = vec.make()
-                vec.push(&new_args, infer_calls_expr(tc, env, args[0], ty.ty_error_()))
-                vec.push(&new_args, infer_calls_expr(tc, env, args[1], val_ty))
+                vec.push(&new_args, rewritten_sb)
+                vec.push(&new_args, rewritten_arg)
                 return ECall(sp, new_callee2, type_args, new_args)
             }
+            // method == "__qoz_interp_push_str": keep the call but
+            // use the already-rewritten args so nested builtins are
+            // not lost.
+            var new_args: Vec<Expr> = vec.make()
+            vec.push(&new_args, rewritten_sb)
+            vec.push(&new_args, rewritten_arg)
+            return ECall(sp, callee, type_args, new_args)
         }
         | None -> {
-            // Non-primitive interpolation slot. Route through the
-            // any-value push intrinsic; emit synthesises a per-type
-            // show function and rewrites the call site to use it.
             if can_show_ty(val_ty) {
                 let new_callee2: Expr = EIdent(sp, "__qoz_interp_push_any")
                 var new_args: Vec<Expr> = vec.make()
-                vec.push(&new_args, infer_calls_expr(tc, env, args[0], ty.ty_error_()))
-                vec.push(&new_args, infer_calls_expr(tc, env, args[1], val_ty))
+                vec.push(&new_args, rewritten_sb)
+                vec.push(&new_args, rewritten_arg)
                 return ECall(sp, new_callee2, type_args, new_args)
             }
             record_error(tc, sp, `interpolation slot type {ty.ty_show(val_ty)} cannot be rendered as a string`)

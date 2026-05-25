@@ -1045,6 +1045,14 @@ let operator_first_param_type_name(te: TypeExpr): string = {
 }
 
 let register_variants(e: *Emitter, file: File) = {
+    // Prelude packages are always reachable from any file regardless
+    // of explicit imports. Pre-populate the package set so qualified
+    // calls produced by the container-builtin dispatch (vec.push,
+    // map.insert, ...) resolve through the package path.
+    e.packages["vec"]    = true
+    e.packages["map"]    = true
+    e.packages["option"] = true
+    e.packages["result"] = true
     for d in file.decls {
         match d {
         | DEnum(_, name, _, variants) -> {
