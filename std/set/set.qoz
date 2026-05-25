@@ -9,7 +9,7 @@ import vec
 
 type Set<T> = { items: Map<T, bool> }
 
-let make<T>(): Set<T> = Set { items: map.make() }
+let make<T>(): set.Set<T> = set.Set { items: map.make() }
 
 let add<T>(s: *Set<T>, x: T) = {
     map.insert(&s.items, x, true)

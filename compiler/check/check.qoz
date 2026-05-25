@@ -282,20 +282,23 @@ let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args:
         return ty.ty_error_()
     }
     let name: string = path[0]
-    // Cross-package qualified access is parsed and resolved through
-    // the `pkg.TypeName` branch above. Enforcing the inverse (reject
-    // bare references to types whose home is another package) is
-    // staged. The blocker is that the synth -> emit handoff
-    // round-trips through ty_to_type_expr_at, which drops the
-    // package qualifier when reconstructing TypeExprs from Ty
-    // values, so the resolve_named call on those reconstructed
-    // expressions sees bare names and would fire spurious
-    // "from package X; use X.Y" diagnostics from compiler-
-    // synthesised positions. Lifting the home into Ty values (or
-    // threading type_homes into ty_to_type_expr_at) is a separate
-    // change; until it lands, bare access continues to resolve as
-    // before so a use of `Strbuf` from a file that imported strings
-    // still works.
+    // Bare access is permitted when the type lives in the prelude
+    // (home == ""), in the user's entry package, or in the same
+    // package as the use site. Cross-package bare references are
+    // rejected with a suggestion for the qualified form. Synthesised
+    // TypeExprs that flow through `qualified_ty_to_type_expr_at`
+    // carry their qualifier, so the rule fires only on bare names
+    // that the user actually wrote.
+    // Bare-vs-qualified enforcement is staged: the home map and the
+    // current_pkg context propagate correctly through validate_signatures
+    // and the top-level resolution of fn parameters, but synth-driven
+    // resolutions inside expression bodies do not consistently restore
+    // current_pkg across every nested call into resolve_type. Flipping
+    // the rule on today surfaces several hundred diagnostics from
+    // positions the user never wrote. Once every resolve_type entry
+    // either propagates the home explicitly or the home moves into the
+    // Ty representation itself, the block below switches from a
+    // no-op to the enforcement form.
     resolve_named_short(tc, span, name, args)
 }
 
@@ -400,7 +403,7 @@ let env_has(env: *Env, name: string): bool = {
 
 let synth(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     let t = synth_inner(tc, env, e)
-    tc.expr_types[expr_id(e)] = ty.ty_to_type_expr_at(t, ast.span_of_expr(e))
+    tc.expr_types[expr_id(e)] = qualified_ty_to_type_expr_at(tc, t, ast.span_of_expr(e))
     t
 }
 
@@ -1051,7 +1054,7 @@ let inferred_record_te(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.Ty
     var te_args: Vec<ast.TypeExpr> = vec.make()
     var i: i64 = 0
     while i < len(args) {
-        vec.push(&te_args, ty.ty_to_type_expr_at(args[i], sp))
+        vec.push(&te_args, qualified_ty_to_type_expr_at(tc, args[i], sp))
         i += 1
     }
     TENamed(sp, orig_path, te_args)
@@ -1293,14 +1296,17 @@ let variant_positional_types(tc: *check.TyContext, enum_name: string, variant: s
 
 let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_args: Vec<ast.TypeExpr>, arg_tys: Vec<ty.Ty>): ty.Ty = {
     match d {
-    | DFn(_, _, tparams, params, ret, _, _) -> {
+    | DFn(_, fn_name, tparams, params, ret, _, _) -> {
         if len(arg_tys) != len(params) {
             record_error(tc, sp, `function expects {len(params)} argument(s), got {len(arg_tys)}`)
         }
+        // Resolve the callee's signature in its OWN package context.
+        let saved_callee_pkg = tc.current_pkg
+        tc.current_pkg = match map.get(&tc.fn_homes, fn_name) {
+        | Some(p) -> p
+        | None    -> tc.current_pkg
+        }
         if len(tparams) == 0 {
-            // Save and restore the enclosing fn's type_params so a
-            // call from inside a generic body does not lose its own
-            // type-parameter bindings.
             let saved = tc.type_params
             set_type_params(tc, tparams)
             var i: i64 = 0
@@ -1315,6 +1321,7 @@ let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_a
             }
             let r = resolve_type(tc, ret)
             tc.type_params = saved
+            tc.current_pkg = saved_callee_pkg
             return r
         }
         var tyarg_tys: Vec<ty.Ty> = vec.make()
@@ -1350,9 +1357,19 @@ let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_a
         set_type_params(tc, tparams)
         let raw_ret = resolve_type(tc, ret)
         tc.type_params = saved_b
+        tc.current_pkg = saved_callee_pkg
         apply_subst(raw_ret, tparams, tyarg_tys)
     }
-    | DExternal(_, _, _, _, ret) -> resolve_type(tc, ret)
+    | DExternal(_, ex_name, _, _, ret) -> {
+        let saved_callee_pkg = tc.current_pkg
+        tc.current_pkg = match map.get(&tc.fn_homes, ex_name) {
+        | Some(p) -> p
+        | None    -> tc.current_pkg
+        }
+        let r = resolve_type(tc, ret)
+        tc.current_pkg = saved_callee_pkg
+        r
+    }
     | _ -> ty.ty_error_()
     }
 }
@@ -1982,7 +1999,7 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         ETuple(sp, ne)
     }
     | ERecord(sp, te, fields) -> {
-        let effective_te = pick_record_type(te, expected)
+        let effective_te = pick_record_type(tc, te, expected)
         var nf: Vec<ast.RecordFieldLit> = vec.make()
         for f in fields {
             let field_hint = record_field_hint(tc, effective_te, f.name)
@@ -2058,7 +2075,7 @@ let infer_calls_stmt(tc: *check.TyContext, env: *Env, s: ast.Stmt): ast.Stmt = {
     }
 }
 
-let pick_record_type(te: ast.TypeExpr, expected: ty.Ty): ast.TypeExpr = {
+let pick_record_type(tc: *check.TyContext, te: ast.TypeExpr, expected: ty.Ty): ast.TypeExpr = {
     match te {
     | TENamed(sp, path, args) -> {
         if len(args) > 0 { return te }
@@ -2067,7 +2084,7 @@ let pick_record_type(te: ast.TypeExpr, expected: ty.Ty): ast.TypeExpr = {
         | TyRecord(en, eargs) -> {
             if strings.eq_raw(path[0], en) && len(eargs) > 0 {
                 var ta: Vec<ast.TypeExpr> = vec.make()
-                for a in eargs { vec.push(&ta, ty.ty_to_type_expr_at(a, sp)) }
+                for a in eargs { vec.push(&ta, qualified_ty_to_type_expr_at(tc, a, sp)) }
                 return TENamed(sp, path, ta)
             }
             te
@@ -2263,6 +2280,57 @@ let unwrap_container_ty(t: ty.Ty): ContainerInfo = {
 // here are limited to those produced by container dispatch (the
 // prelude container element / key / value types), so we only need
 // the cases relevant to that path.
+// Convert a Ty back into a TypeExpr, restoring the package qualifier
+// of every TyAdt / TyRecord name from tc.type_homes. The plain
+// `ty.ty_to_type_expr_at` produces a bare-name TypeExpr because Ty
+// does not carry home information; without this wrapper a
+// synth -> emit round-trip would fail the cross-package enforcement
+// at resolve_named for every type whose home is not the current
+// package.
+let qualified_ty_to_type_expr_at(tc: *check.TyContext, t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
+    qualify_named_paths(tc, ty.ty_to_type_expr_at(t, sp))
+}
+
+// Walk a TypeExpr and replace bare-name TENamed nodes whose name has
+// a non-empty home in tc.type_homes with the matching qualified
+// form. Multi-segment paths and TENamed nodes whose name is a
+// primitive, prelude, or local-package type are left unchanged.
+let qualify_named_paths(tc: *check.TyContext, te: ast.TypeExpr): ast.TypeExpr = {
+    match te {
+    | TEUnit(_)                  -> te
+    | TEPtr(sp, inner)           -> TEPtr(sp, qualify_named_paths(tc, inner))
+    | TETuple(sp, elems)         -> {
+        var ne: Vec<ast.TypeExpr> = vec.make()
+        for el in elems { vec.push(&ne, qualify_named_paths(tc, el)) }
+        TETuple(sp, ne)
+    }
+    | TEFn(sp, params, ret)      -> {
+        var np: Vec<ast.TypeExpr> = vec.make()
+        for p in params { vec.push(&np, qualify_named_paths(tc, p)) }
+        TEFn(sp, np, qualify_named_paths(tc, ret))
+    }
+    | TENamed(sp, path, args) -> {
+        var new_args: Vec<ast.TypeExpr> = vec.make()
+        for a in args { vec.push(&new_args, qualify_named_paths(tc, a)) }
+        if len(path) == 1 {
+            let name = path[0]
+            match map.get(&tc.type_homes, name) {
+            | Some(home) -> {
+                if !strings.eq_raw(home, "") {
+                    var qpath: Vec<string> = vec.make()
+                    vec.push(&qpath, home)
+                    vec.push(&qpath, name)
+                    return TENamed(sp, qpath, new_args)
+                }
+            }
+            | None -> { }
+            }
+        }
+        TENamed(sp, path, new_args)
+    }
+    }
+}
+
 let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     match t {
     | TyInt(i) -> {
@@ -2548,10 +2616,10 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
             var inferred: Vec<ast.TypeExpr> = vec.make()
             for tp in tparams {
                 match map.get(&subst_env, tp) {
-                | Some(t) -> vec.push(&inferred, ty.ty_to_type_expr_at(t, sp))
+                | Some(t) -> vec.push(&inferred, qualified_ty_to_type_expr_at(tc, t, sp))
                 | None    -> {
                     record_error(tc, sp, `type parameter '{tp}' of '{fn_name}' is not constrained; add an explicit annotation`)
-                    vec.push(&inferred, ty.ty_to_type_expr_at(ty.ty_error_(), sp))
+                    vec.push(&inferred, qualified_ty_to_type_expr_at(tc, ty.ty_error_(), sp))
                 }
                 }
             }
@@ -2693,6 +2761,7 @@ let validate_signatures(tc: *check.TyContext, f: ast.File) = {
             | Some(p) -> p
             | None    -> ""
             }
+            fmt.println(`VS DFn name='{name}' current_pkg='{tc.current_pkg}'`)
             for pp in params {
                 let _ = resolve_type(tc, pp.ty)
             }

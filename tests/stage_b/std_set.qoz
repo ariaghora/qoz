@@ -4,7 +4,7 @@
 import set
 
 let main(): i64 = {
-    var s: Set<i64> = set.make()
+    var s: set.Set<i64> = set.make()
     set.add(&s, 1)
     set.add(&s, 2)
     set.add(&s, 3)

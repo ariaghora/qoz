@@ -7,7 +7,7 @@
 
 import encoding/json
 
-let len_or_neg(r: Result<Json, string>): i64 = {
+let len_or_neg(r: Result<json.Json, string>): i64 = {
     match r {
     | Err(_) -> -1
     | Ok(v)  -> {

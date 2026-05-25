@@ -1,5 +1,5 @@
 // expect: 0
-// Exercises the pure-Qoz Strbuf module declared in
+// Exercises the pure-Qoz strings.Strbuf module declared in
 // std/strings/strbuf.qoz. The package is split across two .qoz files
 // (strings.qoz and strbuf.qoz); this test also covers the multi-file
 // package loader.
@@ -8,7 +8,7 @@ import strings
 import fmt
 
 let main(): i64 = {
-    var b: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var b: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&b)
     strings.sb_append(&b, "hello")
     strings.sb_append(&b, ", ")

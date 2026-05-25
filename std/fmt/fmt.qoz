@@ -6,7 +6,7 @@
 //     fmt.println(`counter = {count}`)
 //
 // produces the same output as a printf-style call. The interpolation
-// expands at parse time to a Strbuf that builds the final string, so
+// expands at parse time to a strings.Strbuf that builds the final string, so
 // `println` only needs to forward bytes to stdout.
 
 @link_name("qoz_print_str")

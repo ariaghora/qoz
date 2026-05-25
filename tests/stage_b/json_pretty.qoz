@@ -4,14 +4,14 @@
 
 import encoding/json
 
-let compare(r: Result<Json, string>): i64 = {
+let compare(r: Result<json.Json, string>): i64 = {
     match r {
     | Err(_) -> 0
     | Ok(v)  -> compare_ok(v)
     }
 }
 
-let compare_ok(v: Json): i64 = {
+let compare_ok(v: json.Json): i64 = {
     let mini   = json.encode(v)
     let pretty = json.encode_pretty(v, "  ")
     if len(pretty) > len(mini) { 1 } else { 0 }

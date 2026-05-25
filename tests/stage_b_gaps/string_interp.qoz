@@ -1,5 +1,5 @@
 // expect: 0
-// String interpolation: `"{x}"` desugars at parse time to a Strbuf
+// String interpolation: `"{x}"` desugars at parse time to a strings.Strbuf
 // block that uses std/strings. Plain identifiers and dot-paths inside
 // the braces are accepted. `{{` and `}}` are escapes for literal
 // braces.

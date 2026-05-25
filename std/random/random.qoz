@@ -6,7 +6,7 @@
 
 type Rng = { state: u64 }
 
-let make(seed: u64): Rng = Rng { state: seed }
+let make(seed: u64): random.Rng = random.Rng { state: seed }
 
 // Advance the state and return the next u64 value.
 let next_u64(r: *Rng): u64 = {
