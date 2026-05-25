@@ -1,0 +1,11 @@
+// Negative: assigning to a field of a value-returning call writes
+// to a temporary; rejected.
+
+type Pair = { x: i64, y: i64 }
+
+let make_pair(): Pair = Pair { x: 1, y: 2 }
+
+let main(): i64 = {
+    make_pair().x = 99
+    0
+}

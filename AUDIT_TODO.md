@@ -30,7 +30,7 @@ rather than ground truth.
 - [x] **`synth_index` for unindexable bases returns `TyError` silently.** Fixed. Records error.
 - [x] **`synth_field` returns `TyError` for unknown field names without an error.** Fixed. Records error.
 - [x] **`EReturn` does not check the value against the enclosing function's return type.** Fixed via `tc.current_ret_ty` thread; unit-returning functions skip the check (bare `return` desugars to `return nil`).
-- [ ] **`check_fn_bodies` does not verify the body tail type matches the declared return type.** Intentionally deferred. Detecting early-return-only functions whose tail is unreachable requires control-flow analysis. The EReturn check above covers the common case.
+- [x] **`check_fn_bodies` does not verify the body tail type matches the declared return type.** Closed. `expr_has_return` walks the body; the body-tail-type comparison runs only when no `return` exists anywhere. A function that relies on early `return` for all real paths skips the check; a function whose tail is a real value gets validated.
 - [x] **`ECast` performs no validation between source and target types and does not even synthesise the inner value.** The inner value is now synthesised so its type is recorded for the emit walk. Cast-validity rules remain permissive: a cast is a programmer assertion.
 - [x] **`synth_ident` returns `TyError` for fn/extern names without recording an error.** Fixed. Bare fn / extern references now synthesise to their `TyFn` signature.
 - [x] **`is_qualified_variant_field` accepts `OptionA.VariantOfOptionB` because it does not check the variant belongs to the named enum.** Fixed by comparing `variant_of[name]` against the enum name.
@@ -71,9 +71,9 @@ rather than ground truth.
 - [x] **`bind_variant_pattern` does not verify pattern arity against the variant's declared positional payload.** Fixed.
 - [x] **`bind_variant_pattern` does not verify the pattern's variant belongs to the scrutinee's enum.** Fixed via `enum_name_of_ty` lookup; cross-enum variants now report.
 - [x] **`check_match_exhaustiveness` only fires for `TyAdt` scrutinees.** Bool scrutinees now require both true and false (or a catch-all). Integer scrutinees still skipped because the value set is unbounded.
-- [ ] **`check_match_exhaustiveness` treats any `PatBind` as catch-all.** Accepted as correct language semantics: a single-name no-arg pattern binds the scrutinee. Detecting misspelled variant names would require heuristics. Not a real bug.
-- [ ] **`SExpr` accepts any expression as a statement.** Deferred. Would need a warning level for "result discarded", which Qoz does not have yet.
-- [ ] **`is_lvalue_shape` is purely syntactic.** Accepts `get().x = 1` as an lvalue. The C compiler catches the assign-to-temporary case downstream; refining the check requires tracking call return types as pointer-vs-value. Deferred.
+- [x] **`check_match_exhaustiveness` treats any `PatBind` as catch-all.** Closed via diagnostic. When a `PatBind` name matches a variant of a different enum, an error reports the shadowing and suggests the qualified form or a renamed binding.
+- [x] **`SExpr` accepts any expression as a statement.** Closed for the common-bug case. A discarded `Result<T, E>` produces an error pointing to use `?`, `match`, or `let _ = ...`. Other types remain accepted because there is no general "result discarded" warning system.
+- [x] **`is_lvalue_shape` is purely syntactic.** Closed. New `is_lvalue` adds a type-aware check: `f().x = v` is rejected when `f()` returns a value type. Only call-returning-pointer receivers may be assigned through.
 
 ### Emitter
 

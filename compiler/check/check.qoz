@@ -455,6 +455,11 @@ let synth_inner(tc: *TyContext, env: *Env, e: Expr): Ty = {
 // and pointer dereferences are the four shapes Qoz allows. The
 // check stays syntactic; whether an `EIdent` actually names a `var`
 // binding is enforced by a future pass, not here.
+// `is_lvalue_shape` performs the structural part of the lvalue check.
+// `is_lvalue` adds a type-aware refinement: a field or index access
+// whose base is a function call writes to a temporary unless the
+// call returns a pointer. The tc context is consulted to resolve the
+// base's type.
 let is_lvalue_shape(e: Expr): bool = {
     match e {
     | EIdent(_, _)         -> true
@@ -465,12 +470,31 @@ let is_lvalue_shape(e: Expr): bool = {
     }
 }
 
+let is_lvalue(tc: *TyContext, env: *Env, e: Expr): bool = {
+    if !is_lvalue_shape(e) { return false }
+    match e {
+    | EField(_, base, _) | EIndex(_, base, _) -> {
+        match base {
+        | ECall(_, _, _, _) -> {
+            // A call returns a value; assigning through `call().f`
+            // would write to a temporary. Only valid when the
+            // call's return type is a pointer.
+            let bt = synth(tc, env, base)
+            match bt { | TyPtr(_) -> true | _ -> false }
+        }
+        | _ -> true
+        }
+    }
+    | _ -> true
+    }
+}
+
 // Type-check an assignment. Reports an error if the lhs has an
 // unassignable shape, and if the rhs type cannot flow into the lhs
 // type. Returns unit; the assignment expression itself produces no
 // value.
 let check_assign(tc: *TyContext, env: *Env, sp: Span, lhs: Expr, rhs: Expr): Ty = {
-    if !is_lvalue_shape(lhs) {
+    if !is_lvalue(tc, env, lhs) {
         record_error(tc, sp, "left-hand side of `=` is not assignable")
     }
     // Reject assignment to a let-bound identifier. Field, index, and
@@ -1359,7 +1383,15 @@ let synth_block(tc: *TyContext, env: *Env, stmts: Vec<Stmt>, tail: Expr): Ty = {
             check_binding_compat(tc, sp, te, bound, vt)
             env_define_var(env, name, bound, true)
         }
-        | SExpr(_, ex)            -> { let _ = synth(tc, env, ex) }
+        | SExpr(sp, ex)           -> {
+            let t = synth(tc, env, ex)
+            // A discarded Result<T, E> is almost always a bug because
+            // the error case goes unhandled. Flag it. Other non-unit
+            // values are conventionally discardable.
+            if is_unhandled_result(t) {
+                record_error(tc, sp, "discarded Result<T, E>; use `?`, `match`, or `let _ = ...` to acknowledge the value")
+            }
+        }
         }
     }
     synth(tc, env, tail)
@@ -1432,6 +1464,25 @@ let check_match_exhaustiveness(tc: *TyContext, scrut: Expr, scrut_ty: Ty, arms: 
         | DEnum(_, _, _, variants) -> {
             var vs: CoverSet = CoverSet { bound: map.make() }
             for v in variants { vs.bound[v.name] = true }
+            // Flag PatBind names that match a variant of a DIFFERENT
+            // enum. Likely a typo (`Resul.Ok` written as plain `Ok`
+            // matched on an Option scrutinee). The check runs once
+            // per arm; it does not change exhaustiveness behaviour.
+            for arm in arms {
+                match arm.pat {
+                | PatBind(psp, name) -> {
+                    match map.get(&tc.variant_of, name) {
+                    | Some(other_enum) -> {
+                        if !strings.eq_raw(other_enum, enum_name) {
+                            record_error(tc, psp, "binding `{name}` shadows a variant of enum `{other_enum}`; this arm is a catch-all bind, not a variant match. Use `{other_enum}.{name}` or rename the binding")
+                        }
+                    }
+                    | None -> { }
+                    }
+                }
+                | _ -> { }
+                }
+            }
             if has_catch_all_with_variants(arms, &vs) { return }
             var cs: CoverSet = CoverSet { bound: map.make() }
             collect_covered_variants(arms, &cs)
@@ -2031,10 +2082,66 @@ let rewrite_call(tc: *TyContext, env: *Env, sp: Span, callee: Expr, type_args: V
     }
 }
 
+// True when `t` is `Result<T, E>` and would be silently dropped if
+// the surrounding expression is used as a statement.
+let is_unhandled_result(t: Ty): bool = {
+    match t {
+    | TyAdt(name, _) -> strings.eq_raw(name, "Result")
+    | _ -> false
+    }
+}
+
+// True when `e` contains an `EReturn` anywhere in its sub-tree.
+// Used by check_fn_bodies to suppress the body-tail-type check when
+// the user controls exit paths explicitly. The walk goes through all
+// sub-expressions; statement-level returns inside blocks are caught
+// via the EBlock arm.
+let expr_has_return(e: Expr): bool = {
+    match e {
+    | EReturn(_, _) -> true
+    | EUnary(_, _, rhs) -> expr_has_return(rhs)
+    | EBinary(_, _, l, r) -> expr_has_return(l) || expr_has_return(r)
+    | EAssign(_, _, l, r) -> expr_has_return(l) || expr_has_return(r)
+    | ECall(_, callee, _, args) -> {
+        if expr_has_return(callee) { return true }
+        for a in args { if expr_has_return(a) { return true } }
+        false
+    }
+    | EField(_, base, _) -> expr_has_return(base)
+    | EIndex(_, base, idx) -> expr_has_return(base) || expr_has_return(idx)
+    | ECast(_, value, _) -> expr_has_return(value)
+    | ETry(_, v) -> expr_has_return(v)
+    | ETuple(_, elems) -> { for el in elems { if expr_has_return(el) { return true } } false }
+    | ERecord(_, _, fields) -> { for f in fields { if expr_has_return(f.value) { return true } } false }
+    | EClosure(_, _, _, _) -> false
+    | EBlock(_, stmts, tail) -> {
+        for s in stmts { if stmt_has_return(s) { return true } }
+        expr_has_return(tail)
+    }
+    | EIf(_, c, t, f) -> expr_has_return(c) || expr_has_return(t) || expr_has_return(f)
+    | EMatch(_, scrut, arms) -> {
+        if expr_has_return(scrut) { return true }
+        for a in arms { if expr_has_return(a.body) { return true } }
+        false
+    }
+    | EWhile(_, c, b) -> expr_has_return(c) || expr_has_return(b)
+    | EFor(_, _, _, it, b) -> expr_has_return(it) || expr_has_return(b)
+    | EDefer(_, b) -> expr_has_return(b)
+    | EArrayLit(_, elems) -> { for el in elems { if expr_has_return(el) { return true } } false }
+    | _ -> false
+    }
+}
+
+let stmt_has_return(s: Stmt): bool = {
+    match s {
+    | SLet(_, _, _, v) | SVar(_, _, _, v) | SExpr(_, v) -> expr_has_return(v)
+    }
+}
+
 let check_fn_bodies(tc: *TyContext, f: File) = {
     for d in f.decls {
         match d {
-        | DFn(_, _, tparams, params, ret, body, _) -> {
+        | DFn(sp, _, tparams, params, ret, body, _) -> {
             set_type_params(tc, tparams)
             var env = env_make()
             for pp in params {
@@ -2043,16 +2150,24 @@ let check_fn_bodies(tc: *TyContext, f: File) = {
             let declared_ret = resolve_type(tc, ret)
             let saved_ret = tc.current_ret_ty
             tc.current_ret_ty = declared_ret
-            let _ = synth(tc, &env, body)
+            let body_ty = synth(tc, &env, body)
             tc.current_ret_ty = saved_ret
-            // The body's tail type is intentionally not compared to
-            // the declared return here. Early-return-only functions
-            // have a statement-shaped tail (while, for, panic) whose
-            // synthesised type is unit but whose flow can never reach
-            // the end. Control-flow analysis would be required to
-            // distinguish that case from a real mismatch; the EReturn
-            // check above already catches typed-return-value
-            // mismatches, which is the common bug.
+            // Body-tail-type check. Only enforced when the body has
+            // no explicit `return` anywhere. The presence of `return`
+            // indicates the user controls exit paths; the tail may
+            // be unreachable. Unit-returning functions also skip
+            // because a statement-shaped tail produces unit by
+            // definition.
+            let skip =
+                ty.ty_is_error(body_ty) ||
+                ty.ty_is_error(declared_ret) ||
+                ty.ty_is_unit(declared_ret) ||
+                expr_has_return(body)
+            if !skip {
+                if !ty.ty_assignable(declared_ret, body_ty) {
+                    record_error(tc, sp, "function body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(declared_ret)}")
+                }
+            }
             clear_type_params(tc)
         }
         | DImport(_, _, _) -> { }

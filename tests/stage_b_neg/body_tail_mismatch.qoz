@@ -1,0 +1,10 @@
+// Negative: function body's tail type must match declared return
+// type when the body has no explicit `return` statements.
+
+let f(): i64 = {
+    "not an integer"
+}
+
+let main(): i64 = {
+    f()
+}
