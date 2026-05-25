@@ -1,0 +1,25 @@
+// expect: 4
+// `\uXXXX` surrogate-pair decoding for codepoints above U+FFFF.
+// U+1F600 (emoji) encodes as a 4-byte UTF-8 sequence (F0 9F 98 80).
+// The test confirms the byte length so the surrogate combine is
+// producing the correct codepoint without relying on terminal
+// rendering.
+
+import encoding/json
+
+let len_or_neg(r: Result<Json, string>): i64 = {
+    match r {
+    | Err(_) -> -1
+    | Ok(v)  -> {
+        match json.as_str(v) {
+        | Some(s) -> len(s)
+        | None    -> -2
+        }
+    }
+    }
+}
+
+let main(): i64 = {
+    let text = "\"\\uD83D\\uDE00\""
+    len_or_neg(json.parse_text(text))
+}

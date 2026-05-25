@@ -1,0 +1,23 @@
+// expect: 1
+// Pretty-printed JSON spans multiple lines; the encoded length of a
+// non-trivial document with newlines exceeds the minified length.
+
+import encoding/json
+
+let compare(r: Result<Json, string>): i64 = {
+    match r {
+    | Err(_) -> 0
+    | Ok(v)  -> compare_ok(v)
+    }
+}
+
+let compare_ok(v: Json): i64 = {
+    let mini   = json.encode(v)
+    let pretty = json.encode_pretty(v, "  ")
+    if len(pretty) > len(mini) { 1 } else { 0 }
+}
+
+let main(): i64 = {
+    let text = "{\"a\": 1, \"b\": [1, 2, 3], \"c\": {\"d\": true}}"
+    compare(json.parse_text(text))
+}

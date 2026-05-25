@@ -33,9 +33,11 @@ external let bytes_copy(dst: *void, src: *void, n: i64)
 type Parser = {
     src: string,
     pos: i64,
+    line: i64,
+    col:  i64,
 }
 
-let make_parser(s: string): Parser = Parser { src: s, pos: 0 }
+let make_parser(s: string): Parser = Parser { src: s, pos: 0, line: 1, col: 1 }
 
 let at_end(p: *Parser): bool = p.pos >= len(p.src)
 
@@ -44,7 +46,11 @@ let cur(p: *Parser): i64 = {
     strings.byte_at(p.src, p.pos)
 }
 
-let advance(p: *Parser) = { p.pos += 1 }
+let advance(p: *Parser) = {
+    let c = cur(p)
+    p.pos += 1
+    if c == 10 { p.line += 1; p.col = 1 } else { p.col += 1 }
+}
 
 let skip_ws(p: *Parser) = {
     while !at_end(p) {
@@ -187,8 +193,29 @@ let parse_string_raw(p: *Parser): Result<string, string> = {
                 match code_or_err {
                 | Err(m) -> return Err(m)
                 | Ok(code) -> {
+                    var final_code = code
+                    if code >= 0xD800 && code <= 0xDBFF {
+                        if p.pos + 2 > len(p.src)
+                            || strings.byte_at(p.src, p.pos) != 92
+                            || strings.byte_at(p.src, p.pos + 1) != 117 {
+                            return Err("expected low-surrogate `\\uXXXX` after high surrogate")
+                        }
+                        advance(p); advance(p)
+                        let lo_r = parse_hex4(p)
+                        match lo_r {
+                        | Err(m) -> return Err(m)
+                        | Ok(lo) -> {
+                            if lo < 0xDC00 || lo > 0xDFFF {
+                                return Err("expected low surrogate (U+DC00..U+DFFF)")
+                            }
+                            final_code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
+                        }
+                        }
+                    } else if code >= 0xDC00 && code <= 0xDFFF {
+                        return Err("unpaired low surrogate")
+                    }
                     if i + 4 > bcap { bcap = grow_to(&buf, bcap, i + 4) }
-                    i = utf8_encode(buf, i, code)
+                    i = utf8_encode(buf, i, final_code)
                 }
                 }
             } else {
@@ -235,10 +262,17 @@ let utf8_encode(buf: *u8, i: i64, code: i64): i64 = {
         buf[i + 1] = (0x80 + (code % 64)) as u8
         return i + 2
     }
-    buf[i]     = (0xE0 + (code / 4096)) as u8
-    buf[i + 1] = (0x80 + ((code / 64) % 64)) as u8
-    buf[i + 2] = (0x80 + (code % 64)) as u8
-    i + 3
+    if code < 0x10000 {
+        buf[i]     = (0xE0 + (code / 4096)) as u8
+        buf[i + 1] = (0x80 + ((code / 64) % 64)) as u8
+        buf[i + 2] = (0x80 + (code % 64)) as u8
+        return i + 3
+    }
+    buf[i]     = (0xF0 + (code / 262144)) as u8
+    buf[i + 1] = (0x80 + ((code / 4096) % 64)) as u8
+    buf[i + 2] = (0x80 + ((code / 64) % 64)) as u8
+    buf[i + 3] = (0x80 + (code % 64)) as u8
+    i + 4
 }
 
 let grow_to(buf: **u8, cap: i64, need: i64): i64 = {
@@ -306,7 +340,9 @@ let parse_object(p: *Parser): Result<Json, string> = {
 }
 
 let error_at(p: *Parser, msg: string): string = {
-    strings.cat(msg, " at position ")
+    let line_str = strings.i64_to_string(p.line)
+    let col_str  = strings.i64_to_string(p.col)
+    strings.cat(strings.cat(strings.cat(msg, " at line "), strings.cat(line_str, " col ")), col_str)
 }
 
 // ---- Encoder ----
@@ -318,6 +354,81 @@ let encode(v: Json): string = {
     strings.sb_finish(&sb)
 }
 
+let encode_pretty(v: Json, indent: string): string = {
+    var sb: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    strings.sb_init(&sb)
+    encode_pretty_into(&sb, v, indent, 0)
+    strings.sb_finish(&sb)
+}
+
+let encode_pretty_into(sb: *Strbuf, v: Json, indent: string, depth: i64) = {
+    match v {
+    | Null    -> strings.sb_append(sb, "null")
+    | Bool(b) -> {
+        if b { strings.sb_append(sb, "true") }
+        else { strings.sb_append(sb, "false") }
+    }
+    | Num(n)  -> encode_number(sb, n)
+    | Str(s)  -> encode_string(sb, s)
+    | Arr(items) -> {
+        if items.len == 0 { strings.sb_append(sb, "[]") }
+        else {
+            strings.sb_append(sb, "[\n")
+            var i: i64 = 0
+            for el in items {
+                if i > 0 { strings.sb_append(sb, ",\n") }
+                emit_indent(sb, indent, depth + 1)
+                encode_pretty_into(sb, el, indent, depth + 1)
+                i += 1
+            }
+            strings.sb_append(sb, "\n")
+            emit_indent(sb, indent, depth)
+            strings.sb_append(sb, "]")
+        }
+    }
+    | Obj(fields) -> {
+        if fields.len == 0 { strings.sb_append(sb, "{}") }
+        else {
+            strings.sb_append(sb, "{\n")
+            let keys = map.sorted_keys(&fields)
+            var i: i64 = 0
+            for k in keys {
+                if i > 0 { strings.sb_append(sb, ",\n") }
+                emit_indent(sb, indent, depth + 1)
+                encode_string(sb, k)
+                strings.sb_append(sb, ": ")
+                match map.get(&fields, k) {
+                | Some(jv) -> encode_pretty_into(sb, jv, indent, depth + 1)
+                | None     -> { }
+                }
+                i += 1
+            }
+            strings.sb_append(sb, "\n")
+            emit_indent(sb, indent, depth)
+            strings.sb_append(sb, "}")
+        }
+    }
+    }
+}
+
+let emit_indent(sb: *Strbuf, indent: string, depth: i64) = {
+    var k: i64 = 0
+    while k < depth {
+        strings.sb_append(sb, indent)
+        k += 1
+    }
+}
+
+let encode_number(sb: *Strbuf, n: f64) = {
+    if n != n {
+        strings.sb_append(sb, "null")
+    } else if n > 1.0e308 || n < -1.0e308 {
+        strings.sb_append(sb, "null")
+    } else {
+        strings.sb_append_f64(sb, n)
+    }
+}
+
 let encode_into(sb: *Strbuf, v: Json) = {
     match v {
     | Null    -> strings.sb_append(sb, "null")
@@ -325,7 +436,7 @@ let encode_into(sb: *Strbuf, v: Json) = {
         if b { strings.sb_append(sb, "true") }
         else { strings.sb_append(sb, "false") }
     }
-    | Num(n)  -> strings.sb_append_f64(sb, n)
+    | Num(n)  -> encode_number(sb, n)
     | Str(s)  -> encode_string(sb, s)
     | Arr(items) -> {
         strings.sb_append(sb, "[")

@@ -77,8 +77,14 @@ let is_float_lit(t: Token): bool =
 
 let is_str_lit(t: Token): bool =
     match t.kind {
-    | TokString -> true
-    | _         -> false
+    | TokString | TokInterpString -> true
+    | _                           -> false
+    }
+
+let is_interp_str_lit(t: Token): bool =
+    match t.kind {
+    | TokInterpString -> true
+    | _               -> false
     }
 
 let is_char_lit(t: Token): bool =

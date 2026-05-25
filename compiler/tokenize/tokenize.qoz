@@ -12,6 +12,7 @@ type TokenKind =
     | TokInt
     | TokFloat
     | TokString
+    | TokInterpString
     | TokChar
     | TokPunct
     | TokKeyword
@@ -38,7 +39,7 @@ let make_lexer(src: string): Lexer = Lexer { src: src, pos: 0, line: 1, col: 1 }
 // downstream consumers cannot reliably distinguish from a well-formed
 // token; aborting here produces a clear, locatable diagnostic.
 let lex_die(l: *Lexer, msg: string) = {
-    fmt.println("tokenize error at line {l.line} col {l.col}: {msg}")
+    fmt.println(`tokenize error at line {l.line} col {l.col}: {msg}`)
     os.exit(1)
 }
 
@@ -241,6 +242,24 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
         return Token { kind: TokString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
+    // Backtick-delimited interpolated string. `{name}` is replaced
+    // with the value of `name`; `{{` and `}}` are literal-brace
+    // escapes. Backslash escapes work the same as in `"..."`.
+    if c == 96 {
+        lex_advance(l)
+        while l.pos < len(l.src) && lex_at(l) != 96 {
+            if lex_at(l) == 92 && l.pos + 1 < len(l.src) {
+                lex_advance(l)
+            }
+            lex_advance(l)
+        }
+        if l.pos >= len(l.src) {
+            lex_die(l, "unterminated backtick string literal")
+        }
+        lex_advance(l)
+        return Token { kind: TokInterpString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+    }
+
     if is_punct(c) {
         lex_advance(l)
         if l.pos < len(l.src) {
@@ -283,7 +302,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
 
 let is_stmt_ender(t: Token): bool = {
     match t.kind {
-    | TokIdent | TokInt | TokFloat | TokString | TokChar -> true
+    | TokIdent | TokInt | TokFloat | TokString | TokInterpString | TokChar -> true
     | TokKeyword -> {
         if strings.eq_raw(t.text, "true")   { return true }
         if strings.eq_raw(t.text, "false")  { return true }
