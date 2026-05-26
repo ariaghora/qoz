@@ -31,11 +31,17 @@ syntax match qozNumber "\<0o[0-7_]\+\>"
 
 " -- Strings ---------------------------------------------------------
 syntax region qozString start=+"+ skip=+\\\\\|\\"+ end=+"+ contains=qozEscape,@Spell
-syntax region qozString start=+`+ end=+`+ contains=qozEscape,qozInterp,@Spell
+syntax region qozString start=+`+ end=+`+ contains=qozEscape,qozInterp,qozBraceEscape,@Spell
 syntax match  qozEscape "\\[nrtbf0\\\"'`]" contained
 syntax match  qozEscape "\\x[0-9A-Fa-f]\{2\}" contained
 syntax match  qozEscape "\\u[0-9A-Fa-f]\{4\}" contained
-syntax region qozInterp  start=+{+ end=+}+ contained contains=ALLBUT,qozInterp
+" `{` opens an interpolation slot; `{{` and `}}` are literal-brace
+" escapes that must not open one. The negative lookahead on the
+" start pattern keeps a doubled brace from triggering the region;
+" the explicit qozBraceEscape match consumes both characters with
+" higher priority because it is defined later.
+syntax region qozInterp  start=+{\({\)\@!+ end=+}+ contained contains=ALLBUT,qozInterp
+syntax match  qozBraceEscape "{{\|}}" contained
 
 " -- Char literal ---------------------------------------------------
 " A char literal is one byte or one escape sequence surrounded by
@@ -77,6 +83,7 @@ highlight default link qozString       String
 highlight default link qozChar         Character
 highlight default link qozEscape       SpecialChar
 highlight default link qozInterp       Special
+highlight default link qozBraceEscape  SpecialChar
 highlight default link qozAttribute    Identifier
 highlight default link qozOperator     Operator
 
