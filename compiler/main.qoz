@@ -462,7 +462,41 @@ let count_main_decls(decls: Vec<ast.Decl>): i64 = {
     n
 }
 
-let cmd_build(path: string, qoz_root: string): string = {
+type BuildResult = {
+    c_path:     string,
+    link_flags: Vec<string>,
+}
+
+// Walk a file's declarations and turn every #link_library /
+// #link_framework / #link_path directive into the clang flag pair
+// that produces the matching behaviour. Returned in the order the
+// directives appeared, so a user-controlled search path can precede
+// the library reference that depends on it.
+let collect_link_flags(file: ast.File): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    for d in file.decls {
+        match d {
+        | DLink(_, kind, name) -> {
+            match kind {
+            | LinkLibrary   -> {
+                vec.push(&out, strings.cat("-l", name))
+            }
+            | LinkFramework -> {
+                vec.push(&out, "-framework")
+                vec.push(&out, name)
+            }
+            | LinkPath      -> {
+                vec.push(&out, strings.cat("-L", name))
+            }
+            }
+        }
+        | _ -> { }
+        }
+    }
+    out
+}
+
+let cmd_build(path: string, qoz_root: string): main.BuildResult = {
     let paths = resolve_entry_paths(path)
     let loaded = load_all_entries(paths.entries, paths.primary, qoz_root)
     let file = loaded.file
@@ -495,7 +529,7 @@ let cmd_build(path: string, qoz_root: string): string = {
         fmt.println(`could not write {out_path}`)
         os.exit(1)
     }
-    out_path
+    main.BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred) }
 }
 
 // Derive the executable path from a C output path. Strips the
@@ -513,7 +547,7 @@ let bin_path_for(c_path: string): string = {
 // Clang flags used for both `build` and `run`. Kept in one place so
 // the compiler binary, the build script, and the bootstrap path
 // agree.
-let clang_argv(c_path: string, bin_path: string): Vec<string> = {
+let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<string> = {
     var argv: Vec<string> = vec.make()
     vec.push(&argv, "clang")
     vec.push(&argv, "-std=c11")
@@ -531,6 +565,7 @@ let clang_argv(c_path: string, bin_path: string): Vec<string> = {
     vec.push(&argv, c_path)
     vec.push(&argv, "-o")
     vec.push(&argv, bin_path)
+    for f in link_flags { vec.push(&argv, f) }
     argv
 }
 
@@ -617,14 +652,14 @@ let clean_line(s: string): string = {
 // child's exit code. The emitted .c and the binary are removed after
 // the run; users who want the source should invoke `qoz emit`.
 let cmd_run(path: string, qoz_root: string) = {
-    let c_path = cmd_build(path, qoz_root)
-    let bin_path = bin_path_for(c_path)
-    let cargv = clang_argv(c_path, bin_path)
+    let built = cmd_build(path, qoz_root)
+    let bin_path = bin_path_for(built.c_path)
+    let cargv = clang_argv(built.c_path, bin_path, built.link_flags)
     let clang_result = os.process_exec(cargv)
     if clang_result.exit_code != 0 {
         fmt.print(clang_result.stdout)
         fmt.print(clang_result.stderr)
-        unlink_quiet(c_path)
+        unlink_quiet(built.c_path)
         os.exit(1)
     }
 
@@ -633,7 +668,7 @@ let cmd_run(path: string, qoz_root: string) = {
     let result = os.process_exec(run_argv)
     fmt.print(result.stdout)
     fmt.print(result.stderr)
-    unlink_quiet(c_path)
+    unlink_quiet(built.c_path)
     unlink_quiet(bin_path)
     os.exit(result.exit_code)
 }
@@ -665,8 +700,8 @@ let main() = {
             fmt.println("usage: qoz emit <path>")
             os.exit(1)
         }
-        let out = cmd_build(args[2], qoz_root)
-        fmt.println(`wrote {out}`)
+        let built = cmd_build(args[2], qoz_root)
+        fmt.println(`wrote {built.c_path}`)
         os.exit(0)
     } else { if strings.eq_raw(first, "build") {
         if len(args) < 3 {
@@ -674,19 +709,19 @@ let main() = {
             os.exit(1)
         }
         let path = args[2]
-        let c_path = cmd_build(path, qoz_root)
-        let bin_path = bin_path_for(c_path)
-        let cargv = clang_argv(c_path, bin_path)
+        let built = cmd_build(path, qoz_root)
+        let bin_path = bin_path_for(built.c_path)
+        let cargv = clang_argv(built.c_path, bin_path, built.link_flags)
         let r = os.process_exec(cargv)
         if r.exit_code != 0 {
             fmt.print(r.stdout)
             fmt.print(r.stderr)
-            unlink_quiet(c_path)
+            unlink_quiet(built.c_path)
             os.exit(1)
         }
         // build keeps only the binary. Use `qoz emit` to retain the
         // C source.
-        unlink_quiet(c_path)
+        unlink_quiet(built.c_path)
         os.exit(0)
     } else { if strings.eq_raw(first, "run") {
         if len(args) < 3 {
@@ -699,8 +734,8 @@ let main() = {
         // C only. This is the historical default that
         // bootstrap/stage1.c was built against; preserved so existing
         // build scripts keep working.
-        let out = cmd_build(first, qoz_root)
-        fmt.println(`wrote {out}`)
+        let built = cmd_build(first, qoz_root)
+        fmt.println(`wrote {built.c_path}`)
         os.exit(0)
     } } } }
 }

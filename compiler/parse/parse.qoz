@@ -1718,6 +1718,8 @@ let parse_link_directive(p: *Parser): ast.Decl = {
     var kind: ast.LinkKind = LinkLibrary
     if strings.eq_raw(name, "link_framework") {
         kind = LinkFramework
+    } else if strings.eq_raw(name, "link_path") {
+        kind = LinkPath
     }
     DLink(span, kind, lib_name)
 }
