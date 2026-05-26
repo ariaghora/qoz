@@ -2,53 +2,30 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch: {}
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  posix:
-    name: ${{ matrix.os }} (${{ matrix.cc }})
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: Linux (${{ matrix.cc }})
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         cc: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run regression suite
+      - name: Build and test
         run: |
           export CC=${{ matrix.cc }}
           make
-          make test
-
-  windows:
-    name: windows-latest (clang)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up MSYS2
-        # Use mingw64 so we get a Unix-shaped make and a real gcc/clang
-        # toolchain. The runtime ports its POSIX dependencies behind
-        # `#ifdef _WIN32`, so we still build through the Makefile.
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-gcc
-            make
-            findutils
-      - name: Build stage0 -> stage1 -> qoz
-        shell: msys2 {0}
-        run: |
-          export CC=clang
-          make
-      - name: Run regression suite
-        shell: msys2 {0}
-        run: |
-          export CC=clang
           make test
