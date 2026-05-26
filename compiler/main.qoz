@@ -1262,8 +1262,13 @@ let cmd_check(path: string, qoz_root: string, from_stdin: bool) = {
     check.validate_signatures(&tc, file)
     let inferred = check.infer_calls(&tc, file)
     check.check_fn_bodies(&tc, inferred)
+    var seen: Map<string, bool> = map.make()
     for e in tc.errors {
-        fmt.println(`{e.span.file}:{e.span.line}:{e.span.col}: {e.message}`)
+        let key = `{e.span.file}:{e.span.line}:{e.span.col}:{e.message}`
+        if !map.contains(&seen, key) {
+            seen[key] = true
+            fmt.println(`{e.span.file}:{e.span.line}:{e.span.col}: {e.message}`)
+        }
     }
     let _keep_alive = loaded.sources
     os.exit(0)

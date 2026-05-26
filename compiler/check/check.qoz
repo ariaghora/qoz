@@ -37,6 +37,12 @@ type TyContext = {
     // a qualified path (Enum.Variant) is required at the call site
     // unless context pins the enum.
     variant_homes: Map<string, Vec<string>>,
+    // Same shape as variant_homes, for C-style enums. Maps the short
+    // variant name to every C-enum (by renamed name) that declares
+    // it. Used to resolve bare references like `Orthographic` to
+    // `rl.CameraProjection.Orthographic`. Multi-entry values force
+    // either expected-type disambiguation or a hard error.
+    c_variant_homes: Map<string, Vec<string>>,
     // Every owning package of a given short type name. Empty string
     // in the vec means the prelude. Multiple entries mean two
     // packages declare the same short name. Lookups disambiguate via
@@ -82,6 +88,7 @@ let make_ctx(): check.TyContext = TyContext {
     packages:    map.make(),
     variant_of:  map.make(),
     variant_homes: map.make(),
+    c_variant_homes: map.make(),
     type_homes:  map.make(),
     fn_homes:    map.make(),
     fn_param_tys: map.make(),
@@ -293,7 +300,7 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         tc.aliases[key] = d
         record_type_home(tc, name, home)
     }
-    | DCEnum(sp, name, _, _)           -> {
+    | DCEnum(sp, name, _, variants)    -> {
         let home = home_of_file(tc, sp.file)
         let key = type_key(home, name)
         if map.contains(&tc.enums, key) || map.contains(&tc.structs, key) || map.contains(&tc.aliases, key) || map.contains(&tc.c_enums, key) {
@@ -301,6 +308,18 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         }
         tc.c_enums[key] = d
         record_type_home(tc, name, home)
+        for v in variants {
+            var homes: Vec<string> = match map.get(&tc.c_variant_homes, v) {
+            | Some(h) -> h
+            | None    -> vec.make()
+            }
+            var seen = false
+            for h in homes { if strings.eq_raw(h, name) { seen = true } }
+            if !seen {
+                vec.push(&homes, name)
+                tc.c_variant_homes[v] = homes
+            }
+        }
     }
     | DFn(_, name, _, _, _, _, _)     -> { tc.fns[name] = d }
     | DExternal(_, name, _, _, _)     -> { tc.externs[name] = d }
@@ -1927,6 +1946,19 @@ let synth_ident(tc: *check.TyContext, env: *Env, span: ast.Span, name: string): 
     }
     | None -> { }
     }
+    if let Some(homes) = map.get(&tc.c_variant_homes, name) {
+        var list = ""
+        var first = true
+        for h in homes {
+            if !first { list = strings.cat(list, ", ") }
+            first = false
+            list = strings.cat(list, denormalize_enum_name(h))
+            list = strings.cat(list, ".")
+            list = strings.cat(list, name)
+        }
+        record_error(tc, span, `ambiguous C-enum variant '{name}': could be {list}. Qualify with one of these to disambiguate.`)
+        return ty.ty_error_()
+    }
     record_error(tc, span, `undefined name '{name}'`)
     ty.ty_error_()
 }
@@ -2409,6 +2441,39 @@ let infer_calls_decl(tc: *check.TyContext, d: ast.Decl): ast.Decl = {
     }
 }
 
+// Pick the renamed C-enum that owns a bare variant name. Returns
+// Some(renamed_name) when exactly one enum claims the variant, or
+// when expected is a TyCEnum whose enum declares it. Returns None
+// when the bare reference is ambiguous (multiple homes, no
+// expected) or when the name is not a C-enum variant at all. The
+// caller decides whether to rewrite or emit a diagnostic.
+// Convert a renamed enum identifier `<pkg>_<EnumShort>` back to the
+// user-facing `pkg.EnumShort` form. Used only in diagnostics where
+// the suggested qualified form should match the source syntax.
+let denormalize_enum_name(renamed: string): string = {
+    let n = len(renamed)
+    var i: i64 = 0
+    while i < n {
+        if strings.byte_at(renamed, i) == 95 {
+            let pkg = strings.slice(renamed, 0, i)
+            let rest = strings.slice(renamed, i + 1, n)
+            return strings.cat(strings.cat(pkg, "."), rest)
+        }
+        i += 1
+    }
+    renamed
+}
+
+let pick_c_enum_home(tc: *check.TyContext, name: string, expected: ty.Ty): Option<string> = {
+    if let Some(homes) = map.get(&tc.c_variant_homes, name) {
+        if let TyCEnum(_, enum_name, _) = expected {
+            for h in homes { if strings.eq_raw(h, enum_name) { return Some(h) } }
+        }
+        if len(homes) == 1 { return Some(homes[0]) }
+    }
+    None
+}
+
 let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): ast.Expr = {
     match e {
     | EInt(_, _)              -> e
@@ -2417,7 +2482,14 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
     | EChar(_, _)             -> e
     | EBool(_, _)             -> e
     | ENil(_)                 -> e
-    | EIdent(_, _)            -> e
+    | EIdent(sp, name)        -> {
+        if env_has(env, name) { return e }
+        if map.contains(&tc.variant_of, name) { return e }
+        match pick_c_enum_home(tc, name, expected) {
+        | Some(enum_name) -> EField(sp, EIdent(sp, enum_name), name)
+        | None            -> e
+        }
+    }
     | EPath(_, _)             -> e
     | EUnary(sp, op, rhs)     -> EUnary(sp, op, infer_calls_expr(tc, env, rhs, ty.ty_error_()))
     | EBinary(sp, op, l, r)   -> EBinary(sp, op, infer_calls_expr(tc, env, l, ty.ty_error_()), infer_calls_expr(tc, env, r, ty.ty_error_()))
