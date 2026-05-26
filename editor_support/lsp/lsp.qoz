@@ -14,6 +14,9 @@ import map
 import vec
 import os
 import encoding/json
+import compiler/tokenize
+import compiler/ast
+import compiler/parse
 
 // Read one complete frame from stdin. Returns None at EOF or when
 // the header is malformed. Blocking I/O suspends the process, so a
@@ -205,7 +208,14 @@ let initialize_result(): json.Json = {
     // textDocumentSync = 1 means full document sync. didChange
     // payloads carry the entire new buffer each time, which is the
     // simplest model and matches the per-request reparse below.
-    caps["textDocumentSync"] = Num(1.0)
+    caps["textDocumentSync"]    = Num(1.0)
+    caps["definitionProvider"]  = Bool(true)
+    caps["hoverProvider"]       = Bool(true)
+    var comp: Map<string, json.Json> = map.make()
+    var triggers: Vec<json.Json> = vec.make()
+    vec.push(&triggers, Str("."))
+    comp["triggerCharacters"]   = Arr(triggers)
+    caps["completionProvider"]  = Obj(comp)
 
     var server_info: Map<string, json.Json> = map.make()
     server_info["name"]    = Str("qoz-language-server")
@@ -397,6 +407,314 @@ let diagnostic_to_json(d: lsp.Diagnostic): json.Json = {
     Obj(m)
 }
 
+// --- Goto definition -----------------------------------------------
+
+// Find the identifier at (line, col) inside `text`. Returns "" when
+// the position falls on whitespace or punctuation. Lines and cols
+// are 0-indexed per the LSP spec.
+let identifier_at(text: string, line: i64, col: i64): string = {
+    let offset = byte_offset_of(text, line, col)
+    if offset < 0 { return "" }
+    let n = len(text)
+    if offset >= n { return "" }
+    if !is_ident_byte(strings.byte_at(text, offset)) { return "" }
+    var lo = offset
+    while lo > 0 {
+        if !is_ident_byte(strings.byte_at(text, lo - 1)) { return strings.slice(text, lo, end_of_ident(text, offset)) }
+        lo -= 1
+    }
+    strings.slice(text, 0, end_of_ident(text, offset))
+}
+
+let end_of_ident(text: string, start: i64): i64 = {
+    var hi = start + 1
+    let n = len(text)
+    while hi < n && is_ident_byte(strings.byte_at(text, hi)) { hi += 1 }
+    hi
+}
+
+let is_ident_byte(b: i64): bool = {
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
+}
+
+let byte_offset_of(text: string, line: i64, col: i64): i64 = {
+    let n = len(text)
+    var off: i64 = 0
+    var cur_line: i64 = 0
+    while cur_line < line && off < n {
+        if strings.byte_at(text, off) == 10 { cur_line += 1 }
+        off += 1
+    }
+    if cur_line < line { return 0 - 1 }
+    off + col
+}
+
+// Search the buffer's AST for a top-level declaration whose name
+// matches `name`. Returns the declaration's span when found. Local
+// variables and cross-package symbols are not supported yet.
+let find_definition(text: string, name: string): Option<ast.Span> = {
+    if strings.eq_raw(name, "") { return None }
+    let tokens = tokenize.run(text)
+    let parsed = parse.run(tokens, "")
+    for d in parsed.file.decls {
+        match d {
+        | DFn(sp, n, _, _, _, _, _)        -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DStruct(sp, n, _, _)             -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DEnum(sp, n, _, _)               -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DTypeAlias(sp, n, _, _)          -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DConst(sp, n, _, _)              -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DExternal(sp, n, _, _, _)        -> if strings.eq_raw(n, name) { return Some(sp) }
+        | _ -> { }
+        }
+    }
+    None
+}
+
+// Build a LSP Location JSON value pointing at `span` inside `uri`.
+// The parser reports 1-indexed lines and cols; the LSP spec uses
+// 0-indexed.
+let location_of(uri: string, span: ast.Span, name_len: i64): json.Json = {
+    let l = if span.line > 0 { span.line - 1 } else { 0 }
+    let c = if span.col  > 0 { span.col  - 1 } else { 0 }
+    var range: Map<string, json.Json> = map.make()
+    range["start"] = position(l, c)
+    range["end"]   = position(l, c + name_len)
+    var m: Map<string, json.Json> = map.make()
+    m["uri"]   = Str(uri)
+    m["range"] = Obj(range)
+    Obj(m)
+}
+
+let position_of(p: json.Json): Option<json.Json> = {
+    match get_field(p, "position") {
+    | Some(pos) -> Some(pos)
+    | None      -> None
+    }
+}
+
+let line_char_of(pos: json.Json): (i64, i64) = {
+    let l = match get_field(pos, "line") {
+    | Some(Num(v)) -> v as i64
+    | _            -> 0
+    }
+    let c = match get_field(pos, "character") {
+    | Some(Num(v)) -> v as i64
+    | _            -> 0
+    }
+    (l, c)
+}
+
+// Build the response payload for textDocument/definition. Resolves
+// the identifier under the cursor to its top-level declaration in
+// the current buffer when possible. Returns Null otherwise so the
+// editor surfaces "no definition found" rather than a hang.
+let definition_response(s: *Server, params: json.Json): json.Json = {
+    let uri = uri_of(params)
+    var pos: json.Json = Null
+    var have_pos = false
+    match position_of(params) {
+    | Some(p) -> {
+        pos = p
+        have_pos = true
+    }
+    | None -> { }
+    }
+    if !have_pos { return Null }
+    let lc = line_char_of(pos)
+    let line = lc._0
+    let col  = lc._1
+    var text: string = ""
+    var have_text = false
+    match map.get(&s.buffers, uri) {
+    | Some(t) -> {
+        text = t
+        have_text = true
+    }
+    | None -> { }
+    }
+    if !have_text { return Null }
+    let name = identifier_at(text, line, col)
+    if strings.eq_raw(name, "") { return Null }
+    match find_definition(text, name) {
+    | Some(sp) -> location_of(uri, sp, len(name))
+    | None     -> Null
+    }
+}
+
+// Build the response for textDocument/hover. Returns the source
+// line of the matching top-level declaration as a Markdown code
+// block. Falls back to Null when the cursor is not on an
+// identifier or no matching declaration exists.
+let hover_response(s: *Server, params: json.Json): json.Json = {
+    let uri = uri_of(params)
+    var pos: json.Json = Null
+    var have_pos = false
+    match position_of(params) {
+    | Some(p) -> {
+        pos = p
+        have_pos = true
+    }
+    | None -> { }
+    }
+    if !have_pos { return Null }
+    let lc = line_char_of(pos)
+    var text: string = ""
+    var have_text = false
+    match map.get(&s.buffers, uri) {
+    | Some(t) -> {
+        text = t
+        have_text = true
+    }
+    | None -> { }
+    }
+    if !have_text { return Null }
+    let name = identifier_at(text, lc._0, lc._1)
+    if strings.eq_raw(name, "") { return Null }
+    match find_definition(text, name) {
+    | None     -> Null
+    | Some(sp) -> {
+        let line_text = nth_line_of(text, sp.line)
+        if strings.eq_raw(line_text, "") { return Null }
+        var contents: Map<string, json.Json> = map.make()
+        contents["kind"]  = Str("markdown")
+        contents["value"] = Str(strings.cat(strings.cat("```qoz\n", line_text), "\n```"))
+        var m: Map<string, json.Json> = map.make()
+        m["contents"] = Obj(contents)
+        Obj(m)
+    }
+    }
+}
+
+// Return the nth (1-indexed) line of `text` excluding the
+// terminating newline. Empty string when the line is past EOF.
+let nth_line_of(text: string, line: i64): string = {
+    let n = len(text)
+    var off: i64 = 0
+    var cur: i64 = 1
+    while cur < line && off < n {
+        if strings.byte_at(text, off) == 10 { cur += 1 }
+        off += 1
+    }
+    if cur != line { return "" }
+    var end = off
+    while end < n && strings.byte_at(text, end) != 10 { end += 1 }
+    strings.slice(text, off, end)
+}
+
+// --- Completion ----------------------------------------------------
+
+// LSP CompletionItemKind values used in this implementation.
+let KIND_FUNCTION(): f64 = 3.0
+let KIND_FIELD():    f64 = 5.0
+let KIND_VARIABLE(): f64 = 6.0
+let KIND_KEYWORD():  f64 = 14.0
+let KIND_ENUM():     f64 = 13.0
+let KIND_STRUCT():   f64 = 22.0
+let KIND_CONSTANT(): f64 = 21.0
+
+let completion_response(s: *Server, params: json.Json): json.Json = {
+    let uri = uri_of(params)
+    var pos: json.Json = Null
+    var have_pos = false
+    match position_of(params) {
+    | Some(p) -> {
+        pos = p
+        have_pos = true
+    }
+    | None -> { }
+    }
+    if !have_pos { return empty_completion_list() }
+    let lc = line_char_of(pos)
+    var text: string = ""
+    var have_text = false
+    match map.get(&s.buffers, uri) {
+    | Some(t) -> {
+        text = t
+        have_text = true
+    }
+    | None -> { }
+    }
+    if !have_text { return empty_completion_list() }
+    let prefix = identifier_prefix_at(text, lc._0, lc._1)
+    var items: Vec<json.Json> = vec.make()
+    let tokens = tokenize.run(text)
+    let parsed = parse.run(tokens, "")
+    for d in parsed.file.decls {
+        match d {
+        | DFn(_, n, _, _, _, _, _)        -> push_completion_if_match(&items, n, prefix, KIND_FUNCTION())
+        | DExternal(_, n, _, _, _)        -> push_completion_if_match(&items, n, prefix, KIND_FUNCTION())
+        | DStruct(_, n, _, _)             -> push_completion_if_match(&items, n, prefix, KIND_STRUCT())
+        | DEnum(_, n, _, vs)              -> {
+            push_completion_if_match(&items, n, prefix, KIND_ENUM())
+            for v in vs { push_completion_if_match(&items, v.name, prefix, KIND_FIELD()) }
+        }
+        | DTypeAlias(_, n, _, _)          -> push_completion_if_match(&items, n, prefix, KIND_STRUCT())
+        | DConst(_, n, _, _)              -> push_completion_if_match(&items, n, prefix, KIND_CONSTANT())
+        | _ -> { }
+        }
+    }
+    for kw in qoz_keywords() {
+        push_completion_if_match(&items, kw, prefix, KIND_KEYWORD())
+    }
+    var m: Map<string, json.Json> = map.make()
+    m["isIncomplete"] = Bool(false)
+    m["items"]        = Arr(items)
+    Obj(m)
+}
+
+let empty_completion_list(): json.Json = {
+    var m: Map<string, json.Json> = map.make()
+    m["isIncomplete"] = Bool(false)
+    m["items"]        = Arr(vec.make())
+    Obj(m)
+}
+
+let push_completion_if_match(items: *Vec<json.Json>, label: string, prefix: string, kind: f64) = {
+    if !strings.eq_raw(prefix, "") && !strings.has_prefix(label, prefix) { return }
+    var item: Map<string, json.Json> = map.make()
+    item["label"] = Str(label)
+    item["kind"]  = Num(kind)
+    vec.push(items, Obj(item))
+}
+
+// Identifier prefix to the LEFT of the cursor. Empty string when
+// the cursor is not after an identifier byte. Used to filter the
+// candidate set so the editor's fuzzy match does less work.
+let identifier_prefix_at(text: string, line: i64, col: i64): string = {
+    let offset = byte_offset_of(text, line, col)
+    if offset <= 0 { return "" }
+    let n = len(text)
+    if offset > n { return "" }
+    var lo = offset
+    while lo > 0 {
+        if !is_ident_byte(strings.byte_at(text, lo - 1)) { return strings.slice(text, lo, offset) }
+        lo -= 1
+    }
+    strings.slice(text, 0, offset)
+}
+
+let qoz_keywords(): Vec<string> = {
+    var v: Vec<string> = vec.make()
+    vec.push(&v, "let")
+    vec.push(&v, "var")
+    vec.push(&v, "if")
+    vec.push(&v, "else")
+    vec.push(&v, "elif")
+    vec.push(&v, "match")
+    vec.push(&v, "while")
+    vec.push(&v, "for")
+    vec.push(&v, "in")
+    vec.push(&v, "return")
+    vec.push(&v, "type")
+    vec.push(&v, "import")
+    vec.push(&v, "external")
+    vec.push(&v, "true")
+    vec.push(&v, "false")
+    vec.push(&v, "nil")
+    vec.push(&v, "defer")
+    v
+}
+
 let publish_diagnostics(uri: string, diags: Vec<lsp.Diagnostic>): json.Json = {
     var arr: Vec<json.Json> = vec.make()
     for d in diags { vec.push(&arr, diagnostic_to_json(d)) }
@@ -462,6 +780,15 @@ let dispatch(s: *Server, msg: json.Json): Option<json.Json> = {
         let uri = uri_of(params)
         map.delete(&s.buffers, uri)
         return None
+    }
+    if strings.eq_raw(method, "textDocument/definition") {
+        return Some(envelope_result(id, definition_response(s, params)))
+    }
+    if strings.eq_raw(method, "textDocument/hover") {
+        return Some(envelope_result(id, hover_response(s, params)))
+    }
+    if strings.eq_raw(method, "textDocument/completion") {
+        return Some(envelope_result(id, completion_response(s, params)))
     }
 
     // Unknown request: respond with method-not-found. Unknown
