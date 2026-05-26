@@ -8,11 +8,6 @@ if exists("b:current_syntax")
     finish
 endif
 
-" -- Comments --------------------------------------------------------
-syntax keyword qozTodo contained TODO FIXME XXX NOTE HACK
-syntax region  qozComment       start=+//+ end=+$+   contains=qozTodo,@Spell
-syntax region  qozBlockComment  start=+/\*+ end=+\*/+ contains=qozBlockComment,qozTodo,@Spell
-
 " -- Keywords --------------------------------------------------------
 syntax keyword qozStatement    let var return defer
 syntax keyword qozConditional  if elif else match
@@ -22,9 +17,6 @@ syntax keyword qozBoolean      true false
 syntax keyword qozConstant     nil
 
 " -- Compile-time directives ----------------------------------------
-" `#link_library`, `#link_framework`, `#link_path`, `#load_string`,
-" `#if`, `#elif`, `#else` are all introduced by `#` plus an
-" identifier or keyword.
 syntax match qozDirective "#\(link_library\|link_framework\|link_path\|load_string\|if\|elif\|else\)\>"
 
 " -- Primitive types -------------------------------------------------
@@ -46,7 +38,11 @@ syntax match  qozEscape "\\u[0-9A-Fa-f]\{4\}" contained
 syntax region qozInterp  start=+{+ end=+}+ contained contains=ALLBUT,qozInterp
 
 " -- Char literal ---------------------------------------------------
-syntax region qozChar start=+'+ skip=+\\'+ end=+'+ contains=qozEscape
+" A char literal is one byte or one escape sequence surrounded by
+" single quotes: 'a', '\n', '\''. The fixed-length pattern keeps an
+" apostrophe inside a comment or identifier from opening a runaway
+" region.
+syntax match qozChar /'\\\?.'/
 
 " -- Attributes -----------------------------------------------------
 syntax match qozAttribute "@\(link_name\|operator\)\>"
@@ -58,6 +54,11 @@ syntax match qozOperator "::"
 syntax match qozOperator "\.\."
 syntax match qozOperator "\.\.<"
 syntax match qozOperator "\.\.="
+
+" -- Comments (defined last so the // region wins over the / match) -
+syntax keyword qozTodo contained TODO FIXME XXX NOTE HACK
+syntax region  qozComment       start=+//+ end=+$+   keepend contains=qozTodo,@Spell
+syntax region  qozBlockComment  start=+/\*+ end=+\*/+ contains=qozBlockComment,qozTodo,@Spell
 
 " -- Highlight links ------------------------------------------------
 highlight default link qozTodo         Todo
