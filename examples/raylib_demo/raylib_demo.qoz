@@ -1,15 +1,7 @@
 // raylib smoke test: opens an 800x600 window and draws a circle the
 // user can move with the arrow keys. Press Escape (or the close
-// box) to quit. The link directives below pull in the static
-// raylib at vendor/raylib and the macOS frameworks that raylib's
-// static build needs at link time.
-
-#link_path("vendor/raylib")
-#link_library("raylib")
-#link_framework("CoreVideo")
-#link_framework("IOKit")
-#link_framework("Cocoa")
-#link_framework("OpenGL")
+// box) to quit. The link directives are carried by the binding at
+// vendor/raylib so importing the package is enough.
 
 import vendor/raylib
 

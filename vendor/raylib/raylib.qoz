@@ -1,21 +1,22 @@
 // Qoz bindings for raylib 5.5.
 //
 // The C side of raylib lives next to this file as `libraylib.a` and
-// `raylib.h`. Programs that import this package must include the
-// link directives below at their entry point (the directives do not
-// propagate through imports yet):
-//
-//     #link_path("vendor/raylib")
-//     #link_library("raylib")
-//     #link_framework("CoreVideo")
-//     #link_framework("IOKit")
-//     #link_framework("Cocoa")
-//     #link_framework("OpenGL")
+// `raylib.h`. The link directives below pull in the static library
+// and the macOS system frameworks raylib's static build depends on.
+// Importing this package is enough; user programs do not need to
+// repeat the link directives at their entry point.
 //
 // Only a working subset of raylib is exposed. Add functions and
 // types as needed by following the pattern: declare the C struct
 // with the same field layout, then `@link_name` the C symbol and
 // give it a Qoz signature whose parameter types match the C ABI.
+
+#link_path("vendor/raylib")
+#link_library("raylib")
+#link_framework("CoreVideo")
+#link_framework("IOKit")
+#link_framework("Cocoa")
+#link_framework("OpenGL")
 
 // Color: 4 unsigned bytes laid out the same way raylib uses them.
 type Color = {
