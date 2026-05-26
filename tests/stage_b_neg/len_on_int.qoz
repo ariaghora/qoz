@@ -1,4 +1,4 @@
-// Negative: len() requires a string, Vec, or Map; integer is rejected.
+// Negative: len() requires a string, Vec, or Map. Integer is rejected.
 
 let main(): i64 = {
     let n = len(42)

@@ -1,7 +1,7 @@
 // expect: 3
 // `elif` chains multiple conditions without nesting the parse
 // tree the way old `else if` did. The body returns the matched
-// integer; this case selects the third arm.
+// integer. This case selects the third arm.
 
 let classify(n: i64): i64 = {
     if n < 0 { 0 }

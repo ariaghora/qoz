@@ -1,8 +1,5 @@
 // expect: 5
-// Bitwise & | ^ << >>: (0b1100 & 0b1010) | (0b0001 << 2) | (0b1000 >> 3)
-//                    = 0b1000 | 0b0100 | 0b0001 = 13... let's compute right.
-// 0xF0 & 0x0F = 0; 0xF0 ^ 0x55 = 0xA5; ...
-// Pick: (12 & 10) | (1 << 2) = 8 | 4 = 12 ... too specific.
-// Pick simpler: (1 << 2) | (1 << 0) = 5.
+// Bitwise operators on integer literals. (1 << 2) sets bit 2 (= 4),
+// (1 << 0) sets bit 0 (= 1), and the bitwise-or combines them as 5.
 
 let main(): i64 = (1 << 2) | (1 << 0)

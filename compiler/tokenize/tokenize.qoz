@@ -83,7 +83,7 @@ let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = 
 // Report a malformed-token error and exit non-zero. The tokenizer
 // has no recovery channel beyond keeping the bytes as-is, which
 // downstream consumers cannot reliably distinguish from a well-formed
-// token; aborting here produces a clear, locatable diagnostic.
+// token. Aborting here produces a clear, locatable diagnostic.
 let lex_die(l: *Lexer, msg: string) = {
     fmt.println(`tokenize error at line {l.line} col {l.col}: {msg}`)
     os.exit(1)
@@ -290,7 +290,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
     }
 
     // Backtick-delimited interpolated string. `{name}` is replaced
-    // with the value of `name`; `{{` and `}}` are literal-brace
+    // with the value of `name`. `{{` and `}}` are literal-brace
     // escapes. Backslash escapes work the same as in `"..."`.
     if c == 96 {
         lex_advance(l)
@@ -372,7 +372,7 @@ let is_stmt_ender(t: tokenize.Token): bool = {
 // alternation `|`, the `else`/`as`/`in` keywords, and so on. When this
 // holds, do not synthesise a semicolon at the line break. `*` and `&`
 // are intentionally omitted because they are also the unary deref and
-// address-of operators; treating them as continuations would turn a
+// address-of operators. Treating them as continuations would turn a
 // new-line `*buf = nb` into the multiplication `(prev) * buf`.
 let is_line_continuation(t: tokenize.Token): bool = {
     match t.kind {

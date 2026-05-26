@@ -19,7 +19,7 @@ let next_u64(r: *Rng): u64 = {
 }
 
 // Return an integer in the half-open interval [0, bound). `bound`
-// must be positive; the result is biased by at most 1 / bound when
+// must be positive. The result is biased by at most 1 / bound when
 // the generator's range is not a multiple of bound.
 let next_below(r: *Rng, bound: i64): i64 = {
     if bound <= 0 { return 0 }

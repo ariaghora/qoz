@@ -44,7 +44,7 @@ let base(p: string): string = {
 
 // The extension of `p`, including the leading dot. `foo.txt` returns
 // `.txt`. A leading dot on the final segment (`.bashrc`) is treated
-// as part of the name, not an extension; returns "".
+// as part of the name, not an extension. Returns "".
 let ext(p: string): string = {
     let b = base(p)
     let n = len(b)
@@ -82,8 +82,8 @@ let join(parts: Vec<string>): string = {
 }
 
 // Collapse repeated slashes and resolve `.` and `..` segments. An
-// absolute path stays absolute; a relative path stays relative.
-// `..` that walks above the root collapses to the root; above a
+// absolute path stays absolute. A relative path stays relative.
+// `..` that walks above the root collapses to the root. Above a
 // relative start it becomes a literal `..` segment.
 let clean(p: string): string = {
     let n = len(p)

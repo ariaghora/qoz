@@ -1,5 +1,5 @@
 // expect: 0
-// Delete a key then insert a new value for the same key; the map's
+// Delete a key then insert a new value for the same key. The map's
 // length must stay at one logical entry, not accumulate a tombstone
 // pair. Exercises the tombstone-reuse path in probe_for_insert.
 

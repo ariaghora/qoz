@@ -1,6 +1,6 @@
 // expect: 0
 // fmt.eprint and fmt.eprintln return without raising. The test
-// itself only asserts the calls compile and run; stdout vs stderr
+// itself only asserts the calls compile and run. Stdout vs stderr
 // separation is exercised by the runtime smoke test in run.sh.
 
 import fmt

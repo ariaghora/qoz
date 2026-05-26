@@ -2,7 +2,7 @@
 //
 // Every function here is a direct extern. The host program must be
 // linked with -lm on platforms that need it (Linux). macOS folds libm
-// into libSystem; no extra flag is required.
+// into libSystem. No extra flag is required.
 
 @link_name("sqrt")
 external let sqrt(x: f64): f64

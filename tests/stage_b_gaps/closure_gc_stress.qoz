@@ -1,5 +1,5 @@
 // expect: 0
-// Closures capturing managed strings; many calls under GC pressure
+// Closures capturing managed strings. Many calls under GC pressure
 // to confirm the captured prefixes are reachable through the env.
 
 import vec

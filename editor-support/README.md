@@ -69,6 +69,6 @@ Plug 'your-fork/qoz-odin', { 'rtp': 'editor-support/vim' }
 ## Treesitter
 
 A Treesitter grammar would give finer-grained highlighting and
-incremental updates. It is not in this directory yet; the Vim regex
+incremental updates. It is not in this directory yet. The Vim regex
 syntax above is correct for the language as it stands, and a
 grammar is a separate project.

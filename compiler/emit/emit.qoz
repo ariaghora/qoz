@@ -16,7 +16,7 @@ type Instantiation = {
 type Emitter = {
     out:               strings.Strbuf,
     // Per-expression TypeExpr map, keyed by expr_id (Expr pointer as
-    // i64). Populated by the check phase; read by infer_value_te_cached.
+    // i64). Populated by the check phase. Read by infer_value_te_cached.
     expr_types:        Map<i64, ast.TypeExpr>,
     // Generic-instantiation substitution active while emitting a
     // monomorphised function body. Cached TypeExprs that mention these
@@ -53,7 +53,7 @@ type Emitter = {
     op_dispatch:       Map<string, string>,    // "<op>::<TypeName>" -> fn name registered via @operator
     byval_helpers_emitted: Map<string, bool>,  // fn_name -> already emitted a _qoz_byval_FN forwarder
     // Statements queued for emission just before the current C
-    // statement. Set up by emit_stmt; written to by sub-emits that
+    // statement. Set up by emit_stmt. Written to by sub-emits that
     // need to hoist a complex sub-expression (match in value position,
     // closure construction, etc.) out of expression position.
     pending_prologue:  Vec<string>,
@@ -188,7 +188,7 @@ let variant_callee_name(e: *Emitter, callee: ast.Expr): string = {
 }
 
 // Pull the explicit enum name out of a qualified variant callee.
-// Returns the empty string when the callee is a bare identifier; the
+// Returns the empty string when the callee is a bare identifier. The
 // caller falls back to the global variant_of mapping in that case.
 let variant_enum_from_callee(callee: ast.Expr): string = {
     match callee {
@@ -595,7 +595,7 @@ let mangle_inst(e: *Emitter, name: string, args: Vec<ast.TypeExpr>): string = {
 // type name, and emitted once at render time.
 
 // Compact text used in diagnostics. The proper `c_type_for` mapping
-// needs an emitter; this version stays self-contained so it can be
+// needs an emitter. This version stays self-contained so it can be
 // called from contexts that only have a TypeExpr.
 let te_show_dbg(te: ast.TypeExpr): string = {
     match te {
@@ -633,7 +633,7 @@ let register_show_needed(e: *Emitter, mangled: string, te: ast.TypeExpr) = {
 // Emit a C statement that pushes `c_expr` (already a valid C
 // expression of type `te`) onto the interpolation buffer `b`. The
 // dispatch follows the same primitive/composite split as the parser
-// desugar: primitives go through a typed push; composite types route
+// desugar: primitives go through a typed push. Composite types route
 // through a (lazily registered) show fn.
 let emit_show_push(e: *Emitter, body_acc: string, c_expr: string, te: ast.TypeExpr): string = {
     let pname = show_primitive_kind(te)
@@ -762,7 +762,7 @@ let render_show_body_map(e: *Emitter, mangled: string, key_te: ast.TypeExpr, val
 }
 
 // Render a show fn body for an ADT. The C parameter `v` is the
-// `qoz_<MangledEnum>*` pointer; the switch dispatches on its tag
+// `qoz_<MangledEnum>*` pointer. The switch dispatches on its tag
 // and prints `Variant(payload, ...)` for each.
 let render_show_body_adt(e: *Emitter, bare: string, mangled: string, args: Vec<ast.TypeExpr>): string = {
     let inst_args = if len(args) > 0 { args } else { mangled_args(e, mangled, bare) }
@@ -892,7 +892,7 @@ let mangle_named(e: *Emitter, path: Vec<string>, args: Vec<ast.TypeExpr>): strin
         return "unknown"
     }
     // Qualified paths (`pkg.TypeName`) collapse to the last segment.
-    // Type names share a flat C-level namespace; the check phase has
+    // Type names share a flat C-level namespace. The check phase has
     // already verified the qualifier matches the type's home package.
     let n = path[len(path) - 1]
     let prim = primitive_c_name(n)
@@ -1139,7 +1139,7 @@ let strip_numeric_underscores(s: string): string = {
                     v = v * 2 + (b - 48)
                     j += 1
                 } else {
-                    // Hit a non-binary suffix; bail with original to surface a clang error.
+                    // Hit a non-binary suffix. Bail with original to surface a clang error.
                     return s
                 }
             }
@@ -1280,7 +1280,7 @@ let c_type_for_named_with_args(e: *Emitter, path: Vec<string>, args: Vec<ast.Typ
     } else {
         strings.cat("qoz_", n)
     }
-    // ADTs are heap-allocated; their C representation is a pointer.
+    // ADTs are heap-allocated. Their C representation is a pointer.
     if map.contains(&e.is_enum, n) {
         return strings.cat(base, "*")
     }
@@ -1376,8 +1376,8 @@ let emit_try(e: *Emitter, sp: ast.Span, value: ast.Expr) = {
     e.closure_counter = e.closure_counter + 1
     let tmp = strings.cat("_qoz_try_", `{e.closure_counter}`)
 
-    // Build "qoz_<inner>* tmp = VALUE; if (tmp->tag == Err) {
-    // qoz_gc_shadow_set_top(_g); return MAKE_ERR; }" as prologue,
+    // Build `qoz_<inner>* tmp = VALUE; if (tmp->tag == Err) {
+    // qoz_gc_shadow_set_top(_g); return MAKE_ERR; }` as prologue,
     // then emit `tmp->payload.Ok.f0` in expression position.
     let start = strings.sb_len(&e.out)
     push(e, `qoz_{inner_mangle}* {tmp} = `)
@@ -1690,7 +1690,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         // The compound runs at the enclosing statement's prologue and
         // the expression position reads the result temp. A unit-typed
         // tail skips the result temp because `void` cannot be a C
-        // variable type; the placeholder 0 sits in the expression slot
+        // variable type. The placeholder 0 sits in the expression slot
         // and the tail emits as a statement.
         let tail_te = infer_value_te(e, tail)
         if is_unit_typeexpr(tail_te) {
@@ -1786,7 +1786,7 @@ let infer_value_ctype(e: *Emitter, ty: ast.TypeExpr, value: ast.Expr): string = 
     }
 }
 
-// Statements have no value type in C; everything else delegates to
+// Statements have no value type in C. Everything else delegates to
 // the TypeExpr inferer plus c_type_for. EBlock ingests stmt locals so
 // downstream lookups see the bindings the block introduces.
 let infer_expr_ctype(e: *Emitter, ex: ast.Expr): string = {
@@ -1837,7 +1837,7 @@ let bare_enum_for_pat(e: *Emitter, pat: ast.Pattern): string = {
 }
 
 // Hard fail with a span-anchored diagnostic. Used wherever the emit
-// cannot continue with a meaningful default; every silent fallback to
+// cannot continue with a meaningful default. Every silent fallback to
 // "int64_t" is a bug.
 let emit_die(sp: ast.Span, msg: string): string = {
     fmt.println(`{sp.file}:{sp.line}:{sp.col}: emit error: {msg}`)
@@ -2073,7 +2073,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         // The literal's TypeExpr may omit the struct's type arguments
         // (`Pair { fst: 7, snd: "hello" }` has te = TENamed("Pair", [])).
         // The check phase recorded the fully-inferred type in
-        // expr_types; prefer that when its arg count matches the
+        // expr_types. Prefer that when its arg count matches the
         // struct's tparam count.
         let cached = match map.get(&e.expr_types, expr_id(v)) {
         | Some(cte) -> cte
@@ -2199,7 +2199,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         TENamed(sp, path, args)
     }
     // Statement-shape expressions have no value type. They occur in
-    // value position when an outer block ends with one; the inferred
+    // value position when an outer block ends with one. The inferred
     // type is unit and the emitter renders them as statements with a
     // dummy 0 placeholder where a value is syntactically required.
     | EAssign(sp, _, _, _) -> TEUnit(sp)
@@ -2372,7 +2372,7 @@ let call_return_te(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, 
         }
         return TEUnit(sp)
     }
-    // Variant constructor; if no explicit type args, infer from value args.
+    // Variant constructor. If no explicit type args, infer from value args.
     match map.get(&e.variant_of, name) {
     | Some(en) -> {
         var path: Vec<string> = vec.make()
@@ -2810,7 +2810,7 @@ let emit_field(e: *Emitter, base: ast.Expr, name: string) = {
     }
     // `pkg.NAME` reading a top-level constant. The const is emitted
     // as a zero-arg function so its initializer can be any
-    // expression; the read is a function call.
+    // expression. The read is a function call.
     match base {
     | EIdent(_, pkg) -> {
         if map.contains(&e.packages, pkg) {
@@ -2829,7 +2829,7 @@ let emit_field(e: *Emitter, base: ast.Expr, name: string) = {
 }
 
 // Pick `->` for a pointer-typed base, `.` for a value-typed base. The
-// base's value type comes from the inference cache; falling back to
+// base's value type comes from the inference cache. Falling back to
 // `.` for unknown values matches the C rule for struct-typed locals.
 let field_access_op(e: *Emitter, base: ast.Expr): string = {
     let te = infer_value_te(e, base)
@@ -2841,7 +2841,7 @@ let field_access_op(e: *Emitter, base: ast.Expr): string = {
 
 // EAssign of m[k] = v with m of type Map<K,V> needs the map_set
 // instantiation discovered ahead of body emission. The walk happens at
-// discovery time without locals; derive the LHS type from the lvalue
+// discovery time without locals. Derive the LHS type from the lvalue
 // shape by inspecting structurally.
 let walk_assign_for_map_helpers(e: *Emitter, lhs: ast.Expr) = {
     match lhs {
@@ -3148,7 +3148,7 @@ let emit_call(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args:
         }
         // Interpolation intrinsics map 1:1 to runtime C functions:
         // the Qoz-side name has a `__` prefix to mark it as an
-        // intrinsic; the C function is the same name with that prefix
+        // intrinsic. The C function is the same name with that prefix
         // stripped. No declaration is needed on the Qoz side because
         // the type checker recognises the prefix and types the call
         // directly.
@@ -3156,7 +3156,7 @@ let emit_call(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args:
             // Non-primitive interpolation slot. Materialise the value
             // through a per-type auto-derived show fn so the runtime
             // sees a string. The show fn is registered for later
-            // emission; subsequent emits of the same type share it.
+            // emission. Subsequent emits of the same type share it.
             if strings.eq_raw(name, "__qoz_interp_push_any") && len(args) == 2 {
                 let val_te = infer_value_te(e, args[1])
                 let mangled = mangle_type(e, val_te)
@@ -3339,9 +3339,9 @@ let callee_value_typeexpr(e: *Emitter, callee: ast.Expr): ast.TypeExpr = {
     }
 }
 
-// `s == t` on qoz_string maps to qoz_string_eq; `!=` is its negation.
+// `s == t` on qoz_string maps to qoz_string_eq, and `!=` is its negation.
 // One forwarder per `@operator(...)` target. The user-written function
-// takes `*T` arguments; the forwarder accepts both operands by value
+// takes `*T` arguments. The forwarder accepts both operands by value
 // and passes their addresses through. Emitted at most once per
 // `fn_name` per compilation.
 // Same shape as ensure_byval_dispatch_helper but for unary operators.
@@ -3413,7 +3413,7 @@ let ensure_byval_dispatch_helper(e: *Emitter, fn_name: string, operand_ct: strin
 // when looking up `@operator(...)` registrations on user types and as
 // the C operator when no overload is found. Range operators have no
 // surface spelling because they are only valid in for-loop iter
-// position; an overload is not meaningful for them.
+// position. An overload is not meaningful for them.
 let binary_op_text(op: ast.BinaryOp): string = {
     match op {
     | BOpEq     -> "=="
@@ -3439,7 +3439,7 @@ let binary_op_text(op: ast.BinaryOp): string = {
 }
 
 let record_struct_name_of_ctype(e: *Emitter, ct: string): string = {
-    // The C type for a record value is `qoz_<MangledName>`; pointers and
+    // The C type for a record value is `qoz_<MangledName>`. Pointers and
     // primitive types do not start that way, and ADTs come back with a `*`
     // trailing because they are heap-allocated.
     if len(ct) < 5 { return "" }
@@ -3492,7 +3492,7 @@ let emit_binary(e: *Emitter, op: ast.BinaryOp, lhs: ast.Expr, rhs: ast.Expr) = {
                 }
                 let ret_ct = c_type_for(e, ret_te)
                 ensure_byval_dispatch_helper(e, fn_name, ct, ret_ct)
-                // The user wrote `lhs OP rhs`; the operator is defined as
+                // The user wrote `lhs OP rhs`. The operator is defined as
                 // a `let` taking `*T` parameters. Call the by-value
                 // forwarder so each argument lands in a stable local of
                 // the helper whose address can be passed through.
@@ -4017,7 +4017,7 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
         | _ -> { }
         }
     }
-    // Function prototypes (non-generic only; generics emit their own).
+    // Function prototypes (non-generic only. Generics emit their own).
     for d in f.decls {
         match d {
         | DFn(_, name, tparams, params, ret, _, _) -> {
@@ -4034,7 +4034,7 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
             emit_fn_proto(&e, name, empty, resolved_ty)
         }
         // Type declarations (DStruct, DEnum, DTypeAlias) contribute
-        // typedefs through walk_decl_for_types; DImport and DLink
+        // typedefs through walk_decl_for_types. DImport and DLink
         // have no prototype shape.
         | _ -> { }
         }
@@ -4063,7 +4063,7 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
     }
     push(&e, "\n")
     // Function bodies (non-generic only). Top-level constants emit
-    // as zero-arg functions that return the declared value; the
+    // as zero-arg functions that return the declared value. The
     // package-qualified read path (`pkg.NAME`) lowers to a call.
     // Treating constants as functions sidesteps the C constraint
     // that global initializers be compile-time constant.
@@ -4528,7 +4528,7 @@ let range_cmp_op(op: ast.BinaryOp): string =
 // expression can appear inside a ternary or other expression context.
 // EAssign already emits as an expression form (`lhs = rhs` without `;`),
 // so it goes through directly. EFor/EWhile cannot appear as
-// expressions in C; for those, hoist the loop to the enclosing
+// expressions in C. For those, hoist the loop to the enclosing
 // statement's prologue and leave 0 in place.
 let emit_block_tail_as_value(e: *Emitter, tail: ast.Expr) = {
     match tail {
@@ -4689,7 +4689,7 @@ let emit_match_as_expr_with_hint(e: *Emitter, sp: ast.Span, scrut: ast.Expr, arm
 
 // Returns true when `base.name` is `Enum.Variant` and the unit-payload
 // constructor was emitted with the type hint folded into the mangled
-// enum name. False otherwise; the caller falls back to the normal
+// enum name. False otherwise. The caller falls back to the normal
 // field-access emit.
 let emit_qualified_variant_with_hint(e: *Emitter, base: ast.Expr, name: string, hint: ast.TypeExpr): bool = {
     match base {
@@ -4755,7 +4755,7 @@ let register_fn_thunk(e: *Emitter, fn_name: string, params: Vec<ast.TypeExpr>, r
     if map.contains(&e.fn_typedefs, key) {
         return key
     }
-    // Reuse the typedef registry's `contains` map to avoid re-emitting; we
+    // Reuse the typedef registry's `contains` map to avoid re-emitting. We
     // store an empty body since the actual implementation goes into the
     // synth-decls / synth-defs buffers below.
     e.fn_typedefs[key] = ""
@@ -4917,7 +4917,7 @@ let emit_record_lit_with_hint(e: *Emitter, te: ast.TypeExpr, fields: Vec<ast.Rec
 // Replace a `..base` sentinel field with explicit `field: base.field`
 // entries for every field of the struct that the user did not write
 // explicitly. The struct's declared field list is looked up through
-// e.struct_decls; when the type is not a known struct the emit dies
+// e.struct_decls. When the type is not a known struct the emit dies
 // rather than let the sentinel reach the C output as a literal `...`.
 let expand_record_spread_fields(e: *Emitter, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): Vec<ast.RecordFieldLit> = {
     var has_spread = false
@@ -5079,7 +5079,7 @@ let emit_for_loop_one(e: *Emitter, binding: string, binding2: string, iter: ast.
     }
     | _ -> { }
     }
-    // Container iter: a single binding picks the Vec shape; two pick the Map shape.
+    // Container iter: a single binding picks the Vec shape. Two pick the Map shape.
     if strings.eq_raw(binding2, "") {
         emit_vec_for(e, binding, iter, body)
     } else {
@@ -5190,7 +5190,7 @@ let any_arm_has_guard(arms: Vec<ast.MatchArm>): bool = {
 
 // A sub-pattern requires the if-chain emitter when it carries a
 // literal equality test or when it is itself a variant pattern. The
-// switch-based dispatch can only test the outer tag; anything that
+// switch-based dispatch can only test the outer tag. Anything that
 // constrains a payload must AND into the if condition.
 let pat_needs_if_chain(p: ast.Pattern): bool = {
     match p {
@@ -5236,7 +5236,7 @@ let emit_match_as_expr(e: *Emitter, span: ast.Span, scrut: ast.Expr, arms: Vec<a
     let res_ctype = match_result_ctype_with_hint(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
 
-    // Build the switch into a fresh output buffer; the entire block
+    // Build the switch into a fresh output buffer. The entire block
     // becomes a single prologue entry attached to the enclosing C
     // statement, and the expression position resolves to `res_tmp`
     // (or 0 for void-yielding matches).
@@ -5496,7 +5496,7 @@ let emit_arm_body_kind(e: *Emitter, is_void: bool, res_tmp: string, body: ast.Ex
     // prologue it emits (a nested hoist for a block-as-value, a match
     // expression nested inside the arm, a closure-env construction)
     // lands inside the C `case` block rather than ahead of the enclosing
-    // `switch`. The pattern-bound variables live in the case block; the
+    // `switch`. The pattern-bound variables live in the case block. The
     // prologue must see them.
     let saved = open_statement_scope(e)
     if is_void {
@@ -5688,7 +5688,7 @@ let variant_payload_ctype(e: *Emitter, enum_name: string, variant: string, pos: 
     }
 }
 
-// enum_name may be a mangled instantiation like "Option__int64_t"; the
+// enum_name may be a mangled instantiation like "Option__int64_t". The
 // base enum decl key is the prefix before "__". Returns the empty string
 // or the bare name. Also extracts the type arguments from the mangled
 // suffix when present.
@@ -5859,7 +5859,7 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         }
         match tail {
         | EReturn(_, _) -> {
-            // The user's explicit `return` already leaves main; the
+            // The user's explicit `return` already leaves main. The
             // shutdown trailer is emitted separately by the function
             // wrapper, so do not duplicate it here.
             emit_expr(e, tail)

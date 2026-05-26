@@ -65,7 +65,8 @@ void qoz_time_sleep_ms(int64_t ms) {
     tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
     /* select() with a NULL fd-set is the most portable cross-POSIX
      * sleep with sub-second precision. nanosleep() exists but its
-     * struct timespec ABI varies across platforms; this avoids that. */
+     * struct timespec ABI varies across platforms, and this avoids
+     * that. */
     select(0, NULL, NULL, NULL, &tv);
 }
 
@@ -80,7 +81,7 @@ qoz_string qoz_os_arg(int64_t i) {
 void qoz_os_exit(int64_t code) { exit((int)code); }
 
 /* Qoz call-frame tracker. Each entered Qoz function pushes a static
- * string describing its name; the runtime keeps the names in a
+ * string describing its name. The runtime keeps the names in a
  * fixed-size array. qoz_panic walks the array to produce a Qoz-level
  * backtrace. The implementation is portable C11 with no platform
  * extensions. */
@@ -434,7 +435,7 @@ qoz_string qoz_interp_finish(void *bv) {
 void qoz_init(int *stack_anchor) {
     /* gc.c owns the heap and auto-collects from qoz_gc_alloc once the
      * live-byte threshold is crossed. The shadow stack registers every
-     * pointer-typed parameter and local; a conservative C-stack scan
+     * pointer-typed parameter and local. A conservative C-stack scan
      * supplements that so register-resident return values are reached
      * during the mark phase. */
     qoz_gc_set_stack_bottom(stack_anchor);
@@ -448,7 +449,7 @@ void *qoz_alloc(int64_t size) {
     /* Used by string / Vec / Map data buffers and other arrays that do
      * not carry a per-element type descriptor. Tracked by gc.c so the
      * shutdown sweep frees them. A negative size is a programmer bug
-     * (typically an arithmetic underflow); fail loudly rather than
+     * (typically an arithmetic underflow). Fail loudly rather than
      * silently producing a huge size_t and returning NULL. */
     if (size < 0) {
         qoz_panic((qoz_string){"qoz_alloc: negative size", 24, NULL});
@@ -639,7 +640,7 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
     }
 
     /* Parent. Close the write ends and drain both pipes concurrently
-     * through poll(); a sequential drain deadlocks when the child
+     * through poll(). A sequential drain deadlocks when the child
      * writes more than one pipe-buffer to whichever stream is read
      * second. */
     close(out_pipe[1]);
@@ -686,7 +687,7 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
     if (WIFEXITED(status)) {
         *out_exit = (int64_t)WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
-        /* Child killed by signal: report 128 + signal, matching the
+        /* Child killed by signal. Report 128 + signal to match the
          * shell convention. Distinguishes from exec failure (-1). */
         *out_exit = (int64_t)(128 + WTERMSIG(status));
     } else {

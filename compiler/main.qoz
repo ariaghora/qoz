@@ -134,7 +134,7 @@ let resolve_import_path(segs: Vec<string>, qoz_root: string): string = {
 }
 
 // Enumerate every .qoz file in a package directory. Returned paths
-// are joined with the directory prefix; order matches list_qoz_files
+// are joined with the directory prefix. Order matches list_qoz_files
 // (sorted by filename).
 let list_package_files(dir: string): Vec<string> = {
     var out: Vec<string> = vec.make()
@@ -264,7 +264,7 @@ let load_all(entry: string, qoz_root: string): Loaded = {
 }
 
 // Load every file reachable from one or more entry files. The first
-// argument lists the source paths that seed the compilation unit; the
+// argument lists the source paths that seed the compilation unit. The
 // second is the path used to identify the resulting `File` (its
 // `path` field is read by downstream phases for diagnostic anchoring).
 let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ctx: main.CompileCtx): Loaded = {
@@ -281,7 +281,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
     var dir_local_fns: Map<string, Map<string, bool>> = map.make()
     // Prelude: Option, Result, Vec, and Map are in scope without an
     // explicit import. Types and variant constructors flow through
-    // the global namespace either way; functions stay package-prefixed
+    // the global namespace either way. Functions stay package-prefixed
     // so vec.push / map.get keep their qualified form rather than
     // colliding with arbitrary user identifiers named push / get.
     var prelude_paths: Vec<string> = vec.make()
@@ -324,7 +324,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     vec.push(sources, src)
     // Record the file's owning package so resolve_named can look up
     // the use-site pkg from any TypeExpr's span. Prelude / entry
-    // files carry an empty pkg; imported files carry the import
+    // files carry an empty pkg. Imported files carry the import
     // path's last segment (or the alias when set).
     let file_home_pkg = if cur.bare_types { "" } else { cur.pkg }
     map.set(file_pkgs, cur.path, file_home_pkg)
@@ -369,7 +369,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         if !is_error_placeholder(d) {
             // Record the home package of every named type. Files that
             // are reached as prelude or as the user's entry are
-            // bare-accessible (home = ""); files reached through an
+            // bare-accessible (home = ""). Files reached through an
             // explicit import contribute their package name so type
             // resolution can require qualified access from outside.
             let home_for_type = if cur.bare_types { "" } else { cur.pkg }
@@ -412,8 +412,8 @@ let sibling_fn_names(pkg_dir: string, cache: *Map<string, Map<string, bool>>): M
                 // Other Decl kinds (DImport, DStruct, DEnum,
                 // DTypeAlias, DLink) do not contribute names that
                 // need intra-package renaming. Types flow through
-                // type_homes; link directives have no identifier
-                // surface; imports are loader sentinels.
+                // type_homes. Link directives have no identifier
+                // surface. Imports are loader sentinels.
                 | _ -> { }
                 }
             }
@@ -558,7 +558,7 @@ let strip_trailing_slash(path: string): string = {
     path
 }
 
-// Last path segment. `a/b/c` returns `c`; a path with no separator
+// Last path segment. `a/b/c` returns `c`. A path with no separator
 // returns itself.
 let path_basename(path: string): string = {
     let n = len(path)
@@ -568,7 +568,7 @@ let path_basename(path: string): string = {
 }
 
 // Map an input path to a `(entry_file, c_output_path)` pair. The
-// entry file is what load_all is seeded with; the C output path is
+// entry file is what load_all is seeded with. The C output path is
 // where the emitted program is written. For a directory, the entry
 // is any .qoz file inside it (load_all then picks up siblings through
 // the package-file enumeration) and the C output is placed alongside
@@ -594,7 +594,7 @@ let resolve_entry_paths(path: string): EntryPaths = {
 
 // Count top-level `main` function declarations in the aggregated AST.
 // A package compiled as a build target must contain exactly one. Zero
-// means the program has no entry point; more than one is ambiguous.
+// means the program has no entry point. More than one is ambiguous.
 let count_main_decls(decls: Vec<ast.Decl>): i64 = {
     var n: i64 = 0
     for d in decls {
@@ -721,7 +721,7 @@ let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<s
 
 // Delete a file by exec'ing `rm -f <path>`. Used by `build` and `run`
 // to clean up the temporary .c and binary they emit. The compiler
-// stays portable to platforms whose libc layout differs; only a
+// stays portable to platforms whose libc layout differs. Only a
 // working `rm` on PATH is required.
 let unlink_quiet(path: string) = {
     var argv: Vec<string> = vec.make()
@@ -735,7 +735,7 @@ let unlink_quiet(path: string) = {
 // expands tab characters to four spaces, strips trailing whitespace
 // from each line, ensures exactly one trailing newline, and writes
 // the result back to the same path. A full AST-driven reformatter
-// is future work; this addresses the most common style drift
+// is future work. This addresses the most common style drift
 // (mixed tabs / trailing spaces).
 let cmd_fmt(path: string) = {
     let src = fs.read_file(path)
@@ -800,7 +800,7 @@ let clean_line(s: string): string = {
 // the parent's terminals via the buffered process_exec call (so the
 // captured streams print on completion). The compiler exits with the
 // child's exit code. The emitted .c and the binary are removed after
-// the run; users who want the source should invoke `qoz emit`.
+// the run. Users who want the source should invoke `qoz emit`.
 let cmd_run(path: string, qoz_root: string) = {
     let built = cmd_build(path, qoz_root)
     let bin_path = bin_path_for(built.c_path)
@@ -824,7 +824,7 @@ let cmd_run(path: string, qoz_root: string) = {
 }
 
 // Run the requested subcommand and exit with the appropriate status.
-// All paths terminate by calling os.exit; main() exists only to dispatch.
+// All paths terminate by calling os.exit. Main() exists only to dispatch.
 let main() = {
     let args = os.args()
     if len(args) < 2 {
@@ -882,7 +882,7 @@ let main() = {
     } else {
         // No subcommand. Treat the first argument as a path and emit
         // C only. This is the historical default that
-        // bootstrap/stage1.c was built against; preserved so existing
+        // bootstrap/stage1.c was built against. Preserved so existing
         // build scripts keep working.
         let built = cmd_build(first, qoz_root)
         fmt.println(`wrote {built.c_path}`)

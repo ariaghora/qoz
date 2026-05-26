@@ -26,8 +26,8 @@ void *qoz_alloc(int64_t size);
 void *qoz_calloc(int64_t size);
 void *qoz_realloc(void *ptr, int64_t size);
 
-/* OS bridge. argv access is set up once at program start; getenv
- * reads the live environment; exit terminates the process. */
+/* OS bridge. argv access is set up once at program start. getenv
+ * reads the live environment. exit terminates the process. */
 void       qoz_set_argv(int argc, char **argv);
 int64_t    qoz_os_argc(void);
 qoz_string qoz_os_arg(int64_t i);
@@ -48,7 +48,7 @@ int64_t qoz_time_unix(void);
 int64_t qoz_time_unix_micros(void);
 
 /* Qoz-level call-frame tracker. The compiler emits push at function
- * entry and pop before each return; qoz_panic walks the frame stack
+ * entry and pop before each return. qoz_panic walks the frame stack
  * to print a Qoz-level backtrace on abort. */
 void qoz_frame_push(const char *name);
 void qoz_frame_pop(void);
@@ -62,8 +62,8 @@ bool     qoz_string_eq(qoz_string a, qoz_string b);
 uint64_t qoz_string_hash(qoz_string s);
 
 /* Byte access for `s[i]` expressions. The compiler emits a direct
- * call to this helper so `s[i]` works without importing strings;
- * returns the byte as i64 (zero-extended). Out-of-range indices
+ * call to this helper so `s[i]` works without importing strings.
+ * Returns the byte as i64 (zero-extended). Out-of-range indices
  * return 0, mirroring the user-level byte_at helper. */
 int64_t  qoz_string_byte_at(qoz_string s, int64_t i);
 
@@ -79,8 +79,8 @@ qoz_string qoz_fs_list_qoz_files(qoz_string dir);
 
 /* String byte-buffer access for std/strings. `qoz_string_data`
  * returns the raw data pointer of a string. `qoz_string_alias`
- * constructs a string that aliases `n` bytes at `buf`; the string's
- * root field is set so the GC keeps the allocation reachable.
+ * constructs a string that aliases `n` bytes at `buf` and sets
+ * the string's root field so the GC keeps the allocation reachable.
  * `qoz_bytes_copy` is a portable memcpy wrapper, used here because on
  * darwin memcpy expands through a fortify-source macro that Qoz
  * cannot reference directly through its FFI. */
@@ -118,7 +118,7 @@ void qoz_fs_read_strict_raw(qoz_string path, qoz_string *data_out, qoz_string *e
 void qoz_time_sleep_ms(int64_t ms);
 
 /* Build-target constants. Resolved at runtime build time via
- * preprocessor ifdefs; backs the loader-time #if directives. */
+ * preprocessor ifdefs. Backs the loader-time #if directives. */
 qoz_string qoz_target_os(void);
 qoz_string qoz_target_arch(void);
 int64_t    qoz_target_pointer_size(void);

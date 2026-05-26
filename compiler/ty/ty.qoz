@@ -27,7 +27,7 @@ type Ty =
     | TyError
     | TyPtr(ty.Ty)
     // The string fields are (home_pkg, name). home_pkg is empty for
-    // prelude / entry types and the package name otherwise; storing
+    // prelude / entry types and the package name otherwise. Storing
     // it alongside the name keeps every Ty self-describing about
     // which package it came from, so resolve_named and the
     // cross-package access rule do not need an ambient current_pkg.
@@ -85,7 +85,7 @@ let ty_is_bool(t: ty.Ty): bool = { match t { | TyBool -> true | TyVar(_, _) -> t
 // Numeric for arithmetic and comparison: integer (any width), float
 // (any width), and char (treated as an i8 for ordering and equality).
 // User records that overload `+`, `<`, etc. also pass here because
-// the dispatch is resolved later in emit; rejecting the record now
+// the dispatch is resolved later in emit. Rejecting the record now
 // would block valid overloaded code.
 let ty_is_numeric(t: ty.Ty): bool = {
     match t {

@@ -48,7 +48,7 @@ let hit_sphere(center: Vec3, radius: f64, ray: Ray): f64 = {
 }
 
 // Shade a ray. A hit gets the sphere's surface normal mapped into the
-// 0..1 colour cube; a miss linearly interpolates a sky gradient from
+// 0..1 colour cube. A miss linearly interpolates a sky gradient from
 // white at the bottom to pale blue at the top.
 let ray_color(r: Ray): Vec3 = {
     let center = Vec3 { x: 0.0, y: 0.0, z: 0.0 - 1.0 }

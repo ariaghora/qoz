@@ -756,7 +756,7 @@ let scan_interp_end(body: string, start: i64): i64 = {
 // Re-tokenize an interpolation slot body and parse it as a single
 // expression. `text` is the substring inside the `{...}` (without
 // the braces). `start_line` and `start_col` are where the first
-// byte of `text` sits in the outer file; the inner tokenizer is
+// byte of `text` sits in the outer file. The inner tokenizer is
 // initialised at that position so every token carries the correct
 // outer span. A diagnostic on the inner expression then anchors at
 // the call site, not at the surrounding backtick.
@@ -782,7 +782,7 @@ type OuterPos = { line: i64, col: i64 }
 // Walk `body[0..offset]` counting newlines and column advances, so
 // the source position of `body[offset]` in the outer file is exactly
 // reconstructed. `span` locates the opening delimiter of the
-// backtick literal in the outer file; the first byte of `body` sits
+// backtick literal in the outer file. The first byte of `body` sits
 // one column past that delimiter.
 let body_offset_to_outer(body: string, offset: i64, span: ast.Span): parse.OuterPos = {
     var line: i64 = span.line
@@ -803,8 +803,8 @@ let body_offset_to_outer(body: string, offset: i64, span: ast.Span): parse.Outer
 
 // Translate one source byte from a backtick-string body into the bytes
 // a C double-quoted literal needs and append to the template. A raw
-// `"` becomes `\"`; a `' followed by `` ` `` collapses to one literal
-// backtick; every other `\X` escape passes through unchanged.
+// `"` becomes `\"`. A `' followed by `` ` `` collapses to one literal
+// backtick. Every other `\X` escape passes through unchanged.
 let append_str_byte(template: string, body: string, i: i64): string = {
     let bn = len(body)
     let b = strings.byte_at(body, i)
@@ -962,7 +962,7 @@ let interp_block(template: string, args: Vec<ast.Expr>, span: ast.Span): ast.Exp
         }
         // The per-type push name is decided at check time once the
         // argument's type is known. The placeholder name is the
-        // string variant; check::rewrite_call retargets it to the
+        // string variant. Check::rewrite_call retargets it to the
         // numeric, boolean, or character variant if the argument is
         // not already a string.
         vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, args[idx]))))
@@ -1026,7 +1026,7 @@ let parse_atom(p: *Parser): ast.Expr = {
             record_error(p, `unknown directive '#{name_tok.text}' in expression position; supported: #load_string`)
             return ENil(span)
         }
-        // arg_tok.text includes surrounding quotes; strip them.
+        // arg_tok.text includes surrounding quotes. Strip them.
         var raw_path = arg_tok.text
         let pn = len(raw_path)
         if pn >= 2 && strings.byte_at(raw_path, 0) == 34 && strings.byte_at(raw_path, pn - 1) == 34 {
@@ -1646,7 +1646,7 @@ let parse_decl(p: *Parser): ast.Decl = {
         }
     }
     // ASI may inject a `;` between an attribute and the declaration it
-    // adorns; skip those so the attribute attaches to the next decl.
+    // adorns. Skip those so the attribute attaches to the next decl.
     while is_punct(peek(p), ";") { advance(p) }
 
     let t = peek(p)

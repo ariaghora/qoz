@@ -37,17 +37,17 @@ typedef struct qoz_type_desc {
     int32_t                   size;     /* total object size in bytes */
     int32_t                   nptrs;    /* meaningful when kind == OFFSETS */
     const int32_t            *offsets;  /* meaningful when kind == OFFSETS */
-    int32_t                   tag_off;  /* offset of the tag field; meaningful when kind == ADT */
-    int32_t                   payload_off; /* offset of the payload union; meaningful when kind == ADT */
+    int32_t                   tag_off;  /* offset of the tag field, meaningful when kind == ADT */
+    int32_t                   payload_off; /* offset of the payload union, meaningful when kind == ADT */
     int32_t                   nvariants;
     const qoz_variant_desc   *variants;
     const char               *name;     /* debug only */
 } qoz_type_desc;
 
-/* Allocate `size` bytes; record `desc` against the allocation so future
- * mark walks can find outgoing pointers. `desc` may be NULL, in which
- * case the allocation is treated as opaque (conservative scan fallback).
- */
+/* Allocate `size` bytes and record `desc` against the allocation so
+ * future mark walks can find outgoing pointers. `desc` may be NULL,
+ * in which case the allocation is treated as opaque (conservative
+ * scan fallback). */
 void *qoz_gc_alloc(int64_t size, const qoz_type_desc *desc);
 
 /* Look up the descriptor associated with an allocation. Returns NULL
@@ -74,8 +74,8 @@ void qoz_gc_walk_shadow_roots(void (*cb)(void *arg, void *child),
                               void *arg);
 
 /* Run a precise mark phase walking the shadow stack. Each reachable
- * allocation gets its mark bit set; everything else is left unmarked.
- * Returns the number of allocations marked. */
+ * allocation gets its mark bit set. Everything else is left
+ * unmarked. Returns the number of allocations marked. */
 int64_t qoz_gc_mark_phase(void);
 
 /* Free every unmarked allocation. Returns the number of allocations

@@ -3,7 +3,7 @@
 // The C side of raylib lives next to this file as `libraylib.a` and
 // `raylib.h`. The link directives below pull in the static library
 // and the macOS system frameworks raylib's static build depends on.
-// Importing this package is enough; user programs do not need to
+// Importing this package is enough. User programs do not need to
 // repeat the link directives at their entry point.
 //
 // Only a working subset of raylib is exposed. Add functions and

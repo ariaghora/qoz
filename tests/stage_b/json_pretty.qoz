@@ -1,5 +1,5 @@
 // expect: 1
-// Pretty-printed JSON spans multiple lines; the encoded length of a
+// Pretty-printed JSON spans multiple lines. The encoded length of a
 // non-trivial document with newlines exceeds the minified length.
 
 import encoding/json

@@ -156,7 +156,7 @@ let parse_int(s: string): i64 = {
 // Strict decimal parser. Empty input, leading sign without digits,
 // non-digit bytes, and arithmetic overflow each produce an Err. The
 // range accepted is the positive i64 domain plus zero on the negative
-// side; INT64_MIN (-9223372036854775808) is rejected as overflow
+// side. INT64_MIN (-9223372036854775808) is rejected as overflow
 // because the magnitude does not fit in a positive i64. Callers that
 // require INT64_MIN should use parse_f64 and round.
 let parse_int_strict(s: string): Result<i64, string> = {
@@ -244,7 +244,7 @@ let replace_all(s: string, needle: string, replacement: string): string = {
 
 // Render an i64 as a decimal string. The integer `0` returns "0".
 // INT64_MIN is special-cased because negating it overflows in two's
-// complement (`0 - INT64_MIN == INT64_MIN`); detect that case by
+// complement (`0 - INT64_MIN == INT64_MIN`). Detect that case by
 // observing that negation did not flip the sign.
 let i64_to_string(v: i64): string = {
     if v == 0 { return "0" }

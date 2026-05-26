@@ -27,7 +27,7 @@ let make<K, V>(): Map<K, V> = Map { slots: nil, len: 0, cap: 0 }
 // hits an empty slot. Deleted (tombstone) slots are walked past so a
 // key that was once placed after a collision remains reachable. The
 // returned index either holds the key or is the first empty slot in
-// the chain; callers must inspect `occupied` and `deleted` on the
+// the chain. Callers must inspect `occupied` and `deleted` on the
 // returned slot to interpret the result.
 let probe<K, V>(m: *Map<K, V>, key: K): i64 = {
     if m.cap == 0 { return 0 }

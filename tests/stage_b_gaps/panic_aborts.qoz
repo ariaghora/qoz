@@ -1,6 +1,6 @@
 // expect: 134
 // os.panic aborts the process (SIGABRT = 128+6 = 134) with the message
-// on stderr. Recoverable errors should use Result<T, E> + try; panic is
+// on stderr. Recoverable errors should use Result<T, E> + try. Panic is
 // for programmer bugs only.
 
 import os

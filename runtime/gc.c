@@ -17,7 +17,7 @@
 #include <setjmp.h>
 #include <pthread.h>
 
-/* state: 0 = empty (probe stops); 1 = live; 2 = tombstone (probe continues) */
+/* state: 0 = empty (probe stops), 1 = live, 2 = tombstone (probe continues). */
 typedef struct {
     void                       *ptr;
     const qoz_type_desc        *desc;
@@ -330,7 +330,7 @@ void qoz_gc_set_stack_bottom(void *anchor) {
     void *addr = pthread_get_stackaddr_np(self);
     size_t sz   = pthread_get_stacksize_np(self);
     /* pthread_get_stackaddr_np returns the address one past the high end
-     * of the stack on darwin; subtract one word to land inside. */
+     * of the stack on darwin. Subtract one word to land inside. */
     (void)sz;
     if (addr) g_stack_top_bound = (char *)addr - sizeof(void *);
 }

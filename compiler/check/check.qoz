@@ -26,10 +26,10 @@ type TyContext = {
     consts:       Map<string, ast.Decl>,
     packages:     Map<string, bool>,
     // First-home for each variant name. Single-home queries hit this
-    // map; ambiguity detection consults variant_homes.
+    // map. Ambiguity detection consults variant_homes.
     variant_of:   Map<string, string>,
     // Every enum that declares a given variant name. Length 1 is the
-    // common case; longer entries mean the bare name is ambiguous and
+    // common case. Longer entries mean the bare name is ambiguous and
     // a qualified path (Enum.Variant) is required at the call site
     // unless context pins the enum.
     variant_homes: Map<string, Vec<string>>,
@@ -41,7 +41,7 @@ type TyContext = {
     type_homes:    Map<string, string>,
     // Owning package of every fn / extern, keyed by the renamed
     // C-style name. validate_signatures reads this when caching the
-    // resolved param and return tys; emit reads it through the same
+    // resolved param and return tys. Emit reads it through the same
     // map.
     fn_homes:      Map<string, string>,
     // Resolved parameter and return types of every declared fn /
@@ -59,7 +59,7 @@ type TyContext = {
     errors:       Vec<check.TypeError>,
     type_params:  Map<string, bool>,
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
-    // pointer cast to i64. Populated by synth; consumed by emit.
+    // pointer cast to i64. Populated by synth. Consumed by emit.
     expr_types:   Map<i64, ast.TypeExpr>,
     // Return type of the function currently being checked. Used by
     // EReturn synth and by the tail-type check at end of body.
@@ -343,7 +343,7 @@ let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args:
         // instantiation context the resolve happens to fire from.
         if !strings.eq_raw(home, "") {
             // Every parser-emitted TypeExpr carries the file it came
-            // from; every loaded file is in file_pkgs. A miss here
+            // from. Every loaded file is in file_pkgs. A miss here
             // means a TypeExpr reached resolve_named without going
             // through the loader (a compiler bug), which is reported
             // as such so the silent-allow fallback never re-emerges.
@@ -422,8 +422,8 @@ let env_define(env: *Env, name: string, t: ty.Ty) = {
 }
 
 // Variant of env_define that records whether the binding is mutable.
-// SLet introduces immutable bindings; SVar, function parameters, and
-// closure parameters introduce mutable bindings. `check_assign`
+// SLet introduces immutable bindings. SVar, function parameters,
+// and closure parameters introduce mutable bindings. `check_assign`
 // consults this flag to reject assignment to a `let`.
 let env_define_var(env: *Env, name: string, t: ty.Ty, is_var: bool) = {
     vec.push(&env.bindings, Binding { name: name, ty: t, is_var: is_var })
@@ -495,7 +495,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     | ETry(sp, v)            -> {
         // The `?` operator on the prelude's Result<T, E> evaluates to
         // T. Codegen handles the early-return on the Err branch. The
-        // operand's home must be "" (the prelude); a user-declared
+        // operand's home must be "" (the prelude). A user-declared
         // enum that happens to be named Result is rejected.
         let t = synth(tc, env, v)
         if ty.ty_is_error(t) { return ty.ty_error_() }
@@ -532,7 +532,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         let body_ty = synth(tc, env, body)
         tc.current_ret_ty = saved_ret
         // A closure with no explicit return annotation parses with a
-        // TEUnit ret which resolves to TyUnit; that disables the
+        // TEUnit ret which resolves to TyUnit. That disables the
         // body-vs-declared check, matching the user's intent (no
         // annotation = take the body's type).
         if !ty.ty_is_unit(ret_ty) && !ty.ty_is_error(ret_ty) && !ty.ty_is_error(body_ty) {
@@ -569,7 +569,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         let vt = synth(tc, env, v)
         let rt = tc.current_ret_ty
         // A unit-returning function accepts a bare `return` whose
-        // value parses as nil; the discarded value never reaches
+        // value parses as nil. The discarded value never reaches
         // user code. Skip the type check on that arm. TyError on
         // either side also skips because a diagnostic was already
         // recorded upstream.
@@ -607,7 +607,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
 // An lvalue is an expression that can appear on the left-hand side
 // of `=`. Variable references, field selections, index expressions,
 // and pointer dereferences are the four shapes Qoz allows. The
-// check stays syntactic; whether an `EIdent` actually names a `var`
+// check stays syntactic. Whether an `EIdent` actually names a `var`
 // binding is enforced by a future pass, not here.
 // `is_lvalue_shape` performs the structural part of the lvalue check.
 // `is_lvalue` adds a type-aware refinement: a field or index access
@@ -630,7 +630,7 @@ let is_lvalue(tc: *check.TyContext, env: *Env, e: ast.Expr): bool = {
     | EField(_, base, _) | EIndex(_, base, _) -> {
         match base {
         | ECall(_, _, _, _) -> {
-            // A call returns a value; assigning through `call().f`
+            // A call returns a value. Assigning through `call().f`
             // would write to a temporary. Only valid when the
             // call's return type is a pointer.
             let bt = synth(tc, env, base)
@@ -645,7 +645,7 @@ let is_lvalue(tc: *check.TyContext, env: *Env, e: ast.Expr): bool = {
 
 // Type-check an assignment. Reports an error if the lhs has an
 // unassignable shape, and if the rhs type cannot flow into the lhs
-// type. Returns unit; the assignment expression itself produces no
+// type. Returns unit. The assignment expression itself produces no
 // value.
 let check_assign(tc: *check.TyContext, env: *Env, sp: ast.Span, lhs: ast.Expr, rhs: ast.Expr): ty.Ty = {
     if !is_lvalue(tc, env, lhs) {
@@ -653,7 +653,7 @@ let check_assign(tc: *check.TyContext, env: *Env, sp: ast.Span, lhs: ast.Expr, r
     }
     // Reject assignment to a let-bound identifier. Field, index, and
     // deref lvalues are still permitted because they write through a
-    // reference; only direct ident assignment needs the mutability
+    // reference. Only direct ident assignment needs the mutability
     // check.
     match lhs {
     | EIdent(_, name) -> {
@@ -922,10 +922,10 @@ let sb_append_method_for(t: ty.Ty): string = {
 }
 
 // Per-type interpolation push name. The parser desugars every
-// interpolation slot to a call to __qoz_interp_push_str; this routine
+// interpolation slot to a call to __qoz_interp_push_str. This routine
 // retargets it to the matching typed variant once the slot's value
 // type is known. Returning None signals that the slot's type is not a
-// supported interpolation primitive; the caller must report that as
+// supported interpolation primitive. The caller must report that as
 // an error.
 let interp_push_method_for(t: ty.Ty): Option<string> = {
     match t {
@@ -1011,9 +1011,9 @@ let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.E
     // size_of is parsed as ESizeOf directly, so it never reaches this
     // path. len and hash are bare-name primitives. len accepts a
     // string, Vec, Map, or a pointer to one of these (the &xs form
-    // used elsewhere in the compiler); anything else is rejected.
+    // used elsewhere in the compiler). Anything else is rejected.
     // hash accepts a string, integer, or pointer to a value of those
-    // types; user records that overload hash flow through the regular
+    // types. User records that overload hash flow through the regular
     // operator-dispatch path and never reach here.
     if strings.eq_raw(fn_name, "len") {
         if len(args) != 1 {
@@ -1040,7 +1040,7 @@ let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.E
     // Interpolation intrinsics. Implemented as bare-name runtime
     // primitives so the backtick-interpolation desugar has no
     // dependency on any user-importable module. The arguments are
-    // synthesised so their types are recorded; rewrite_call later
+    // synthesised so their types are recorded. Rewrite_call later
     // retargets the push call to the per-type variant.
     if is_interp_intrinsic(fn_name) {
         for a in args { let _ = synth(tc, env, a) }
@@ -1050,7 +1050,7 @@ let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.E
     }
     // Auto-derived show. The check phase synthesises a per-type
     // __qoz_show_<MangledT>(v: T): string call whenever a non-primitive
-    // interpolation slot is encountered; the emit phase generates the
+    // interpolation slot is encountered. The emit phase generates the
     // function body. The argument type is checked elsewhere because
     // the rewriter constructs the call with a known concrete type.
     if strings.has_prefix(fn_name, "__qoz_show_") {
@@ -1069,7 +1069,7 @@ let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.E
             // The name is not a fn or extern. It may still be a
             // variant constructor (bare or via Enum.Variant). When
             // it is not, the call is to an undefined name and that
-            // needs a diagnostic; previously the call returned
+            // needs a diagnostic. Previously the call returned
             // TyError silently.
             if map.contains(&tc.variant_of, fn_name) {
                 // Arity check: each variant constructor takes exactly
@@ -1226,7 +1226,7 @@ let ty_record_args(t: ty.Ty): Vec<ty.Ty> = {
 // binding's type. Skips when either side is an error so that a
 // single mismatch does not cascade.
 let check_binding_compat(tc: *check.TyContext, sp: ast.Span, te: ast.TypeExpr, bound: ty.Ty, vt: ty.Ty) = {
-    // No annotation = nothing to check; the binding's type is the
+    // No annotation = nothing to check. The binding's type is the
     // value's type by definition.
     if let TEUnit(_) = te { return }
     if !ty.ty_assignable(bound, vt) {
@@ -1312,7 +1312,7 @@ let synth_variant_ctor(tc: *check.TyContext, name: string): ty.Ty = {
 
 // Pull an explicit enum name out of a qualified variant callee. The
 // EField form is what rewrite_call produces when it disambiguates a
-// bare variant call; the EPath form is what the parser produces for
+// bare variant call. The EPath form is what the parser produces for
 // `Enum::Variant` syntax. Returns "" for bare-identifier callees.
 let explicit_enum_from_callee(callee: ast.Expr): string = {
     match callee {
@@ -1339,20 +1339,20 @@ let synth_variant_ctor_with_args(tc: *check.TyContext, name: string, arg_tys: Ve
 }
 
 // Variant constructor synth with an explicit enum name. The enum
-// argument is the one chosen by qualified-call resolution; for the
+// argument is the one chosen by qualified-call resolution. For the
 // unqualified path the caller passes variant_enum_name(tc, name) as
 // the default.
 let synth_variant_ctor_with_args_in(tc: *check.TyContext, name: string, enum_name: string, arg_tys: Vec<ty.Ty>): ty.Ty = {
     if strings.eq_raw(enum_name, "") { return ty.ty_error_() }
     let variant_pos = variant_positional_types(tc, enum_name, name)
     // Arity check. A diagnostic-bearing site that has a span (the
-    // ECall surrounding this call) is preferred; here we rely on the
+    // ECall surrounding this call) is preferred. Here we rely on the
     // caller (synth_call_full) having a span to anchor downstream
     // errors. Skip when len(arg_tys) == 0 because that allows
     // referencing the variant constructor as a value.
     if len(arg_tys) > 0 && len(arg_tys) != len(variant_pos) {
         // Use the first variant type's span as a fallback. The caller
-        // should supply a better span via ECall; this path covers
+        // should supply a better span via ECall. This path covers
         // bare path forms.
     }
     let tparams = enum_tparams(tc, enum_name)
@@ -1754,7 +1754,7 @@ let synth_block(tc: *check.TyContext, env: *Env, stmts: Vec<ast.Stmt>, tail: ast
     synth(tc, env, tail)
 }
 
-// Conditional expression. The condition must be bool; the two
+// Conditional expression. The condition must be bool. The two
 // branches must agree on a single result type modulo nil-vs-pointer
 // flexibility, which is what `ty_assignable` already encodes. An
 // if-without-else (parser-produced nil else) is treated as a
@@ -1768,7 +1768,7 @@ let synth_if(tc: *check.TyContext, env: *Env, sp: ast.Span, c: ast.Expr, t: ast.
     let tt = synth(tc, env, t)
     let ft = synth(tc, env, f)
     if ty.ty_is_error(tt) || ty.ty_is_error(ft) { return tt }
-    // nil flows into any pointer / ADT type; only flag mismatches
+    // nil flows into any pointer / ADT type. Only flag mismatches
     // when both branches have a concrete non-nil type and neither
     // direction is assignable.
     if !ty.ty_is_nil(tt) && !ty.ty_is_nil(ft) {
@@ -1824,7 +1824,7 @@ let check_match_exhaustiveness(tc: *check.TyContext, scrut: ast.Expr, scrut_ty: 
             // Flag PatBind names that match a variant of a DIFFERENT
             // enum. Likely a typo (`Resul.Ok` written as plain `Ok`
             // matched on an Option scrutinee). The check runs once
-            // per arm; it does not change exhaustiveness behaviour.
+            // per arm. It does not change exhaustiveness behaviour.
             for arm in arms {
                 match arm.pat {
                 | PatBind(psp, name) -> {
@@ -2288,7 +2288,7 @@ let collect_arg_hints(tc: *check.TyContext, callee: ast.Expr, n: i64, out: *Vec<
         }
     }
     // Variant ctor hints are added only when the enum has no tparams.
-    // A generic-enum hint would carry TyVar; threading those through
+    // A generic-enum hint would carry TyVar. Threading those through
     // the inference pipeline has destabilised the conservative GC.
     match callee {
     | EIdent(_, vname) -> {
@@ -2380,7 +2380,7 @@ let pick_variant_home(homes: Vec<string>, expected: ty.Ty): string = {
 }
 
 // True for any of the bare builtin verbs that target a prelude
-// container type. The recogniser is intentionally a closed list; an
+// container type. The recogniser is intentionally a closed list. An
 // open extension model would defeat the reserved-name property the
 // spec promises.
 let is_container_builtin(name: string): bool = {
@@ -2479,12 +2479,12 @@ let single_te(sp: ast.Span, name: string): ast.TypeExpr = {
 // case rewrite_call falls through and the user gets the standard
 // "undefined name" diagnostic).
 let rewrite_container_builtin(tc: *check.TyContext, env: *Env, sp: ast.Span, name: string, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): Option<ast.Expr> = {
-    // make() has no receiver; its container kind comes from the
+    // make() has no receiver. Its container kind comes from the
     // binding annotation passed in `expected`. With no annotation the
     // call is ambiguous and we report it as such.
     if strings.eq_raw(name, "make") {
         // make<Vec<T>>() and make<Map<K, V>>() pin the container kind
-        // through the explicit type argument; the rest of the
+        // through the explicit type argument. The rest of the
         // dispatch reads the container args from there. Falling back
         // to the binding annotation is the concise form
         // (`var xs: Vec<i64> = make()`).
@@ -2589,7 +2589,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
     // the Vec / Map runtime helpers based on the receiver's type so the
     // user surface reads uniformly with the prelude container types.
     // Vec-only verbs (push, pop) and Map-only verbs (insert, contains,
-    // delete) pin the package by argument-type inspection; make and
+    // delete) pin the package by argument-type inspection. Make and
     // clear are polymorphic between Vec and Map and dispatch off the
     // receiver type or the expected return type.
     if is_container_builtin(bare_name) {
@@ -2737,7 +2737,7 @@ let is_unhandled_result(t: ty.Ty): bool = {
 // True when `e` contains an `EReturn` anywhere in its sub-tree.
 // Used by check_fn_bodies to suppress the body-tail-type check when
 // the user controls exit paths explicitly. The walk goes through all
-// sub-expressions; statement-level returns inside blocks are caught
+// sub-expressions. Statement-level returns inside blocks are caught
 // via the EBlock arm.
 let expr_has_return(e: ast.Expr): bool = {
     match e {
@@ -2797,7 +2797,7 @@ let check_fn_bodies(tc: *check.TyContext, f: ast.File) = {
             tc.current_ret_ty = saved_ret
             // Body-tail-type check. Only enforced when the body has
             // no explicit `return` anywhere. The presence of `return`
-            // indicates the user controls exit paths; the tail may
+            // indicates the user controls exit paths. The tail may
             // be unreachable. Unit-returning functions also skip
             // because a statement-shaped tail produces unit by
             // definition.

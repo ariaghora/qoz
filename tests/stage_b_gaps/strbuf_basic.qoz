@@ -1,7 +1,7 @@
 // expect: 0
 // Exercises the pure-Qoz strings.Strbuf module declared in
 // std/strings/strbuf.qoz. The package is split across two .qoz files
-// (strings.qoz and strbuf.qoz); this test also covers the multi-file
+// (strings.qoz and strbuf.qoz). This test also covers the multi-file
 // package loader.
 
 import strings

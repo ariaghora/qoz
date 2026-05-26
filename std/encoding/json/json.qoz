@@ -2,7 +2,7 @@
 //
 // `Json` is a tagged union over the six JSON value kinds. The
 // `parse` entry point returns `Result<Json, string>` so syntax
-// errors are recoverable; `encode` walks a `Json` and produces a
+// errors are recoverable. `encode` walks a `Json` and produces a
 // string.
 
 import strings

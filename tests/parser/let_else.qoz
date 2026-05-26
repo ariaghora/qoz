@@ -1,4 +1,4 @@
-// stage-b-skip: the compiler has no SLetElse AST yet; the test relies
+// stage-b-skip: the compiler has no SLetElse AST yet. The test relies
 // on `let Pattern = expr else { ... }` syntax. Re-enable once that
 // feature lands.
 import strings

@@ -1,6 +1,6 @@
 // expect: 42
 // Field access on the return value of a function that returns *T.
-// The receiver is pointer-typed; field_access_op must emit `->`
+// The receiver is pointer-typed. Field_access_op must emit `->`
 // rather than `.` for the access.
 
 import mem

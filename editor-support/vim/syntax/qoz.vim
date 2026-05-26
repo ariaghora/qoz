@@ -35,10 +35,10 @@ syntax region qozString start=+`+ end=+`+ contains=qozEscape,qozInterp,qozBraceE
 syntax match  qozEscape "\\[nrtbf0\\\"'`]" contained
 syntax match  qozEscape "\\x[0-9A-Fa-f]\{2\}" contained
 syntax match  qozEscape "\\u[0-9A-Fa-f]\{4\}" contained
-" `{` opens an interpolation slot; `{{` and `}}` are literal-brace
+" `{` opens an interpolation slot. `{{` and `}}` are literal-brace
 " escapes that must not open one. The negative lookahead on the
-" start pattern keeps a doubled brace from triggering the region;
-" the explicit qozBraceEscape match consumes both characters with
+" start pattern keeps a doubled brace from triggering the region.
+" The explicit qozBraceEscape match consumes both characters with
 " higher priority because it is defined later.
 syntax region qozInterp  start=+{\({\)\@!+ end=+}+ contained contains=ALLBUT,qozInterp
 syntax match  qozBraceEscape "{{\|}}" contained

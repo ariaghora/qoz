@@ -1,5 +1,5 @@
 // expect: 0
-// set.remove takes an element out of the set; subsequent contains
+// set.remove takes an element out of the set. Subsequent contains
 // queries return false and size reports the lower count.
 
 import set

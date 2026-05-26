@@ -1,4 +1,4 @@
-// Negative: `else if` is no longer valid; the parser requires the
+// Negative: `else if` is no longer valid. The parser requires the
 // chained form to be written as `elif`.
 
 let main(): i64 = {

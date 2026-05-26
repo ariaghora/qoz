@@ -1,7 +1,7 @@
 // std/fs: minimal file I/O.
 //
 // Reads and writes whole files at once. The lenient `read_file`
-// returns length -1 on any failure; `read_file_strict` returns a
+// returns length -1 on any failure. `read_file_strict` returns a
 // descriptive error through the prelude Result.
 
 @link_name("qoz_fs_read_file")

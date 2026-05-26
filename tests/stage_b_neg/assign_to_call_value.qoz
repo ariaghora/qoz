@@ -1,5 +1,5 @@
 // Negative: assigning to a field of a value-returning call writes
-// to a temporary; rejected.
+// to a temporary. Rejected.
 
 type Pair = { x: i64, y: i64 }
 

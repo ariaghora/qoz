@@ -1,6 +1,6 @@
 // std/set: hash set built on top of std/map.
 //
-// `Set<T>` stores each element as a key in a Map<T, bool>; presence
+// `Set<T>` stores each element as a key in a Map<T, bool>. Presence
 // is encoded by the key alone. Insertion, lookup, and removal use
 // the same probe sequence as the underlying map.
 
