@@ -8,13 +8,12 @@
 
 import strings
 import fmt
+import fs
 import io
 import map
 import vec
 import os
 import encoding/json
-import compiler/tokenize
-import compiler/parse
 
 // Read one complete frame from stdin. Returns None at EOF or when
 // the header is malformed. Blocking I/O suspends the process, so a
@@ -220,25 +219,117 @@ let initialize_result(): json.Json = {
 
 // --- Diagnostics ---------------------------------------------------
 
-// Compute diagnostics for a buffer. Runs the compiler's tokenize
-// and parse phases against the buffer text and converts each parse
-// error string into a one-line Diagnostic spanning the column at
-// the start of the line. The check phase needs the full package
-// graph and is wired through in a later step.
+// Compute diagnostics for a buffer. Writes the buffer text to a
+// dot-prefixed temp file alongside the real source, then shells
+// out to `qoz check <temp>`. The compiler treats the temp file as
+// the entry. Imports resolve from disk so cross-package type
+// errors surface. The temp file is removed after the check
+// returns. Diagnostics arrive on stdout as
+// `file:line:col: message`, one per line; the temp path is
+// rewritten back to the original URI.
 let check_buffer(uri: string, text: string): Vec<lsp.Diagnostic> = {
-    let tokens = tokenize.run(text)
-    let parsed = parse.run(tokens, uri)
     var diags: Vec<lsp.Diagnostic> = vec.make()
-    for msg in parsed.errors {
-        let line = extract_line_from_msg(msg)
-        vec.push(&diags, lsp.Diagnostic {
-            line:    line,
-            col:     0,
-            end_col: 80,
-            message: msg,
-        })
+    let path = file_path_of_uri(uri)
+    if strings.eq_raw(path, "") { return diags }
+    let tmp = temp_path_for(path)
+    if strings.eq_raw(tmp, "") { return diags }
+    if !fs.write_file(tmp, text) { return diags }
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, qoz_binary_path())
+    vec.push(&argv, "check")
+    vec.push(&argv, tmp)
+    let result = os.process_exec(argv)
+    let _ = remove_quiet(tmp)
+    let lines = strings.split(result.stdout, 10)
+    for line in lines {
+        if len(line) > 0 {
+            match parse_diagnostic_line(line, tmp) {
+            | Some(d) -> vec.push(&diags, d)
+            | None    -> { }
+            }
+        }
     }
     diags
+}
+
+// Build a temp file path that lives outside the source tree. The
+// file becomes the entry the compiler checks. Imports resolve via
+// QOZ_ROOT, so cross-package references still work. The trade-off
+// is that intra-package references from the buffer to its own
+// sibling files are not seen by the check, since the temp file is
+// outside the original package directory.
+let temp_path_for(path: string): string = {
+    let suffix = basename_of(path)
+    let safe   = if len(suffix) > 0 { suffix } else { "buffer.qoz" }
+    strings.cat("/tmp/qoz_lsp_buffer_", safe)
+}
+
+let basename_of(path: string): string = {
+    let i = last_index_of_byte(path, 47)
+    if i < 0 { return path }
+    strings.slice(path, i + 1, len(path))
+}
+
+let last_index_of_byte(s: string, b: i64): i64 = {
+    var i: i64 = len(s) - 1
+    while i >= 0 {
+        if strings.byte_at(s, i) == b { return i }
+        i -= 1
+    }
+    0 - 1
+}
+
+let remove_quiet(path: string) = {
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "rm")
+    vec.push(&argv, "-f")
+    vec.push(&argv, path)
+    let _ = os.process_exec(argv)
+}
+
+// Translate a single `file:line:col: message` line into a
+// Diagnostic. Lines that do not match the format are skipped. Only
+// diagnostics whose file matches `expected_path` are kept;
+// diagnostics anchored at other files have nowhere to publish.
+let parse_diagnostic_line(line: string, expected_path: string): Option<lsp.Diagnostic> = {
+    if !strings.has_prefix(line, strings.cat(expected_path, ":")) { return None }
+    let rest = strings.slice(line, len(expected_path) + 1, len(line))
+    let c1 = index_of_byte(rest, 58)
+    if c1 < 0 { return None }
+    let line_s = strings.slice(rest, 0, c1)
+    let rest2  = strings.slice(rest, c1 + 1, len(rest))
+    let c2 = index_of_byte(rest2, 58)
+    if c2 < 0 { return None }
+    let col_s = strings.slice(rest2, 0, c2)
+    let msg   = strings.slice(rest2, c2 + 2, len(rest2))
+    let l_n = strings.parse_int(line_s)
+    let c_n = strings.parse_int(col_s)
+    let l0  = if l_n > 0 { l_n - 1 } else { 0 }
+    let c0  = if c_n > 0 { c_n - 1 } else { 0 }
+    Some(lsp.Diagnostic { line: l0, col: c0, end_col: c0 + 1, message: msg })
+}
+
+let index_of_byte(s: string, b: i64): i64 = {
+    var i: i64 = 0
+    while i < len(s) {
+        if strings.byte_at(s, i) == b { return i }
+        i += 1
+    }
+    0 - 1
+}
+
+let file_path_of_uri(uri: string): string = {
+    if strings.has_prefix(uri, "file://") {
+        return strings.slice(uri, 7, len(uri))
+    }
+    uri
+}
+
+// Path to the qoz binary. The LSP_QOZ_PATH env var overrides;
+// otherwise it falls back to whichever `qoz` is on PATH.
+let qoz_binary_path(): string = {
+    let p = os.getenv("LSP_QOZ_PATH")
+    if len(p) > 0 { p } else { "qoz" }
 }
 
 // Best-effort extraction of "at line N" out of a parse error

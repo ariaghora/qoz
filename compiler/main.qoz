@@ -257,20 +257,41 @@ type Loaded = {
     // span, so the cross-package enforcement does not depend on
     // synth-side current_pkg propagation.
     file_pkgs:  Map<string, string>,
+    // Errors accumulated during load (missing files, parse errors).
+    // The existing build path treats any non-empty value as fatal.
+    // The check subcommand surfaces them as diagnostics without
+    // exiting, so the LSP can show parse errors on a buffer that
+    // cannot resolve every import.
+    errors:     Vec<string>,
 }
 
 let load_all(entry: string, qoz_root: string): Loaded = {
     var entries: Vec<string> = vec.make()
     vec.push(&entries, entry)
     let ctx = make_compile_ctx(qoz_root)
-    load_all_entries(entries, entry, qoz_root, ctx)
+    let overrides: Map<string, string> = map.make()
+    load_all_entries(entries, entry, qoz_root, ctx, &overrides)
+}
+
+// Read `path` from the override map first, falling back to disk.
+// Returns Option::None when neither has the file. The override map
+// lets the LSP type-check an unsaved buffer without writing to the
+// user's source tree.
+let read_with_override(path: string, overrides: *Map<string, string>): Option<string> = {
+    match map.get(overrides, path) {
+    | Some(s) -> Some(s)
+    | None    -> {
+        let src = fs.read_file(path)
+        if len(src) < 0 { None } else { Some(src) }
+    }
+    }
 }
 
 // Load every file reachable from one or more entry files. The first
 // argument lists the source paths that seed the compilation unit. The
 // second is the path used to identify the resulting `File` (its
 // `path` field is read by downstream phases for diagnostic anchoring).
-let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ctx: main.CompileCtx): Loaded = {
+let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ctx: main.CompileCtx, overrides: *Map<string, string>): Loaded = {
     var queue: Vec<Pending> = vec.make()
     var visited: Map<string, bool> = map.make()
     var aggregated_decls: Vec<ast.Decl> = vec.make()
@@ -278,6 +299,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
     var type_homes: Map<string, Vec<string>> = map.make()
     var fn_homes:   Map<string, string> = map.make()
     var file_pkgs:  Map<string, string> = map.make()
+    var load_errors: Vec<string> = vec.make()
     // Per-directory cache of fn/extern names declared anywhere in the
     // package. process_one consults this so it parses each directory's
     // sibling list once instead of once per file in the package.
@@ -312,18 +334,25 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
         qi += 1
         if !map.contains(&visited, cur.path) {
             visited[cur.path] = true
-            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, &file_pkgs, &dir_local_fns, qoz_root, ctx)
+            process_one(cur, &queue, &visited, &aggregated_decls, &sources, &type_homes, &fn_homes, &file_pkgs, &dir_local_fns, &load_errors, overrides, qoz_root, ctx)
         }
     }
-    Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes, file_pkgs: file_pkgs }
+    Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes, file_pkgs: file_pkgs, errors: load_errors }
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, Vec<string>>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, qoz_root: string, ctx: main.CompileCtx) = {
-    let src = fs.read_file(cur.path)
-    if len(src) < 0 {
-        fmt.println(`could not read {cur.path}`)
-        os.exit(1)
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, Vec<string>>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, load_errors: *Vec<string>, overrides: *Map<string, string>, qoz_root: string, ctx: main.CompileCtx) = {
+    var src: string = ""
+    var have_src = false
+    match read_with_override(cur.path, overrides) {
+    | Some(s) -> {
+        src = s
+        have_src = true
     }
+    | None -> {
+        vec.push(load_errors, `could not read {cur.path}`)
+    }
+    }
+    if !have_src { return }
     vec.push(sources, src)
     // Record the file's owning package so resolve_named can look up
     // the use-site pkg from any TypeExpr's span. Prelude / entry
@@ -335,9 +364,9 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
     let parsed = parse.run(tokens, cur.path)
     if len(parsed.errors) > 0 {
         for msg in parsed.errors {
-            fmt.println(strings.cat(strings.cat(cur.path, ": "), msg))
+            vec.push(load_errors, strings.cat(strings.cat(cur.path, ": "), msg))
         }
-        os.exit(1)
+        return
     }
     let raw_file = parsed.file
     let expanded_decls = expand_compile_ifs(raw_file.decls, ctx)
@@ -349,17 +378,17 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
         | DImport(_, ipath, alias) -> {
             let resolved_dir = resolve_import_path(ipath, qoz_root)
             if strings.eq_raw(resolved_dir, "") {
-                fmt.println(`could not resolve import {ipath[len(ipath) - 1]}`)
-                os.exit(1)
-            }
-            var pkg = alias
-            if strings.eq_raw(pkg, "") {
-                pkg = ipath[len(ipath) - 1]
-            }
-            let files = list_package_files(resolved_dir)
-            for fpath in files {
-                if !map.contains(visited, fpath) {
-                    vec.push(queue, Pending { path: fpath, pkg: pkg, bare_types: false })
+                vec.push(load_errors, `could not resolve import {ipath[len(ipath) - 1]}`)
+            } else {
+                var pkg = alias
+                if strings.eq_raw(pkg, "") {
+                    pkg = ipath[len(ipath) - 1]
+                }
+                let files = list_package_files(resolved_dir)
+                for fpath in files {
+                    if !map.contains(visited, fpath) {
+                        vec.push(queue, Pending { path: fpath, pkg: pkg, bare_types: false })
+                    }
                 }
             }
         }
@@ -667,7 +696,12 @@ let collect_link_flags(file: ast.File): Vec<string> = {
 let cmd_build(path: string, qoz_root: string): main.BuildResult = {
     let paths = resolve_entry_paths(path)
     let ctx = make_compile_ctx(qoz_root)
-    let loaded = load_all_entries(paths.entries, paths.primary, qoz_root, ctx)
+    let overrides: Map<string, string> = map.make()
+    let loaded = load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides)
+    if len(loaded.errors) > 0 {
+        for msg in loaded.errors { fmt.println(msg) }
+        os.exit(1)
+    }
     let file = loaded.file
     let main_count = count_main_decls(file.decls)
     if main_count == 0 {
@@ -842,6 +876,33 @@ let cmd_run(path: string, qoz_root: string) = {
     os.exit(result.exit_code)
 }
 
+// Run tokenize, parse, and check against `path`. Prints each
+// diagnostic on one line as `file:line:col: message` and exits 0
+// even when diagnostics are produced. Used by the LSP to surface
+// real-time errors on a buffer that was written to a temp file
+// before invocation.
+let cmd_check(path: string, qoz_root: string) = {
+    let paths = resolve_entry_paths(path)
+    let ctx = make_compile_ctx(qoz_root)
+    let overrides: Map<string, string> = map.make()
+    let loaded = load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides)
+    for msg in loaded.errors { fmt.println(msg) }
+    let file = loaded.file
+    var tc = check.make_ctx()
+    tc.type_homes = loaded.type_homes
+    tc.fn_homes   = loaded.fn_homes
+    tc.file_pkgs  = loaded.file_pkgs
+    check.register_file(&tc, file)
+    check.validate_signatures(&tc, file)
+    let inferred = check.infer_calls(&tc, file)
+    check.check_fn_bodies(&tc, inferred)
+    for e in tc.errors {
+        fmt.println(`{e.span.file}:{e.span.line}:{e.span.col}: {e.message}`)
+    }
+    let _keep_alive = loaded.sources
+    os.exit(0)
+}
+
 // Run the requested subcommand and exit with the appropriate status.
 // All paths terminate by calling os.exit. Main() exists only to dispatch.
 let main() = {
@@ -863,6 +924,13 @@ let main() = {
             os.exit(1)
         }
         cmd_fmt(args[2])
+        os.exit(0)
+    } else { if strings.eq_raw(first, "check") {
+        if len(args) < 3 {
+            fmt.println("usage: qoz check <path>")
+            os.exit(1)
+        }
+        cmd_check(args[2], qoz_root)
         os.exit(0)
     } else { if strings.eq_raw(first, "emit") {
         if len(args) < 3 {
@@ -906,5 +974,5 @@ let main() = {
         let built = cmd_build(first, qoz_root)
         fmt.println(`wrote {built.c_path}`)
         os.exit(0)
-    } } } }
+    } } } } }
 }

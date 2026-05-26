@@ -599,6 +599,7 @@ void qoz_eprint_nl(void) {
 #include <sys/wait.h>
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
 
 /* Append `got` bytes from `chunk` into a growing buffer. Doubles `cap`
  * when needed. Allocations go through qoz_alloc so the result stays
@@ -720,3 +721,126 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
         *out_exit = -1;
     }
 }
+
+#if 0
+/* Reserved for a future runtime refresh that bakes the symbol into
+ * bootstrap/stage1.c. The LSP currently surfaces buffer content to
+ * `qoz check` through a sibling temp file rather than stdin, so this
+ * symbol is not yet referenced from generated code. */
+void qoz_process_exec_input(qoz_string *argv, int64_t n,
+                            const char *in_buf, int64_t in_len,
+                            int64_t *out_exit,
+                            qoz_string *out_stdout,
+                            qoz_string *out_stderr) {
+    *out_exit = -1;
+    *out_stdout = (qoz_string){ NULL, 0, NULL };
+    *out_stderr = (qoz_string){ NULL, 0, NULL };
+
+    if (n <= 0 || argv == NULL) return;
+
+    char **cargv = (char **)qoz_alloc((int64_t)((n + 1) * (int64_t)sizeof(char *)));
+    for (int64_t i = 0; i < n; i++) {
+        int64_t len = argv[i].len;
+        char *s = (char *)qoz_alloc(len + 1);
+        if (len > 0) memcpy(s, argv[i].data, (size_t)len);
+        s[len] = '\0';
+        cargv[i] = s;
+    }
+    cargv[n] = NULL;
+
+    int in_pipe[2]  = { -1, -1 };
+    int out_pipe[2] = { -1, -1 };
+    int err_pipe[2] = { -1, -1 };
+    if (pipe(in_pipe)  != 0) return;
+    if (pipe(out_pipe) != 0) { close(in_pipe[0]); close(in_pipe[1]); return; }
+    if (pipe(err_pipe) != 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_pipe[0]);  close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        return;
+    }
+    if (pid == 0) {
+        dup2(in_pipe[0],  0);
+        dup2(out_pipe[1], 1);
+        dup2(err_pipe[1], 2);
+        close(in_pipe[0]);  close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        execvp(cargv[0], cargv);
+        _exit(127);
+    }
+
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+
+    /* Write input then close so the child sees EOF. A short write is
+     * unusual on a pipe but possible if the kernel buffer fills; the
+     * loop handles it. EPIPE means the child exited early and we
+     * stop writing rather than crash on SIGPIPE. */
+    signal(SIGPIPE, SIG_IGN);
+    int64_t written = 0;
+    while (written < in_len) {
+        ssize_t w = write(in_pipe[1], in_buf + written, (size_t)(in_len - written));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        written += w;
+    }
+    close(in_pipe[1]);
+
+    char *o_buf = NULL; int64_t o_cap = 0; int64_t o_n = 0;
+    char *e_buf = NULL; int64_t e_cap = 0; int64_t e_n = 0;
+    struct pollfd fds[2];
+    fds[0].fd = out_pipe[0]; fds[0].events = POLLIN;
+    fds[1].fd = err_pipe[0]; fds[1].events = POLLIN;
+    int open_count = 2;
+    char chunk[4096];
+    while (open_count > 0) {
+        int pr = poll(fds, 2, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < 2; i++) {
+            if (fds[i].fd < 0) continue;
+            if (fds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
+                ssize_t got = read(fds[i].fd, chunk, sizeof(chunk));
+                if (got > 0) {
+                    if (i == 0) o_buf = qoz_buf_append(o_buf, &o_cap, &o_n, chunk, (int64_t)got);
+                    else        e_buf = qoz_buf_append(e_buf, &e_cap, &e_n, chunk, (int64_t)got);
+                } else if (got == 0 || (got < 0 && errno != EINTR && errno != EAGAIN)) {
+                    close(fds[i].fd);
+                    fds[i].fd = -1;
+                    open_count--;
+                }
+            }
+        }
+    }
+    if (fds[0].fd >= 0) close(fds[0].fd);
+    if (fds[1].fd >= 0) close(fds[1].fd);
+
+    *out_stdout = (qoz_string){ o_buf, o_n, o_buf };
+    *out_stderr = (qoz_string){ e_buf, e_n, e_buf };
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) { *out_exit = -1; return; }
+    }
+    if (WIFEXITED(status)) {
+        *out_exit = (int64_t)WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        *out_exit = (int64_t)(128 + WTERMSIG(status));
+    } else {
+        *out_exit = -1;
+    }
+}
+#endif

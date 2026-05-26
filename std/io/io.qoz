@@ -5,6 +5,7 @@
 // All logic above the FFI is plain Qoz.
 
 import mem
+import strings
 
 @link_name("qoz_stdin_handle")
 external let stdin_handle(): *void
@@ -88,4 +89,19 @@ let read_bytes(n: i64): string = {
 // so the response reaches the client before the next read blocks.
 let flush() = {
     let _ = fflush(stdout_handle())
+}
+
+// Read every byte available on stdin until EOF and return the
+// concatenation. Suitable for `qoz check`, which receives the
+// buffer text as one piped blob.
+let read_all_stdin(): string = {
+    var out: string = ""
+    var done = false
+    while !done {
+        match read_line() {
+        | None    -> done = true
+        | Some(l) -> out = strings.cat(out, l)
+        }
+    }
+    out
 }
