@@ -4511,6 +4511,13 @@ let emit_field_hash_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
     | TENamed(_, path, args) -> {
         if len(path) >= 1 {
             let n = path[len(path) - 1]
+            // C-style enum is a typedefed integer at runtime;
+            // hash and equality lower to the underlying scalar
+            // ops rather than a generated helper.
+            if map.contains(&e.c_enum_decls, n) {
+                push(e, `(uint64_t)(v.{fname})`)
+                return
+            }
             if strings.eq_raw(primitive_c_name(n), "") {
                 if !map.contains(&e.is_enum, n) {
                     let mangled = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
@@ -4535,6 +4542,10 @@ let emit_field_eq_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
     | TENamed(_, path, args) -> {
         if len(path) >= 1 {
             let n = path[len(path) - 1]
+            if map.contains(&e.c_enum_decls, n) {
+                push(e, `a.{fname} == b.{fname}`)
+                return
+            }
             if strings.eq_raw(primitive_c_name(n), "") {
                 if !map.contains(&e.is_enum, n) {
                     let mangled = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
