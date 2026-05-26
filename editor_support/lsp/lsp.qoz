@@ -539,6 +539,11 @@ type PkgDecl = {
     doc:    string,
 }
 
+type QualifierPath = {
+    segments: Vec<string>,
+    prefix:   string,
+}
+
 let list_pkg_decls(dir: string): Vec<lsp.PkgDecl> = {
     var out: Vec<lsp.PkgDecl> = vec.make()
     let files = list_pkg_files(dir)
@@ -598,7 +603,19 @@ let list_pkg_decls(dir: string): Vec<lsp.PkgDecl> = {
                         doc:    doc_comment_above(src, sp.line),
                     })
                 }
-                | _ -> { }
+                | DCEnum(sp, n, _, _) -> {
+                    vec.push(&out, lsp.PkgDecl {
+                        name: n, kind: KIND_ENUM(),
+                        detail: nth_line_of(src, sp.line),
+                        doc:    doc_comment_above(src, sp.line),
+                    })
+                }
+                // DImport, DLink, and DCompileIf carry no surface
+                // symbols. Skipping them keeps the suggestion list to
+                // declarations the user can spell at the call site.
+                | DImport(_, _, _)
+                | DLink(_, _, _)
+                | DCompileIf(_, _, _) -> { }
                 }
             }
         }
@@ -927,9 +944,12 @@ let completion_response(s: *Server, params: json.Json): json.Json = {
     | Some(ctx) -> return import_path_completions(ctx._0, ctx._1)
     | None      -> { }
     }
-    let dot = dot_qualifier_at(text, lc._0, lc._1)
-    if !strings.eq_raw(dot._0, "") {
-        return package_member_completions(text, dot._0, dot._1)
+    let qpath = qualifier_path_at(text, lc._0, lc._1)
+    if len(qpath.segments) == 1 {
+        return package_member_completions(text, qpath.segments[0], qpath.prefix)
+    }
+    if len(qpath.segments) == 2 {
+        return c_enum_member_completions(text, qpath.segments[0], qpath.segments[1], qpath.prefix)
     }
     let prefix = identifier_prefix_at(text, lc._0, lc._1)
     var items: Vec<json.Json> = vec.make()
@@ -983,6 +1003,52 @@ let completion_response(s: *Server, params: json.Json): json.Json = {
 // Suggest every top-level decl in the package reachable through
 // `alias`, filtered by `prefix`. The completion fires when the
 // user types `alias.<prefix>`.
+// Variants of a C-style enum named `enum_name` declared inside
+// the package reached via the import `alias`. Reads the package
+// source files, finds the matching DCEnum, and emits one
+// completion item per variant.
+let c_enum_member_completions(text: string, alias: string, enum_name: string, prefix: string): json.Json = {
+    let imports = imports_of_buffer(text)
+    var ipath: Vec<string> = vec.make()
+    var have = false
+    match map.get(&imports, alias) {
+    | Some(p) -> {
+        ipath = p
+        have = true
+    }
+    | None -> { }
+    }
+    if !have { return empty_completion_list() }
+    let dir = resolve_pkg_dir(ipath)
+    if strings.eq_raw(dir, "") { return empty_completion_list() }
+    var items: Vec<json.Json> = vec.make()
+    for fpath in list_pkg_files(dir) {
+        let src = fs.read_file(fpath)
+        if len(src) >= 0 {
+            let tokens = tokenize.run(src)
+            let parsed = parse.run(tokens, fpath)
+            for d in parsed.file.decls {
+                match d {
+                | DCEnum(_, n, _, vs) -> {
+                    if strings.eq_raw(n, enum_name) {
+                        for v in vs {
+                            push_completion_if_match(&items, v, prefix, KIND_FIELD())
+                        }
+                    }
+                }
+                // Only DCEnum carries C-style variant names; every
+                // other top-level decl is ignored at this point.
+                | _ -> { }
+                }
+            }
+        }
+    }
+    var m: Map<string, json.Json> = map.make()
+    m["isIncomplete"] = Bool(false)
+    m["items"]        = Arr(items)
+    Obj(m)
+}
+
 let package_member_completions(text: string, alias: string, prefix: string): json.Json = {
     let imports = imports_of_buffer(text)
     var ipath: Vec<string> = vec.make()
@@ -1007,28 +1073,41 @@ let package_member_completions(text: string, alias: string, prefix: string): jso
     Obj(m)
 }
 
-// Detect whether the cursor sits inside `<alias>.<prefix>`.
-// Returns the alias and the prefix to the right of the dot when
-// so, both empty otherwise. The alias must be an identifier
-// followed directly by `.`.
-let dot_qualifier_at(text: string, line: i64, col: i64): (string, string) = {
+// Walk the dotted qualifier chain to the left of the cursor and
+// return its identifier segments together with the prefix being
+// typed. For `rl.CameraProjection.Or<cursor>`, returns
+// `(["rl", "CameraProjection"], "Or")`. For `rl.fo<cursor>`,
+// returns `(["rl"], "fo")`. The path is empty when the cursor
+// does not sit after a dotted identifier sequence.
+let qualifier_path_at(text: string, line: i64, col: i64): lsp.QualifierPath = {
     let offset = byte_offset_of(text, line, col)
-    if offset < 0 { return ("", "") }
+    let empty: Vec<string> = vec.make()
+    if offset < 0 { return QualifierPath { segments: empty, prefix: "" } }
     let n = len(text)
-    if offset > n { return ("", "") }
-    // The prefix is bytes to the LEFT of `offset` that are ident
-    // bytes, up to (but not including) a leading `.`.
+    if offset > n { return QualifierPath { segments: empty, prefix: "" } }
     var prefix_lo = offset
     while prefix_lo > 0 && is_ident_byte(strings.byte_at(text, prefix_lo - 1)) { prefix_lo -= 1 }
     let prefix = strings.slice(text, prefix_lo, offset)
-    // The byte at prefix_lo - 1 must be `.` for the dotted form to
-    // apply. Otherwise this is a plain identifier prefix.
-    if prefix_lo == 0 || strings.byte_at(text, prefix_lo - 1) != 46 { return ("", "") }
-    var alias_hi = prefix_lo - 1
-    var alias_lo = alias_hi
-    while alias_lo > 0 && is_ident_byte(strings.byte_at(text, alias_lo - 1)) { alias_lo -= 1 }
-    if alias_lo == alias_hi { return ("", "") }
-    (strings.slice(text, alias_lo, alias_hi), prefix)
+    if prefix_lo == 0 || strings.byte_at(text, prefix_lo - 1) != 46 {
+        return QualifierPath { segments: empty, prefix: "" }
+    }
+    var segments: Vec<string> = vec.make()
+    var pos = prefix_lo
+    while pos > 0 && strings.byte_at(text, pos - 1) == 46 {
+        let dot_at = pos - 1
+        var seg_lo = dot_at
+        while seg_lo > 0 && is_ident_byte(strings.byte_at(text, seg_lo - 1)) { seg_lo -= 1 }
+        if seg_lo == dot_at { return QualifierPath { segments: empty, prefix: "" } }
+        vec.push(&segments, strings.slice(text, seg_lo, dot_at))
+        pos = seg_lo
+    }
+    var ordered: Vec<string> = vec.make()
+    var i: i64 = len(segments) - 1
+    while i >= 0 {
+        vec.push(&ordered, segments[i])
+        i -= 1
+    }
+    QualifierPath { segments: ordered, prefix: prefix }
 }
 
 let empty_completion_list(): json.Json = {
