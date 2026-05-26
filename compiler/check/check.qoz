@@ -2218,13 +2218,27 @@ let bind_variant_pattern(tc: *check.TyContext, env: *Env, sp: ast.Span, path: Ve
         return
     }
     | Some(declared_enum) -> {
-        // Check the variant belongs to the scrutinee's enum.
+        // When the variant name is shared across multiple enums,
+        // pick the one matching the scrutinee's enum. variant_of
+        // only records the first registration, which is unstable
+        // under load order.
         let scrut_enum = enum_name_of_ty(scrut)
-        if !strings.eq_raw(scrut_enum, "") && !strings.eq_raw(scrut_enum, declared_enum) {
-            record_error(tc, sp, `variant '{declared_enum}::{variant}' cannot match scrutinee of enum '{scrut_enum}'`)
+        var actual_enum = declared_enum
+        if !strings.eq_raw(scrut_enum, "") {
+            match map.get(&tc.variant_homes, variant) {
+            | Some(homes) -> {
+                for h in homes {
+                    if strings.eq_raw(h, scrut_enum) { actual_enum = h }
+                }
+            }
+            | None -> { }
+            }
+        }
+        if !strings.eq_raw(scrut_enum, "") && !strings.eq_raw(scrut_enum, actual_enum) {
+            record_error(tc, sp, `variant '{actual_enum}::{variant}' cannot match scrutinee of enum '{scrut_enum}'`)
             return
         }
-        match find_enum_short(tc, declared_enum) {
+        match find_enum_short(tc, actual_enum) {
         | Some(d) -> {
             match d {
             | DEnum(_, _, tparams, variants) -> {
@@ -2551,14 +2565,30 @@ let is_ty_unit_or_error(t: ty.Ty): bool = {
 // of the candidates, that enum wins. When the hint is open or
 // unrelated, the call site is ambiguous and the caller reports an
 // error with the candidate list.
-let pick_variant_home(homes: Vec<string>, expected: ty.Ty): string = {
+let pick_variant_home(tc: *check.TyContext, homes: Vec<string>, expected: ty.Ty, sp: ast.Span): string = {
+    // The expected type pins the enum when it is a concrete ADT.
     match expected {
     | TyAdt(_, name, _) -> {
         for h in homes { if strings.eq_raw(h, name) { return h } }
-        ""
     }
-    | _ -> ""
+    | _ -> { }
     }
+    // Each variant belongs to exactly one enum. When two enums
+    // happen to declare the same short variant name, the bare-name
+    // lookup loses the enum scope. Recover it by selecting the
+    // enum that lives in the same package as the call site.
+    let use_site = home_of_file(tc, sp.file)
+    for h in homes {
+        match map.get(&tc.type_homes, h) {
+        | Some(enum_homes) -> {
+            for eh in enum_homes {
+                if strings.eq_raw(eh, use_site) { return h }
+            }
+        }
+        | None -> { }
+        }
+    }
+    ""
 }
 
 // True for any of the bare builtin verbs that target a prelude
@@ -2747,7 +2777,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
         match map.get(&tc.variant_homes, bare_name) {
         | Some(homes) -> {
             if len(homes) > 1 {
-                let chosen = pick_variant_home(homes, expected)
+                let chosen = pick_variant_home(tc, homes, expected, sp)
                 if strings.eq_raw(chosen, "") {
                     var msg = `variant '{bare_name}' is declared in `
                     var i: i64 = 0

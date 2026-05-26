@@ -2101,8 +2101,17 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         match map.get(&e.locals, name) {
         | Some(t) -> t
         | None -> {
-            let _ = emit_die(sp, `let-binding value references unknown name '{name}'`)
-            TEUnit(sp)
+            // A bare identifier that is not a local may be a
+            // nullary variant constructor used in scrutinee or arg
+            // position. Return the owning enum's TypeExpr so the
+            // match dispatcher can recognise it.
+            match map.get(&e.variant_of, name) {
+            | Some(en) -> single_named_te(sp, en)
+            | None     -> {
+                let _ = emit_die(sp, `let-binding value references unknown name '{name}'`)
+                TEUnit(sp)
+            }
+            }
         }
         }
     }
@@ -2153,7 +2162,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
             let _ = emit_die(sp, "match expression with no arms")
             return TEUnit(sp)
         }
-        let bare_enum = find_enum_from_arms(e, arms)
+        let bare_enum = find_enum_from_arms_with_scrut(e, arms, infer_value_te(e, scrut))
         let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, scrut, bare_enum) }
         bind_arm_locals(e, enum_name, arms[0].pat)
         infer_value_te(e, arms[0].body)
@@ -5183,6 +5192,46 @@ let find_enum_from_arms(e: *Emitter, arms: Vec<ast.MatchArm>): string = {
     ""
 }
 
+// Variant that prefers the scrutinee's enum when the arm pattern's
+// variant name is shared across multiple enums. variant_of stores
+// only the first-loaded registration, which picks the wrong enum
+// under variant-name collisions.
+let find_enum_from_arms_with_scrut(e: *Emitter, arms: Vec<ast.MatchArm>, scrut_te: ast.TypeExpr): string = {
+    let scrut_enum = enum_name_of_te(e, scrut_te)
+    if strings.eq_raw(scrut_enum, "") { return find_enum_from_arms(e, arms) }
+    for arm in arms {
+        let v = variant_name_of_pat(arm.pat)
+        if !strings.eq_raw(v, "") {
+            if variant_belongs_to_enum(e, v, scrut_enum) { return scrut_enum }
+        }
+    }
+    find_enum_from_arms(e, arms)
+}
+
+let variant_name_of_pat(p: ast.Pattern): string = {
+    match p {
+    | PatVariant(_, path, _) -> if len(path) > 0 { path[len(path) - 1] } else { "" }
+    | PatBind(_, name)       -> name
+    | _                      -> ""
+    }
+}
+
+// True when `enum_name` declares a variant called `variant`.
+let variant_belongs_to_enum(e: *Emitter, variant: string, enum_name: string): bool = {
+    match map.get(&e.enum_decls, enum_name) {
+    | Some(d) -> {
+        match d {
+        | DEnum(_, _, _, variants) -> {
+            for v in variants { if strings.eq_raw(v.name, variant) { return true } }
+            false
+        }
+        | _ -> false
+        }
+    }
+    | None -> false
+    }
+}
+
 let any_arm_has_guard(arms: Vec<ast.MatchArm>): bool = {
     for a in arms { if a.has_guard { return true } }
     false
@@ -5224,7 +5273,8 @@ let emit_match_as_expr(e: *Emitter, span: ast.Span, scrut: ast.Expr, arms: Vec<a
         emit_match_as_if_chain(e, span, scrut, arms)
         return
     }
-    let bare_enum: string = find_enum_from_arms(e, arms)
+    let scrut_te_for_dispatch = infer_value_te(e, scrut)
+    let bare_enum: string = find_enum_from_arms_with_scrut(e, arms, scrut_te_for_dispatch)
     if strings.eq_raw(bare_enum, "") {
         emit_match_as_if_chain(e, span, scrut, arms)
         return
@@ -5365,7 +5415,8 @@ let emit_pat_bindings(e: *Emitter, p: ast.Pattern, value_expr: string, value_te:
 }
 
 let emit_match_as_if_chain(e: *Emitter, span: ast.Span, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
-    let bare_enum: string = find_enum_from_arms(e, arms)
+    let scrut_te_for_dispatch = infer_value_te(e, scrut)
+    let bare_enum: string = find_enum_from_arms_with_scrut(e, arms, scrut_te_for_dispatch)
     let is_enum_match = !strings.eq_raw(bare_enum, "")
     var enum_name = ""
     if is_enum_match { enum_name = enum_lookup_name(e, scrut, bare_enum) }
