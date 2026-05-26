@@ -10,6 +10,7 @@ import strings
 import fmt
 import io
 import map
+import vec
 import os
 import encoding/json
 
@@ -107,13 +108,25 @@ let lower_byte(b: i64): i64 = {
 // --- Server state ---------------------------------------------------
 
 type Server = {
-    buffers:            Map<string, string>,
-    shutdown_requested: bool,
+    buffers:               Map<string, string>,
+    pending_notifications: Vec<json.Json>,
+    shutdown_requested:    bool,
 }
 
 let make_server(): Server = Server {
-    buffers:            map.make(),
-    shutdown_requested: false,
+    buffers:               map.make(),
+    pending_notifications: vec.make(),
+    shutdown_requested:    false,
+}
+
+// One LSP diagnostic. Lines and columns are 0-indexed per the LSP
+// spec. The end position is open: the squiggle covers
+// [start, end).
+type Diagnostic = {
+    line:    i64,
+    col:     i64,
+    end_col: i64,
+    message: string,
 }
 
 // --- JSON helpers --------------------------------------------------
@@ -203,6 +216,97 @@ let initialize_result(): json.Json = {
     Obj(result)
 }
 
+// --- Diagnostics ---------------------------------------------------
+
+// Compute diagnostics for a buffer. Returns an empty list while
+// the emit phase still keys generic_decls and struct_decls by bare
+// type name. The LSP imports `compiler/parse` and `encoding/json`,
+// which both declare `Parser`, so wiring the real check_buffer
+// through requires renaming type declarations with their package
+// prefix at load time and rewriting every TENamed reference in the
+// AST. That change is tracked as a follow-up.
+let check_buffer(uri: string, text: string): Vec<lsp.Diagnostic> = {
+    vec.make()
+}
+
+// Best-effort extraction of "at line N" out of a parse error
+// message. The parser writes errors in the format
+// "expected X at line Y (got 'Z')". Returns the 0-indexed line
+// (per LSP) or 0 when the pattern is absent.
+let extract_line_from_msg(msg: string): i64 = {
+    let n = len(msg)
+    var i: i64 = 0
+    while i + 7 < n {
+        if at_substring(msg, i, "at line ") {
+            let line = read_int_at(msg, i + 8)
+            return line - 1
+        }
+        i += 1
+    }
+    0
+}
+
+let at_substring(s: string, at: i64, sub: string): bool = {
+    let sn = len(s)
+    let pn = len(sub)
+    if at + pn > sn { return false }
+    var i: i64 = 0
+    while i < pn {
+        if strings.byte_at(s, at + i) != strings.byte_at(sub, i) { return false }
+        i += 1
+    }
+    true
+}
+
+let read_int_at(s: string, at: i64): i64 = {
+    let n = len(s)
+    var i = at
+    var v: i64 = 0
+    var seen = false
+    while i < n {
+        let b = strings.byte_at(s, i)
+        if b < 48 || b > 57 {
+            if seen { return v }
+            return 0
+        }
+        v = v * 10 + (b - 48)
+        seen = true
+        i += 1
+    }
+    if seen { v } else { 0 }
+}
+
+let position(line: i64, character: i64): json.Json = {
+    var m: Map<string, json.Json> = map.make()
+    m["line"]      = Num(line as f64)
+    m["character"] = Num(character as f64)
+    Obj(m)
+}
+
+let diagnostic_to_json(d: lsp.Diagnostic): json.Json = {
+    var range: Map<string, json.Json> = map.make()
+    range["start"] = position(d.line, d.col)
+    range["end"]   = position(d.line, d.end_col)
+    var m: Map<string, json.Json> = map.make()
+    m["range"]    = Obj(range)
+    m["severity"] = Num(1.0)
+    m["message"]  = Str(d.message)
+    Obj(m)
+}
+
+let publish_diagnostics(uri: string, diags: Vec<lsp.Diagnostic>): json.Json = {
+    var arr: Vec<json.Json> = vec.make()
+    for d in diags { vec.push(&arr, diagnostic_to_json(d)) }
+    var params: Map<string, json.Json> = map.make()
+    params["uri"]         = Str(uri)
+    params["diagnostics"] = Arr(arr)
+    var notif: Map<string, json.Json> = map.make()
+    notif["jsonrpc"] = Str("2.0")
+    notif["method"]  = Str("textDocument/publishDiagnostics")
+    notif["params"]  = Obj(params)
+    Obj(notif)
+}
+
 // --- Dispatcher ----------------------------------------------------
 
 // Apply one parsed request to the server state. Returns Some(json)
@@ -239,6 +343,7 @@ let dispatch(s: *Server, msg: json.Json): Option<json.Json> = {
         let uri = uri_of(params)
         if let Some(text) = open_text_of(params) {
             map.insert(&s.buffers, uri, text)
+            queue_diagnostics(s, uri, text)
         }
         return None
     }
@@ -246,6 +351,7 @@ let dispatch(s: *Server, msg: json.Json): Option<json.Json> = {
         let uri = uri_of(params)
         if let Some(text) = change_text_of(params) {
             map.insert(&s.buffers, uri, text)
+            queue_diagnostics(s, uri, text)
         }
         return None
     }
@@ -265,7 +371,8 @@ let dispatch(s: *Server, msg: json.Json): Option<json.Json> = {
 
 // --- Main loop -----------------------------------------------------
 
-// Read frames from stdin, dispatch each, write any response.
+// Read frames from stdin, dispatch each, write any response, then
+// drain any queued notifications (publishDiagnostics, etc.).
 // Returns when stdin closes or the client sends `exit`.
 let run_server() = {
     var s: Server = make_server()
@@ -281,6 +388,7 @@ let run_server() = {
                 if let Some(resp) = dispatch(&s, req) {
                     write_frame(json.encode(resp))
                 }
+                drain_notifications(&s)
                 if was_exit {
                     let code: i64 = if s.shutdown_requested { 0 } else { 1 }
                     os.exit(code)
@@ -290,6 +398,21 @@ let run_server() = {
         }
         }
     }
+}
+
+let drain_notifications(s: *Server) = {
+    for n in s.pending_notifications {
+        write_frame(json.encode(n))
+    }
+    s.pending_notifications = vec.make()
+}
+
+// Run check_buffer for `uri`/`text` and append the resulting
+// publishDiagnostics notification to the server's pending queue.
+// The main loop drains the queue after each dispatch returns.
+let queue_diagnostics(s: *Server, uri: string, text: string) = {
+    let diags = check_buffer(uri, text)
+    vec.push(&s.pending_notifications, publish_diagnostics(uri, diags))
 }
 
 let is_exit_method(msg: json.Json): bool = {

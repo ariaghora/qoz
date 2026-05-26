@@ -246,7 +246,10 @@ type Loaded = {
     // bare name from anywhere. A non-empty value means the type came
     // through an explicit `import` and must be referenced as
     // `<pkg>.<TypeName>` from outside its own package.
-    type_homes: Map<string, string>,
+    // Each short type name maps to the list of packages that
+    // declare it. Two packages may legally share a short name.
+    // See check.qoz::pick_type_home for the disambiguation rules.
+    type_homes: Map<string, Vec<string>>,
     // Per-fn-name (renamed C-style) owning package.
     fn_homes:   Map<string, string>,
     // Each loaded source file's owning package. resolve_named uses
@@ -272,7 +275,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
     var visited: Map<string, bool> = map.make()
     var aggregated_decls: Vec<ast.Decl> = vec.make()
     var sources: Vec<string> = vec.make()
-    var type_homes: Map<string, string> = map.make()
+    var type_homes: Map<string, Vec<string>> = map.make()
     var fn_homes:   Map<string, string> = map.make()
     var file_pkgs:  Map<string, string> = map.make()
     // Per-directory cache of fn/extern names declared anywhere in the
@@ -315,7 +318,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
     Loaded { file: ast.File { path: primary, decls: aggregated_decls }, sources: sources, type_homes: type_homes, fn_homes: fn_homes, file_pkgs: file_pkgs }
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, string>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, qoz_root: string, ctx: main.CompileCtx) = {
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, Vec<string>>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, qoz_root: string, ctx: main.CompileCtx) = {
     let src = fs.read_file(cur.path)
     if len(src) < 0 {
         fmt.println(`could not read {cur.path}`)
@@ -374,9 +377,9 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             // resolution can require qualified access from outside.
             let home_for_type = if cur.bare_types { "" } else { cur.pkg }
             match d {
-            | DStruct(_, name, _, _)    -> map.set(type_homes, name, home_for_type)
-            | DEnum(_, name, _, _)      -> map.set(type_homes, name, home_for_type)
-            | DTypeAlias(_, name, _, _) -> map.set(type_homes, name, home_for_type)
+            | DStruct(_, name, _, _)    -> add_type_home(type_homes, name, home_for_type)
+            | DEnum(_, name, _, _)      -> add_type_home(type_homes, name, home_for_type)
+            | DTypeAlias(_, name, _, _) -> add_type_home(type_homes, name, home_for_type)
             | _ -> { }
             }
             let renamed = rename_with_pkg(d, cur.pkg, local_fns)
@@ -387,6 +390,22 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             }
             vec.push(aggregated_decls, renamed)
         }
+    }
+}
+
+// Append `home` to the homes recorded for `name`, deduping. Used
+// during load to track every package that declares a given short
+// type name.
+let add_type_home(type_homes: *Map<string, Vec<string>>, name: string, home: string) = {
+    var homes: Vec<string> = match map.get(type_homes, name) {
+    | Some(v) -> v
+    | None    -> vec.make()
+    }
+    var seen = false
+    for h in homes { if strings.eq_raw(h, home) { seen = true } }
+    if !seen {
+        vec.push(&homes, home)
+        map.set(type_homes, name, homes)
     }
 }
 

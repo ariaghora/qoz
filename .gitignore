@@ -28,3 +28,5 @@ examples/**/*.qoz.c
 examples/**/*.qoz.bin
 compiler/main.qoz.c
 stage2
+editor_support/**/*.bin
+editor_support/**/*.qoz.c

@@ -33,12 +33,12 @@ type TyContext = {
     // a qualified path (Enum.Variant) is required at the call site
     // unless context pins the enum.
     variant_homes: Map<string, Vec<string>>,
-    // Owning package of every named type. Empty string means the
-    // type lives in the prelude or the user's entry package and is
-    // accessible by bare name. A non-empty home means the type came
-    // through an explicit import and must be reached as
-    // `<pkg>.<TypeName>` from outside its own package.
-    type_homes:    Map<string, string>,
+    // Every owning package of a given short type name. Empty string
+    // in the vec means the prelude. Multiple entries mean two
+    // packages declare the same short name. Lookups disambiguate via
+    // the use-site package, the explicit qualifier, or the home
+    // field of a Ty value.
+    type_homes:    Map<string, Vec<string>>,
     // Owning package of every fn / extern, keyed by the renamed
     // C-style name. validate_signatures reads this when caching the
     // resolved param and return tys. Emit reads it through the same
@@ -97,6 +97,144 @@ let record_error(tc: *check.TyContext, span: ast.Span, msg: string) = {
     vec.push(&tc.errors, check.TypeError { span: span, message: msg })
 }
 
+// Compose the registry key used by `tc.enums`, `tc.structs`, and
+// `tc.aliases`. Two packages may declare the same short type name
+// because each registers under a different key.
+let type_key(home: string, name: string): string = {
+    strings.cat(strings.cat(home, "."), name)
+}
+
+// Pick the matching home for a bare short type name. Returns the
+// use-site package if it declares the name, otherwise the prelude
+// ("") if it does, otherwise the first registered home.
+let pick_type_home(tc: *check.TyContext, name: string, use_site: string): string = {
+    match map.get(&tc.type_homes, name) {
+    | None         -> ""
+    | Some(homes)  -> {
+        var found_use_site = false
+        var found_prelude  = false
+        for h in homes {
+            if strings.eq_raw(h, use_site) { found_use_site = true }
+            if strings.eq_raw(h, "")        { found_prelude = true }
+        }
+        if found_use_site { return use_site }
+        if found_prelude  { return "" }
+        if len(homes) > 0 { return homes[0] }
+        ""
+    }
+    }
+}
+
+// True when at least one home declares this short name as an enum.
+let has_enum_short(tc: *check.TyContext, name: string): bool = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> false
+    | Some(homes) -> {
+        for h in homes {
+            if map.contains(&tc.enums, type_key(h, name)) { return true }
+        }
+        false
+    }
+    }
+}
+
+// Similarly for structs and aliases. The reverse lookups are bare
+// "does any package have this name?" queries, used in spots like
+// is_qualified_variant_field where the home is not yet known.
+let has_struct_short(tc: *check.TyContext, name: string): bool = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> false
+    | Some(homes) -> {
+        for h in homes {
+            if map.contains(&tc.structs, type_key(h, name)) { return true }
+        }
+        false
+    }
+    }
+}
+
+let has_alias_short(tc: *check.TyContext, name: string): bool = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> false
+    | Some(homes) -> {
+        for h in homes {
+            if map.contains(&tc.aliases, type_key(h, name)) { return true }
+        }
+        false
+    }
+    }
+}
+
+// Find an enum / struct / alias declaration by (home, name).
+let find_enum(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+    map.get(&tc.enums, type_key(home, name))
+}
+
+let find_struct(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+    map.get(&tc.structs, type_key(home, name))
+}
+
+let find_alias(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+    map.get(&tc.aliases, type_key(home, name))
+}
+
+// Look up by short name, scanning every home that declares the
+// name and returning the first registered decl. Used by call sites
+// that have not yet been threaded with home context. When the same
+// short name appears in two packages, the first registered one
+// wins, which matches the pre-refactor behaviour for those sites.
+let find_enum_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> None
+    | Some(homes) -> {
+        for h in homes {
+            match map.get(&tc.enums, type_key(h, name)) {
+            | Some(d) -> return Some(d)
+            | None    -> { }
+            }
+        }
+        None
+    }
+    }
+}
+
+let find_struct_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> None
+    | Some(homes) -> {
+        for h in homes {
+            match map.get(&tc.structs, type_key(h, name)) {
+            | Some(d) -> return Some(d)
+            | None    -> { }
+            }
+        }
+        None
+    }
+    }
+}
+
+// Append `home` to the list of homes recorded for `name`, if not
+// already present.
+let record_type_home(tc: *check.TyContext, name: string, home: string) = {
+    var homes: Vec<string> = match map.get(&tc.type_homes, name) {
+    | Some(v) -> v
+    | None    -> vec.make()
+    }
+    var seen = false
+    for h in homes { if strings.eq_raw(h, home) { seen = true } }
+    if !seen {
+        vec.push(&homes, home)
+        map.set(&tc.type_homes, name, homes)
+    }
+}
+
+let home_of_file(tc: *check.TyContext, file: string): string = {
+    match map.get(&tc.file_pkgs, file) {
+    | Some(h) -> h
+    | None    -> ""
+    }
+}
+
 let register_decl(tc: *check.TyContext, d: ast.Decl) = {
     match d {
     | DImport(_, path, alias)         -> {
@@ -109,10 +247,13 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         tc.packages[name] = true
     }
     | DEnum(sp, name, _, variants)     -> {
-        if type_name_collides(tc, name) {
-            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        let home = home_of_file(tc, sp.file)
+        let key = type_key(home, name)
+        if map.contains(&tc.enums, key) || map.contains(&tc.structs, key) || map.contains(&tc.aliases, key) {
+            record_error(tc, sp, `type '{name}' is already declared in package '{home}'; pick a different name`)
         }
-        tc.enums[name] = d
+        tc.enums[key] = d
+        record_type_home(tc, name, home)
         for v in variants {
             if !map.contains(&tc.variant_of, v.name) {
                 tc.variant_of[v.name] = name
@@ -130,16 +271,22 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         }
     }
     | DStruct(sp, name, _, _)          -> {
-        if type_name_collides(tc, name) {
-            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        let home = home_of_file(tc, sp.file)
+        let key = type_key(home, name)
+        if map.contains(&tc.enums, key) || map.contains(&tc.structs, key) || map.contains(&tc.aliases, key) {
+            record_error(tc, sp, `type '{name}' is already declared in package '{home}'; pick a different name`)
         }
-        tc.structs[name] = d
+        tc.structs[key] = d
+        record_type_home(tc, name, home)
     }
     | DTypeAlias(sp, name, _, _)       -> {
-        if type_name_collides(tc, name) {
-            record_error(tc, sp, `type '{name}' is already declared (likely by the prelude); pick a different name`)
+        let home = home_of_file(tc, sp.file)
+        let key = type_key(home, name)
+        if map.contains(&tc.enums, key) || map.contains(&tc.structs, key) || map.contains(&tc.aliases, key) {
+            record_error(tc, sp, `type '{name}' is already declared in package '{home}'; pick a different name`)
         }
-        tc.aliases[name] = d
+        tc.aliases[key] = d
+        record_type_home(tc, name, home)
     }
     | DFn(_, name, _, _, _, _, _)     -> { tc.fns[name] = d }
     | DExternal(_, name, _, _, _)     -> { tc.externs[name] = d }
@@ -153,9 +300,9 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
 }
 
 let type_name_collides(tc: *check.TyContext, name: string): bool = {
-    map.contains(&tc.enums, name) ||
-    map.contains(&tc.structs, name) ||
-    map.contains(&tc.aliases, name)
+    has_enum_short(tc, name) ||
+    has_struct_short(tc, name) ||
+    has_alias_short(tc, name)
 }
 
 let register_file(tc: *check.TyContext, f: ast.File) = {
@@ -308,65 +455,91 @@ let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args:
     if len(path) == 2 {
         let pkg  = path[0]
         let name = path[1]
-        let home = match map.get(&tc.type_homes, name) {
-        | Some(h) -> h
-        | None    -> ""
+        // Qualified access: pick the home that matches the qualifier
+        // when one of the registered homes is exactly `pkg`. An
+        // empty home (prelude or the user's entry package) is
+        // accessible under any qualifier, matching how the entry
+        // file refers to its own types as `main.<Name>`.
+        var resolved_home = pkg
+        var qualifier_ok = false
+        match map.get(&tc.type_homes, name) {
+        | None        -> { qualifier_ok = true }
+        | Some(homes) -> {
+            for h in homes {
+                if strings.eq_raw(h, pkg) {
+                    qualifier_ok = true
+                    resolved_home = pkg
+                }
+            }
+            if !qualifier_ok {
+                for h in homes {
+                    if strings.eq_raw(h, "") {
+                        qualifier_ok = true
+                        resolved_home = ""
+                    }
+                }
+            }
+            if !qualifier_ok {
+                let first = if len(homes) > 0 { homes[0] } else { "" }
+                record_error(tc, span, `type '{name}' lives in package '{first}', not '{pkg}'`)
+                return ty.ty_error_()
+            }
         }
-        if !strings.eq_raw(home, "") && !strings.eq_raw(home, pkg) {
-            record_error(tc, span, `type '{name}' lives in package '{home}', not '{pkg}'`)
-            return ty.ty_error_()
         }
-        return resolve_named_short(tc, span, name, args)
+        return resolve_named_short(tc, span, resolved_home, name, args)
     }
     if len(path) != 1 {
         record_error(tc, span, "type paths must be a single name or 'pkg.Name'")
         return ty.ty_error_()
     }
     let name: string = path[0]
-    // Bare access is permitted when the type lives in the prelude
-    // (home == ""), in the user's entry package, or in the same
-    // package as the use site. Cross-package bare references are
-    // rejected with a suggestion for the qualified form. Synthesised
-    // TypeExprs that flow through `qualified_ty_to_type_expr_at`
-    // carry their qualifier, so the rule fires only on bare names
-    // that the user actually wrote.
-    // Bare access is permitted when the type's home is empty
-    // (prelude / entry) or matches the current package. Synthesised
-    // TypeExprs reconstructed from Ty values carry their home as a
-    // qualifier and take the two-segment branch above, so this
-    // check fires only on bare names the user actually wrote.
-    match map.get(&tc.type_homes, name) {
-    | Some(home) -> {
-        // Pull the use-site package directly from the TypeExpr's
-        // span. The file's pkg was recorded once at load time, so
-        // this answer is correct no matter which synth or generic-
-        // instantiation context the resolve happens to fire from.
-        if !strings.eq_raw(home, "") {
-            // Every parser-emitted TypeExpr carries the file it came
-            // from. Every loaded file is in file_pkgs. A miss here
-            // means a TypeExpr reached resolve_named without going
-            // through the loader (a compiler bug), which is reported
-            // as such so the silent-allow fallback never re-emerges.
-            match map.get(&tc.file_pkgs, span.file) {
-            | Some(use_site_pkg) -> {
-                if !strings.eq_raw(home, use_site_pkg) {
-                    record_error(tc, span, `type '{name}' is from package '{home}'; use '{home}.{name}'`)
-                    return ty.ty_error_()
-                }
-            }
-            | None -> {
-                record_error(tc, span, `internal: no package recorded for file '{span.file}' resolving type '{name}'`)
-                return ty.ty_error_()
-            }
-            }
-        }
+    // Prelude files legitimately have file_pkgs[file] = "", so a
+    // missing entry is distinct from an empty entry. A missing entry
+    // while the name is known means the TypeExpr reached
+    // resolve_named without going through the loader.
+    var use_site_pkg: string = ""
+    var have_pkg = false
+    match map.get(&tc.file_pkgs, span.file) {
+    | Some(p) -> {
+        use_site_pkg = p
+        have_pkg = true
     }
     | None -> { }
     }
-    resolve_named_short(tc, span, name, args)
+    if !have_pkg {
+        match map.get(&tc.type_homes, name) {
+        | Some(_) -> {
+            record_error(tc, span, `internal: no package recorded for file '{span.file}' resolving type '{name}'`)
+            return ty.ty_error_()
+        }
+        | None -> { }
+        }
+    }
+    match map.get(&tc.type_homes, name) {
+    | Some(homes) -> {
+        var found_use_site = false
+        var found_prelude  = false
+        var other_home     = ""
+        for h in homes {
+            if strings.eq_raw(h, use_site_pkg) { found_use_site = true }
+            elif strings.eq_raw(h, "")          { found_prelude  = true }
+            else                                { other_home     = h }
+        }
+        if found_use_site {
+            return resolve_named_short(tc, span, use_site_pkg, name, args)
+        }
+        if found_prelude {
+            return resolve_named_short(tc, span, "", name, args)
+        }
+        record_error(tc, span, `type '{name}' is from package '{other_home}'; use '{other_home}.{name}'`)
+        return ty.ty_error_()
+    }
+    | None -> { }
+    }
+    resolve_named_short(tc, span, "", name, args)
 }
 
-let resolve_named_short(tc: *check.TyContext, span: ast.Span, name: string, args: Vec<ast.TypeExpr>): ty.Ty = {
+let resolve_named_short(tc: *check.TyContext, span: ast.Span, home: string, name: string, args: Vec<ast.TypeExpr>): ty.Ty = {
     if map.contains(&tc.type_params, name) {
         return ty.ty_var_(name)
     }
@@ -390,17 +563,14 @@ let resolve_named_short(tc: *check.TyContext, span: ast.Span, name: string, args
     for a in args {
         vec.push(&resolved_args, resolve_type(tc, a))
     }
-    let home = match map.get(&tc.type_homes, name) {
-    | Some(h) -> h
-    | None    -> ""
-    }
-    if map.contains(&tc.enums, name) {
+    let key = type_key(home, name)
+    if map.contains(&tc.enums, key) {
         return ty.ty_adt_homed(home, name, resolved_args)
     }
-    if map.contains(&tc.structs, name) {
+    if map.contains(&tc.structs, key) {
         return ty.ty_record_homed(home, name, resolved_args)
     }
-    if map.contains(&tc.aliases, name) {
+    if map.contains(&tc.aliases, key) {
         return ty.ty_record_homed(home, name, resolved_args)
     }
     record_error(tc, span, `unknown type '{name}'`)
@@ -764,7 +934,7 @@ let synth_field(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, n
 let is_qualified_variant_field(tc: *check.TyContext, base: ast.Expr, name: string): bool = {
     match base {
     | EIdent(_, base_name) -> {
-        if !map.contains(&tc.enums, base_name) { return false }
+        if !has_enum_short(tc, base_name) { return false }
         match map.get(&tc.variant_of, name) {
         | Some(declared_enum) -> strings.eq_raw(declared_enum, base_name)
         | None                -> false
@@ -777,7 +947,7 @@ let is_qualified_variant_field(tc: *check.TyContext, base: ast.Expr, name: strin
 let field_type_of(tc: *check.TyContext, bt: ty.Ty, name: string): ty.Ty = {
     match bt {
     | TyPtr(inner) -> field_type_of(tc, inner, name)
-    | TyRecord(_, struct_name, tyargs) -> lookup_field(tc, struct_name, tyargs, name)
+    | TyRecord(home, struct_name, tyargs) -> lookup_field(tc, home, struct_name, tyargs, name)
     | TyTuple(elems) -> {
         // Tuple fields are named `_0`, `_1`, ...
         if len(name) >= 2 && strings.byte_at(name, 0) == 95 {
@@ -790,8 +960,8 @@ let field_type_of(tc: *check.TyContext, bt: ty.Ty, name: string): ty.Ty = {
     }
 }
 
-let lookup_field(tc: *check.TyContext, struct_name: string, tyargs: Vec<ty.Ty>, field: string): ty.Ty = {
-    match map.get(&tc.structs, struct_name) {
+let lookup_field(tc: *check.TyContext, home: string, struct_name: string, tyargs: Vec<ty.Ty>, field: string): ty.Ty = {
+    match find_struct(tc, home, struct_name) {
     | Some(d) -> {
         match d {
         | DStruct(_, _, params, fields) -> {
@@ -992,7 +1162,7 @@ let resolve_callee_fn(tc: *check.TyContext, callee: ast.Expr): string = {
             // field is one of its variants. Return the bare variant
             // name so the variant constructor dispatch downstream
             // handles the call.
-            if map.contains(&tc.enums, pkg) {
+            if has_enum_short(tc, pkg) {
                 if map.contains(&tc.variant_of, method) {
                     return method
                 }
@@ -1115,8 +1285,9 @@ let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr
     let bare_resolved = resolve_type(tc, te)
     let struct_name = record_name_of(bare_resolved)
     if strings.eq_raw(struct_name, "") { return bare_resolved }
-    validate_record_fields(tc, sp, struct_name, fields)
-    let tparams = struct_tparams(tc, struct_name)
+    let struct_home = record_home_of(bare_resolved)
+    validate_record_fields(tc, sp, struct_home, struct_name, fields)
+    let tparams = struct_tparams(tc, struct_home, struct_name)
     if len(tparams) == 0 { return bare_resolved }
     if annotation_pins_type_args(te, tparams) { return bare_resolved }
     var bindings: Map<string, ty.Ty> = map.make()
@@ -1126,7 +1297,7 @@ let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr
     while i < len(fields) {
         let f = fields[i]
         if !strings.eq_raw(f.name, "..") {
-            if let Some(dte) = struct_field_typeexpr(tc, struct_name, f.name) {
+            if let Some(dte) = struct_field_typeexpr(tc, struct_home, struct_name, f.name) {
                 let p_ty = resolve_type(tc, dte)
                 let v_ty = synth(tc, env, f.value)
                 let _ = unify(p_ty, v_ty, &bindings)
@@ -1146,10 +1317,7 @@ let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr
         }
         ti += 1
     }
-    let home = match map.get(&tc.type_homes, struct_name) {
-    | Some(h) -> h
-    | None    -> ""
-    }
+    let home = pick_type_home(tc, struct_name, home_of_file(tc, sp.file))
     ty.ty_record_homed(home, struct_name, args)
 }
 
@@ -1157,8 +1325,8 @@ let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr
 // Reports unknown field names. Does not enforce completeness because
 // partial initialisation is part of the language (the user-controlled
 // option to leave fields default-initialised).
-let validate_record_fields(tc: *check.TyContext, sp: ast.Span, struct_name: string, fields: Vec<ast.RecordFieldLit>) = {
-    match map.get(&tc.structs, struct_name) {
+let validate_record_fields(tc: *check.TyContext, sp: ast.Span, home: string, struct_name: string, fields: Vec<ast.RecordFieldLit>) = {
+    match find_struct(tc, home, struct_name) {
     | Some(d) -> {
         match d {
         | DStruct(_, _, _, declared) -> {
@@ -1189,7 +1357,12 @@ let inferred_record_te(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.Ty
     let orig_path = te_path_segments(te)
     let struct_name = if len(orig_path) >= 1 { orig_path[len(orig_path) - 1] } else { "" }
     if strings.eq_raw(struct_name, "") { return te }
-    let tparams = struct_tparams(tc, struct_name)
+    let struct_home = if len(orig_path) == 2 {
+        orig_path[0]
+    } else {
+        pick_type_home(tc, struct_name, home_of_file(tc, sp.file))
+    }
+    let tparams = struct_tparams(tc, struct_home, struct_name)
     if len(tparams) == 0 { return te }
     if annotation_pins_type_args(te, tparams) { return te }
     let synth_ty = synth_record(tc, env, sp, te, fields)
@@ -1243,9 +1416,9 @@ let annotation_pins_type_args(te: ast.TypeExpr, tparams: Vec<string>): bool = {
     }
 }
 
-let struct_tparams(tc: *check.TyContext, name: string): Vec<string> = {
+let struct_tparams(tc: *check.TyContext, home: string, name: string): Vec<string> = {
     let empty: Vec<string> = vec.make()
-    match map.get(&tc.structs, name) {
+    match find_struct(tc, home, name) {
     | Some(d) -> {
         match d {
         | DStruct(_, _, tps, _) -> tps
@@ -1256,8 +1429,8 @@ let struct_tparams(tc: *check.TyContext, name: string): Vec<string> = {
     }
 }
 
-let struct_field_typeexpr(tc: *check.TyContext, name: string, field: string): Option<ast.TypeExpr> = {
-    match map.get(&tc.structs, name) {
+let struct_field_typeexpr(tc: *check.TyContext, home: string, name: string, field: string): Option<ast.TypeExpr> = {
+    match find_struct(tc, home, name) {
     | Some(d) -> {
         match d {
         | DStruct(_, _, _, fields) -> {
@@ -1287,7 +1460,7 @@ let synth_path(tc: *check.TyContext, sp: ast.Span, segs: Vec<string>): ty.Ty = {
     }
     let enum_name = segs[0]
     let variant   = segs[1]
-    if !map.contains(&tc.enums, enum_name) {
+    if !has_enum_short(tc, enum_name) {
         record_error(tc, sp, `unknown enum '{enum_name}'`)
         return ty.ty_error_()
     }
@@ -1356,10 +1529,7 @@ let synth_variant_ctor_with_args_in(tc: *check.TyContext, name: string, enum_nam
         // bare path forms.
     }
     let tparams = enum_tparams(tc, enum_name)
-    let home = match map.get(&tc.type_homes, enum_name) {
-    | Some(h) -> h
-    | None    -> ""
-    }
+    let home = pick_type_home(tc, enum_name, "")
     if len(tparams) == 0 { return ty.ty_adt_homed(home, enum_name, vec.make()) }
     var bindings: Map<string, ty.Ty> = map.make()
     let saved = tc.type_params
@@ -1394,6 +1564,13 @@ let record_name_of(t: ty.Ty): string = {
     }
 }
 
+let record_home_of(t: ty.Ty): string = {
+    match t {
+    | TyRecord(home, _, _) -> home
+    | _                    -> ""
+    }
+}
+
 let variant_enum_name(tc: *check.TyContext, variant: string): string = {
     match map.get(&tc.variant_of, variant) {
     | Some(en) -> en
@@ -1403,7 +1580,7 @@ let variant_enum_name(tc: *check.TyContext, variant: string): string = {
 
 let enum_tparams(tc: *check.TyContext, enum_name: string): Vec<string> = {
     let empty: Vec<string> = vec.make()
-    match map.get(&tc.enums, enum_name) {
+    match find_enum_short(tc, enum_name) {
     | Some(d) -> {
         match d {
         | DEnum(_, _, tps, _) -> tps
@@ -1416,7 +1593,7 @@ let enum_tparams(tc: *check.TyContext, enum_name: string): Vec<string> = {
 
 let variant_positional_types(tc: *check.TyContext, enum_name: string, variant: string): Vec<ast.TypeExpr> = {
     let empty: Vec<ast.TypeExpr> = vec.make()
-    match map.get(&tc.enums, enum_name) {
+    match find_enum_short(tc, enum_name) {
     | Some(d) -> {
         match d {
         | DEnum(_, _, _, variants) -> {
@@ -1815,7 +1992,7 @@ let check_match_exhaustiveness(tc: *check.TyContext, scrut: ast.Expr, scrut_ty: 
     }
     let enum_name = enum_name_of_ty(scrut_ty)
     if strings.eq_raw(enum_name, "") { return }
-    match map.get(&tc.enums, enum_name) {
+    match find_enum_short(tc, enum_name) {
     | Some(decl) -> {
         match decl {
         | DEnum(_, _, _, variants) -> {
@@ -2047,7 +2224,7 @@ let bind_variant_pattern(tc: *check.TyContext, env: *Env, sp: ast.Span, path: Ve
             record_error(tc, sp, `variant '{declared_enum}::{variant}' cannot match scrutinee of enum '{scrut_enum}'`)
             return
         }
-        match map.get(&tc.enums, declared_enum) {
+        match find_enum_short(tc, declared_enum) {
         | Some(d) -> {
             match d {
             | DEnum(_, _, tparams, variants) -> {
@@ -2240,10 +2417,15 @@ let pick_record_type(tc: *check.TyContext, te: ast.TypeExpr, expected: ty.Ty): a
 
 let record_field_hint(tc: *check.TyContext, te: ast.TypeExpr, field_name: string): ty.Ty = {
     match te {
-    | TENamed(_, path, args) -> {
+    | TENamed(sp, path, args) -> {
         if len(path) < 1 { return ty.ty_error_() }
         let name = path[len(path) - 1]
-        match map.get(&tc.structs, name) {
+        let home = if len(path) == 2 {
+            path[0]
+        } else {
+            pick_type_home(tc, name, home_of_file(tc, sp.file))
+        }
+        match find_struct(tc, home, name) {
         | None    -> ty.ty_error_()
         | Some(d) -> {
             match d {
@@ -2294,7 +2476,7 @@ let collect_arg_hints(tc: *check.TyContext, callee: ast.Expr, n: i64, out: *Vec<
     | EIdent(_, vname) -> {
         match map.get(&tc.variant_of, vname) {
         | Some(enum_name) -> {
-            match map.get(&tc.enums, enum_name) {
+            match find_enum_short(tc, enum_name) {
             | Some(d) -> {
                 match d {
                 | DEnum(_, _, tparams, _) -> {
