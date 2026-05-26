@@ -1152,11 +1152,16 @@ let unlink_quiet(path: string) = {
 // the result back to the same path. A full AST-driven reformatter
 // is future work. This addresses the most common style drift
 // (mixed tabs / trailing spaces).
-let cmd_fmt(path: string) = {
-    let src = fs.read_file(path)
-    if len(src) < 0 {
-        fmt.println(`qoz fmt: cannot read '{path}'`)
-        os.exit(1)
+let cmd_fmt(path: string, from_stdin: bool) = {
+    var src = ""
+    if from_stdin {
+        src = io.read_all_stdin()
+    } else {
+        src = fs.read_file(path)
+        if len(src) < 0 {
+            fmt.println(`qoz fmt: cannot read '{path}'`)
+            os.exit(1)
+        }
     }
     let tres = tokenize.run_with_comments(src)
     let pres = parse.run(tres.tokens, path)
@@ -1167,9 +1172,13 @@ let cmd_fmt(path: string) = {
     var p = format.make_printer(tres.comments)
     format.print_file(&p, pres.file)
     let out = format.p_finish(&p)
-    if !fs.write_file(path, out) {
-        fmt.println(`qoz fmt: cannot write '{path}'`)
-        os.exit(1)
+    if from_stdin {
+        fmt.print(out)
+    } else {
+        if !fs.write_file(path, out) {
+            fmt.println(`qoz fmt: cannot write '{path}'`)
+            os.exit(1)
+        }
     }
 }
 
@@ -1358,11 +1367,23 @@ let main() = {
     let first = args[1]
 
     if strings.eq_raw(first, "fmt") {
-        if len(args) < 3 {
-            fmt.println("usage: qoz fmt <path>")
+        // `qoz fmt <path>` rewrites <path> in place.
+        // `qoz fmt --stdin <path>` reads source from stdin, prints
+        // the formatted result to stdout. The path argument is used
+        // only as a label in diagnostics. Editors use the stdin form
+        // for format-on-save without touching the file system twice.
+        var from_stdin = false
+        var target = ""
+        if len(args) >= 4 && strings.eq_raw(args[2], "--stdin") {
+            from_stdin = true
+            target = args[3]
+        } else { if len(args) >= 3 {
+            target = args[2]
+        } else {
+            fmt.println("usage: qoz fmt [--stdin] <path>")
             os.exit(1)
-        }
-        cmd_fmt(args[2])
+        } }
+        cmd_fmt(target, from_stdin)
         os.exit(0)
     } else { if strings.eq_raw(first, "expected-at") {
         // `qoz expected-at [--stdin] <path> <line> <col>` prints
