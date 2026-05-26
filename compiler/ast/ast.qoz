@@ -7,12 +7,18 @@
 import vec
 
 type Span = {
-    file: string,
-    line: i64,
-    col:  i64,
+    file:     string,
+    line:     i64,
+    col:      i64,
+    // Line of the last token covered by this span. Populated for
+    // multi-line constructs by the parser (blocks, matches, ifs,
+    // declarations); single-line constructs leave it equal to
+    // `line`. Span constructors that do not know the end line
+    // (synthetic spans inside emit and check) leave this zero.
+    end_line: i64,
 }
 
-let make_span(file: string, line: i64, col: i64): ast.Span = ast.Span { file: file, line: line, col: col }
+let make_span(file: string, line: i64, col: i64): ast.Span = ast.Span { file: file, line: line, col: col, end_line: line }
 
 type UnaryOp =
     | UOpNeg

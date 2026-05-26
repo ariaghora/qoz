@@ -121,13 +121,14 @@ let print_te(p: *format.Printer, te: ast.TypeExpr) = {
 // --- Comment interleaving ---
 
 // Emit any comments whose start line is strictly before the next
-// node's line. Trailing same-line comments are handled by the
-// node emitter via p_emit_trailing_comments.
+// node's line. The caller is responsible for any blank line that
+// precedes the first comment of the group; this helper only
+// emits the comments themselves so callers stay in charge of the
+// gap rule.
 let p_emit_leading_comments(p: *format.Printer, next_line: i64) = {
     while p.cmt_idx < len(p.comments) {
         let c = p.comments[p.cmt_idx]
         if c.line >= next_line { return }
-        if p.last_line > 0 && c.line > p.last_line + 1 { p_newline(p) }
         p_emit(p, c.text)
         p_newline(p)
         p.last_line = c.line
@@ -302,15 +303,39 @@ let print_file(p: *format.Printer, f: ast.File) = {
     var i: i64 = 0
     for d in f.decls {
         let sp = decl_span(d)
+        let first_line = first_emission_line(p, sp.line)
         if i > 0 {
             p_newline(p)
-            if sp.line > prev_span_line + 1 { p_newline(p) }
+            if first_line > prev_span_line + 1 { p_newline(p) }
         }
+        p_emit_leading_comments(p, sp.line)
         print_decl(p, d)
+        if p_emit_trailing_comment(p, sp.line) { }
         prev_span_line = sp.line
+        p.last_line = sp.line
         i += 1
     }
+    // Comments that follow the last declaration in the source
+    // file still need a home; emit them after the last decl so
+    // the round-trip preserves them.
     if i > 0 { p_newline(p) }
+    while p.cmt_idx < len(p.comments) {
+        let c = p.comments[p.cmt_idx]
+        p_emit(p, c.text)
+        p_newline(p)
+        p.cmt_idx += 1
+    }
+}
+
+// Look-ahead: the line of the first thing we will emit for the
+// next decl. Earlier comments come before the decl, so they push
+// the effective start line back. Used by the blank-line gap rule.
+let first_emission_line(p: *format.Printer, decl_line: i64): i64 = {
+    if p.cmt_idx < len(p.comments) {
+        let c = p.comments[p.cmt_idx]
+        if c.line < decl_line { return c.line }
+    }
+    decl_line
 }
 
 let decl_span(d: ast.Decl): ast.Span = {
@@ -382,11 +407,7 @@ let print_pattern(p: *format.Printer, pat: ast.Pattern) = {
     | PatWild(_)             -> p_emit(p, "_")
     | PatBind(_, n)          -> p_emit(p, n)
     | PatLitInt(_, t)        -> p_emit(p, t)
-    | PatLitString(_, t)     -> {
-        p_emit(p, "\"")
-        p_emit(p, t)
-        p_emit(p, "\"")
-    }
+    | PatLitString(_, t)     -> p_emit(p, t)
     | PatLitBool(_, b)       -> p_emit(p, if b { "true" } else { "false" })
     | PatVariant(_, path, subs) -> {
         var i: i64 = 0
@@ -480,16 +501,8 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
     match e {
     | EInt(_, t)       -> p_emit(p, t)
     | EFloat(_, t)     -> p_emit(p, t)
-    | EString(_, t)    -> {
-        p_emit(p, "\"")
-        p_emit(p, t)
-        p_emit(p, "\"")
-    }
-    | EChar(_, t)      -> {
-        p_emit(p, "'")
-        p_emit(p, t)
-        p_emit(p, "'")
-    }
+    | EString(_, t)    -> p_emit(p, t)
+    | EChar(_, t)      -> p_emit(p, t)
     | EBool(_, b)      -> p_emit(p, if b { "true" } else { "false" })
     | ENil(_)          -> p_emit(p, "nil")
     | EIdent(_, n)     -> p_emit(p, n)
@@ -652,6 +665,7 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
 
 let is_unit_expr(e: ast.Expr): bool = {
     match e {
+    | ENil(_) -> true
     | EBlock(_, stmts, tail) -> {
         if len(stmts) > 0 { return false }
         is_unit_block_tail(tail)
@@ -670,7 +684,12 @@ let is_unit_block_tail(e: ast.Expr): bool = {
     }
 }
 
-let is_unit_block(e: ast.Expr): bool = is_unit_expr(e)
+let is_unit_block(e: ast.Expr): bool = {
+    match e {
+    | ENil(_) -> true
+    | _       -> is_unit_expr(e)
+    }
+}
 
 let print_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
     if try_print_interp_block(p, stmts, tail) { return }
@@ -681,16 +700,74 @@ let print_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
     p_emit(p, "{")
     p_newline(p)
     p_indent_in(p)
+    var prev_end: i64 = 0
     for s in stmts {
+        let sp = stmt_span(s)
+        let first_line = first_emission_line(p, sp.line)
+        if prev_end > 0 && first_line > prev_end + 1 { p_newline(p) }
+        p_emit_leading_comments(p, sp.line)
         print_stmt(p, s)
+        if !p_emit_trailing_comment(p, sp.line) { }
         p_newline(p)
+        prev_end = stmt_end_line(s)
     }
     if !is_unit_expr(tail) {
+        let sp = ast.span_of_expr(tail)
+        let first_line = first_emission_line(p, sp.line)
+        if prev_end > 0 && first_line > prev_end + 1 { p_newline(p) }
+        p_emit_leading_comments(p, sp.line)
         print_expr(p, tail)
+        if !p_emit_trailing_comment(p, sp.line) { }
         p_newline(p)
     }
     p_indent_out(p)
     p_emit(p, "}")
+}
+
+// Last source line occupied by a statement. Falls back to the
+// stmt's start line when the inner expression has no end-line
+// info (i.e. is single-line).
+let stmt_end_line(s: ast.Stmt): i64 = {
+    match s {
+    | SLet(sp, _, _, val)
+    | SVar(sp, _, _, val) -> {
+        let ve = expr_end_line(val)
+        if ve > sp.line { ve } else { sp.line }
+    }
+    | SExpr(_, e) -> {
+        let sp = ast.span_of_expr(e)
+        let ve = expr_end_line(e)
+        if ve > sp.line { ve } else { sp.line }
+    }
+    }
+}
+
+let expr_end_line(e: ast.Expr): i64 = {
+    let sp = ast.span_of_expr(e)
+    if sp.end_line > sp.line { sp.end_line } else { sp.line }
+}
+
+let stmt_span(s: ast.Stmt): ast.Span = {
+    match s {
+    | SLet(sp, _, _, _)
+    | SVar(sp, _, _, _) -> sp
+    | SExpr(_, e)       -> ast.span_of_expr(e)
+    }
+}
+
+// Variant of leading-comment emission used inside a block body.
+// Preserves blank lines between source-adjacent stmts by checking
+// the gap against the previous stmt's line, and ensures comments
+// appear on their own indented lines.
+let p_emit_leading_comments_in_block(p: *format.Printer, next_line: i64, prev_line: i64) = {
+    while p.cmt_idx < len(p.comments) {
+        let c = p.comments[p.cmt_idx]
+        if c.line >= next_line { return }
+        if prev_line > 0 && c.line > prev_line + 1 && p.col == 0 { p_newline(p) }
+        p_emit(p, c.text)
+        p_newline(p)
+        p.cmt_idx += 1
+    }
 }
 
 // Detect the parser's interpolation-block desugar

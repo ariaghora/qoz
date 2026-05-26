@@ -1170,7 +1170,23 @@ let parse_if(p: *Parser): ast.Expr = {
     let cond = parse_expr(p)
     let then_b = parse_block(p)
     let else_b = parse_if_tail(p, span)
-    EIf(span, cond, then_b, else_b)
+    let tail_span = if_chain_end_span(span, then_b, else_b)
+    EIf(tail_span, cond, then_b, else_b)
+}
+
+let if_chain_end_span(start: ast.Span, then_b: ast.Expr, else_b: ast.Expr): ast.Span = {
+    let then_sp = ast.span_of_expr(then_b)
+    let then_end = if then_sp.end_line > then_sp.line { then_sp.end_line } else { then_sp.line }
+    var end_line = then_end
+    match else_b {
+    | ENil(_) -> { }
+    | _ -> {
+        let else_sp = ast.span_of_expr(else_b)
+        let else_end = if else_sp.end_line > else_sp.line { else_sp.end_line } else { else_sp.line }
+        if else_end > end_line { end_line = else_end }
+    }
+    }
+    ast.Span { file: start.file, line: start.line, col: start.col, end_line: end_line }
 }
 
 // Tail of an if-chain: zero or more `elif COND { ... }` arms
@@ -1183,7 +1199,7 @@ let parse_if_tail(p: *Parser, anchor: ast.Span): ast.Expr = {
         let cond = parse_expr(p)
         let then_b = parse_block(p)
         let nested = parse_if_tail(p, span)
-        return EIf(span, cond, then_b, nested)
+        return EIf(if_chain_end_span(span, then_b, nested), cond, then_b, nested)
     }
     if is_kw(peek(p), "else") {
         advance(p)
@@ -1208,7 +1224,7 @@ let parse_while(p: *Parser): ast.Expr = {
     advance(p)
     let cond = parse_expr(p)
     let body = parse_block(p)
-    EWhile(span, cond, body)
+    EWhile(span_extended_to(span, body), cond, body)
 }
 
 let parse_for(p: *Parser): ast.Expr = {
@@ -1228,7 +1244,7 @@ let parse_for(p: *Parser): ast.Expr = {
     }
     let iter = parse_expr(p)
     let body = parse_block(p)
-    EFor(span, binding, binding2, iter, body)
+    EFor(span_extended_to(span, body), binding, binding2, iter, body)
 }
 
 let parse_match(p: *Parser): ast.Expr = {
@@ -1269,8 +1285,19 @@ let parse_match(p: *Parser): ast.Expr = {
         // Skip ASI-injected semicolons between match arms.
         while is_punct(peek(p), ";") { advance(p) }
     }
+    let close = peek(p)
     expect_punct(p, "}")
-    EMatch(span, scrutinee, arms)
+    let full_span = ast.Span { file: span.file, line: span.line, col: span.col, end_line: close.line }
+    EMatch(full_span, scrutinee, arms)
+}
+
+// Build a span starting at `start` and extending to the last line
+// of the inner expression. Used by control-flow constructs whose
+// span should cover the trailing block.
+let span_extended_to(start: ast.Span, inner: ast.Expr): ast.Span = {
+    let isp = ast.span_of_expr(inner)
+    let endl = if isp.end_line > isp.line { isp.end_line } else { isp.line }
+    ast.Span { file: start.file, line: start.line, col: start.col, end_line: endl }
 }
 
 let parse_return(p: *Parser): ast.Expr = {
@@ -1439,12 +1466,14 @@ let parse_block(p: *Parser): ast.Expr = {
             advance(p)
         }
     }
+    let close = peek(p)
     expect_punct(p, "}")
     var final_tail: ast.Expr = ENil(span)
     if have_tail {
         final_tail = tail
     }
-    EBlock(span, stmts, final_tail)
+    let full_span = ast.Span { file: span.file, line: span.line, col: span.col, end_line: close.line }
+    EBlock(full_span, stmts, final_tail)
 }
 
 // --- Declarations ---
