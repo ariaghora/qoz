@@ -31,6 +31,7 @@ type Emitter = {
     variant_of:        Map<string, string>,  // bare variant name -> enum name (unique only)
     is_enum:           Map<string, bool>,    // names that refer to declared ADTs
     enum_decls:        Map<string, ast.Decl>,    // bare enum name -> DEnum (generic or not)
+    c_enum_decls:      Map<string, ast.Decl>,    // bare C-enum name -> DCEnum
     struct_decls:      Map<string, ast.Decl>,    // bare struct name -> DStruct (generic or not)
     generic_decls:     Map<string, ast.Decl>,    // bare name -> declaration with type_params
     generic_fn_decls:  Map<string, ast.Decl>,    // (possibly package-prefixed) name -> generic fn declaration
@@ -83,6 +84,7 @@ let make_emitter(): Emitter = Emitter {
     variant_of:       map.make(),
     is_enum:          map.make(),
     enum_decls:       map.make(),
+    c_enum_decls:     map.make(),
     struct_decls:     map.make(),
     generic_decls:    map.make(),
     generic_fn_decls: map.make(),
@@ -957,13 +959,13 @@ let substitute_type(e: *Emitter, t: ast.TypeExpr, params: Vec<string>, args: Vec
 
 let substitute_expr(e: *Emitter, x: ast.Expr, params: Vec<string>, args: Vec<ast.TypeExpr>): ast.Expr = {
     match x {
-    | EInt(_, _)              -> x
-    | EFloat(_, _)            -> x
-    | EString(_, _)           -> x
-    | EChar(_, _)             -> x
-    | EBool(_, _)             -> x
-    | ENil(_)                 -> x
-    | EIdent(_, _)            -> x
+    | EInt(_, _)
+    | EFloat(_, _)
+    | EString(_, _)
+    | EChar(_, _)
+    | EBool(_, _)
+    | ENil(_)
+    | EIdent(_, _)
     | EPath(_, _)             -> x
     | EUnary(sp, op, rhs)     -> EUnary(sp, op, substitute_expr(e, rhs, params, args))
     | EBinary(sp, op, l, r)   -> EBinary(sp, op, substitute_expr(e, l, params, args), substitute_expr(e, r, params, args))
@@ -1066,6 +1068,9 @@ let register_variants(e: *Emitter, file: ast.File) = {
             for v in variants {
                 e.variant_of[v.name] = name
             }
+        }
+        | DCEnum(_, name, _, _) -> {
+            e.c_enum_decls[name] = d
         }
         | DStruct(_, name, _, _) -> {
             e.struct_decls[name] = d
@@ -1275,6 +1280,17 @@ let c_type_for_named_with_args(e: *Emitter, path: Vec<string>, args: Vec<ast.Typ
     if strings.eq_raw(n, "cstring"){ return "const char *" }
     if strings.eq_raw(n, "void")   { return "void" }
     if strings.eq_raw(n, "unit")   { return "void" }
+    // C-style enum lowers to its underlying primitive. The name
+    // matters only to the type checker.
+    match map.get(&e.c_enum_decls, n) {
+    | Some(d) -> {
+        match d {
+        | DCEnum(_, _, underlying, _) -> return c_type_for(e, underlying)
+        | _ -> { }
+        }
+    }
+    | None -> { }
+    }
     let base = if len(args) > 0 {
         strings.cat("qoz_", mangle_inst(e, n, args))
     } else {
@@ -1301,18 +1317,21 @@ let collect_closure_captures(e: *Emitter, ex: ast.Expr, sc: *CaptureScope, out: 
         }
     }
     | EUnary(_, _, sub)               -> collect_closure_captures(e, sub, sc, out)
-    | EBinary(_, _, l, r)             -> { collect_closure_captures(e, l, sc, out); collect_closure_captures(e, r, sc, out) }
-    | EAssign(_, _, l, r)             -> { collect_closure_captures(e, l, sc, out); collect_closure_captures(e, r, sc, out) }
+    | EBinary(_, _, l, r)
+    | EAssign(_, _, l, r) -> {
+        collect_closure_captures(e, l, sc, out)
+        collect_closure_captures(e, r, sc, out)
+    }
     | ECall(_, callee, _, args)       -> { collect_closure_captures(e, callee, sc, out); for a in args { collect_closure_captures(e, a, sc, out) } }
     | EField(_, base, _)              -> collect_closure_captures(e, base, sc, out)
     | EIndex(_, base, idx)            -> { collect_closure_captures(e, base, sc, out); collect_closure_captures(e, idx, sc, out) }
-    | ECast(_, v, _)                  -> collect_closure_captures(e, v, sc, out)
-    | ETry(_, v)                      -> collect_closure_captures(e, v, sc, out)
-    | EReturn(_, v)                   -> collect_closure_captures(e, v, sc, out)
+    | ECast(_, v, _)
+    | ETry(_, v)
+    | EReturn(_, v)
     | EDefer(_, v)                    -> collect_closure_captures(e, v, sc, out)
-    | ETuple(_, elems)                -> { for el in elems { collect_closure_captures(e, el, sc, out) } }
-    | ERecord(_, _, fields)           -> { for fl in fields { collect_closure_captures(e, fl.value, sc, out) } }
+    | ETuple(_, elems)
     | EArrayLit(_, elems)             -> { for el in elems { collect_closure_captures(e, el, sc, out) } }
+    | ERecord(_, _, fields)           -> { for fl in fields { collect_closure_captures(e, fl.value, sc, out) } }
     | EClosure(_, _, _, _) -> { }
     | EBlock(_, stmts, tail) -> {
         for st in stmts {
@@ -2081,7 +2100,21 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         }
         prefer_typed_record(e, t, cached)
     }
-    | EField(sp, base, name) -> field_typeexpr_for(e, infer_base_typeexpr(e, base), name, sp)
+    | EField(sp, base, name) -> {
+        // `EnumName.Variant` for a C-style enum lifts to the enum's
+        // own TypeExpr, not a field access on a value. Detect this
+        // before infer_base_typeexpr tries to look up the enum name
+        // as a local and dies.
+        match base {
+        | EIdent(_, enum_name) -> {
+            if map.contains(&e.c_enum_decls, enum_name) {
+                return single_named_te(sp, enum_name)
+            }
+        }
+        | _ -> { }
+        }
+        field_typeexpr_for(e, infer_base_typeexpr(e, base), name, sp)
+    }
     | EIndex(sp, base, _) -> {
         let bte = infer_base_typeexpr(e, base)
         match bte {
@@ -2820,6 +2853,33 @@ let emit_field(e: *Emitter, base: ast.Expr, name: string) = {
             }
             | None -> { }
             }
+        }
+    }
+    | _ -> { }
+    }
+    // `EnumName.Variant` for a C-style enum: emit the variant's
+    // integer literal cast to the underlying type so the value
+    // carries the right C type at call sites.
+    match base {
+    | EIdent(_, enum_name) -> {
+        match map.get(&e.c_enum_decls, enum_name) {
+        | Some(d) -> {
+            match d {
+            | DCEnum(_, _, underlying, variants) -> {
+                var i: i64 = 0
+                for v in variants {
+                    if strings.eq_raw(v, name) {
+                        let ct = c_type_for(e, underlying)
+                        push(e, `(({ct}){int_to_string(i)})`)
+                        return
+                    }
+                    i += 1
+                }
+            }
+            | _ -> { }
+            }
+        }
+        | None -> { }
         }
     }
     | _ -> { }

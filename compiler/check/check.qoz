@@ -18,6 +18,10 @@ type TyContext = {
     enums:        Map<string, ast.Decl>,
     structs:      Map<string, ast.Decl>,
     aliases:      Map<string, ast.Decl>,
+    // C-style integer enums keyed by composite `<home>.<name>`.
+    // Distinct from the tagged-ADT enum map so the two never
+    // collide at lookup time.
+    c_enums:      Map<string, ast.Decl>,
     fns:          Map<string, ast.Decl>,
     externs:      Map<string, ast.Decl>,
     // Top-level constants keyed by the renamed C-style name
@@ -71,6 +75,7 @@ let make_ctx(): check.TyContext = TyContext {
     enums:       map.make(),
     structs:     map.make(),
     aliases:     map.make(),
+    c_enums:     map.make(),
     fns:         map.make(),
     externs:     map.make(),
     consts:      map.make(),
@@ -288,13 +293,24 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
         tc.aliases[key] = d
         record_type_home(tc, name, home)
     }
+    | DCEnum(sp, name, _, _)           -> {
+        let home = home_of_file(tc, sp.file)
+        let key = type_key(home, name)
+        if map.contains(&tc.enums, key) || map.contains(&tc.structs, key) || map.contains(&tc.aliases, key) || map.contains(&tc.c_enums, key) {
+            record_error(tc, sp, `type '{name}' is already declared in package '{home}'; pick a different name`)
+        }
+        tc.c_enums[key] = d
+        record_type_home(tc, name, home)
+    }
     | DFn(_, name, _, _, _, _, _)     -> { tc.fns[name] = d }
     | DExternal(_, name, _, _, _)     -> { tc.externs[name] = d }
     | DConst(_, name, _, _)           -> { tc.consts[name] = d }
-    | DLink(_, _, _)                  -> { }
-    // The loader expands every #if before the check phase runs, so a
-    // DCompileIf here would be a compiler bug. Skip silently rather
-    // than panic to avoid masking other diagnostics in the same pass.
+    // DLink carries linker metadata, not symbols, so the type
+    // context records nothing. DCompileIf is expanded by the
+    // loader before check runs; a DCompileIf reaching this pass
+    // would be a compiler bug, but skipping silently avoids
+    // masking other diagnostics in the same file.
+    | DLink(_, _, _)
     | DCompileIf(_, _, _)             -> { }
     }
 }
@@ -572,6 +588,19 @@ let resolve_named_short(tc: *check.TyContext, span: ast.Span, home: string, name
     }
     if map.contains(&tc.aliases, key) {
         return ty.ty_record_homed(home, name, resolved_args)
+    }
+    if map.contains(&tc.c_enums, key) {
+        match map.get(&tc.c_enums, key) {
+        | Some(d) -> {
+            match d {
+            | DCEnum(_, _, underlying, _) -> {
+                return ty.ty_cenum_(home, name, resolve_type(tc, underlying))
+            }
+            | _ -> { }
+            }
+        }
+        | None -> { }
+        }
     }
     record_error(tc, span, `unknown type '{name}'`)
     ty.ty_error_()
@@ -876,9 +905,76 @@ let synth_unary(tc: *check.TyContext, env: *Env, sp: ast.Span, op: ast.UnaryOp, 
     }
 }
 
+// Find the home of a C-style enum with the given short name.
+// Returns Some(home) when registered (home may be the empty
+// string for entry/prelude declarations), None when no such
+// enum exists. The Option wrapper distinguishes "registered at
+// prelude" from "not found".
+let c_enum_home_short(tc: *check.TyContext, name: string): Option<string> = {
+    match map.get(&tc.type_homes, name) {
+    | None        -> None
+    | Some(homes) -> {
+        for h in homes {
+            if map.contains(&tc.c_enums, type_key(h, name)) { return Some(h) }
+        }
+        None
+    }
+    }
+}
+
+let find_c_enum_decl_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+    if let Some(h) = c_enum_home_short(tc, name) {
+        return map.get(&tc.c_enums, type_key(h, name))
+    }
+    None
+}
+
+// True when `variant` is one of the C-enum's declared variants.
+let c_enum_has_variant(d: ast.Decl, variant: string): bool = {
+    match d {
+    | DCEnum(_, _, _, variants) -> {
+        for v in variants { if strings.eq_raw(v, variant) { return true } }
+        false
+    }
+    | _ -> false
+    }
+}
+
+// When `base.name` reads a C-enum variant, return the enum type.
+// `Some(t)` indicates the field resolved; `None` lets the caller
+// fall through to ordinary struct/record field resolution.
+let c_enum_variant_ref(tc: *check.TyContext, base: ast.Expr, name: string): Option<ty.Ty> = {
+    let base_name = match base {
+    | EIdent(_, n) -> n
+    | _            -> ""
+    }
+    if strings.eq_raw(base_name, "") { return None }
+    if let Some(home) = c_enum_home_short(tc, base_name) {
+        if let Some(d) = find_c_enum_decl_short(tc, base_name) {
+            if c_enum_has_variant(d, name) {
+                match d {
+                | DCEnum(_, _, underlying, _) -> return Some(ty.ty_cenum_(home, base_name, resolve_type(tc, underlying)))
+                // DCEnum is the only kind stored in tc.c_enums.
+                // Other arms cannot occur; falling through to the
+                // None return makes the dead path explicit.
+                | _                           -> { }
+                }
+            }
+        }
+    }
+    None
+}
+
 let synth_field(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, name: string): ty.Ty = {
     if is_qualified_variant_field(tc, base, name) {
         return synth_variant_ctor(tc, name)
+    }
+    // `EnumName.Variant` for a C-style enum: yield the enum type.
+    // The runtime value is the variant's integer; the type-checker
+    // keeps the named identity so distinct enums do not unify.
+    match c_enum_variant_ref(tc, base, name) {
+    | Some(t) -> return t
+    | None    -> { }
     }
     // Package-qualified read: `pkg.NAME` where `pkg` is a known
     // package and `<pkg>_<name>` names a top-level const. Resolve
@@ -2670,6 +2766,7 @@ let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
         for a in args { vec.push(&te_args, ty_to_type_expr_at(a, sp)) }
         TENamed(sp, path, te_args)
     }
+    | TyCEnum(_, n, _) -> single_te(sp, n)
     | TyFn(_, _)  -> single_te(sp, "i64")
     | TyTuple(elems) -> {
         var es: Vec<ast.TypeExpr> = vec.make()
@@ -3025,17 +3122,22 @@ let check_fn_bodies(tc: *check.TyContext, f: ast.File) = {
             }
             clear_type_params(tc)
         }
-        | DImport(_, _, _) -> { }
-        | DStruct(_, _, _, _) -> { }
-        | DEnum(_, _, _, _) -> { }
-        | DTypeAlias(_, _, _, _) -> { }
         | DConst(_, _, _, val) -> {
             var env = env_make()
             let _ = synth(tc, &env, val)
         }
-        | DExternal(_, _, _, _, _) -> { }
-        | DLink(_, _, _) -> { }
-        | DCompileIf(_, _, _) -> { }
+        // The remaining decl kinds carry no function body. Imports
+        // and links are pure metadata, struct/enum/c-enum/alias and
+        // externals declare types or signatures already validated
+        // upstream, and DCompileIf was lowered before check ran.
+        | DImport(_, _, _)
+        | DStruct(_, _, _, _)
+        | DEnum(_, _, _, _)
+        | DCEnum(_, _, _, _)
+        | DTypeAlias(_, _, _, _)
+        | DExternal(_, _, _, _, _)
+        | DLink(_, _, _)
+        | DCompileIf(_, _, _)          -> { }
         }
     }
 }
@@ -3098,12 +3200,20 @@ let validate_signatures(tc: *check.TyContext, f: ast.File) = {
             let _ = resolve_type(tc, target)
             clear_type_params(tc)
         }
+        | DCEnum(sp, _, underlying, _) -> {
+            let ut = resolve_type(tc, underlying)
+            if !ty.ty_is_int(ut) {
+                record_error(tc, sp, "C-style enum underlying type must be an integer primitive")
+            }
+        }
         | DConst(_, _, ty, _) -> {
             let _ = resolve_type(tc, ty)
         }
-        | DImport(_, _, _) -> { }
-        | DLink(_, _, _) -> { }
-        | DCompileIf(_, _, _) -> { }
+        // Imports and links contribute no type signature. DCompileIf
+        // was expanded during load and never reaches this pass.
+        | DImport(_, _, _)
+        | DLink(_, _, _)
+        | DCompileIf(_, _, _)          -> { }
         }
     }
 }

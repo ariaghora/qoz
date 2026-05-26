@@ -41,6 +41,7 @@ let decl_kind_name(d: ast.Decl): string = {
     | DFn(_, _, _, _, _, _, _)         -> "fn"
     | DStruct(_, _, _, _)              -> "struct"
     | DEnum(_, _, _, _)                -> "enum"
+    | DCEnum(_, _, _, _)               -> "c_enum"
     | DTypeAlias(_, _, _, _)          -> "type_alias"
     | DConst(_, _, _, _)               -> "const"
     | DExternal(_, _, _, _, _)         -> "external"
@@ -51,15 +52,16 @@ let decl_kind_name(d: ast.Decl): string = {
 
 let decl_name(d: ast.Decl): string = {
     match d {
-    | DImport(_, _, _)                  -> "<import>"
-    | DFn(_, n, _, _, _, _, _)          -> n
-    | DStruct(_, n, _, _)               -> n
-    | DEnum(_, n, _, _)                 -> n
-    | DTypeAlias(_, n, _, _)           -> n
-    | DConst(_, n, _, _)                -> n
-    | DExternal(_, n, _, _, _)          -> n
-    | DLink(_, _, n)                    -> n
-    | DCompileIf(_, _, _)               -> "<compile_if>"
+    | DImport(_, _, _)                 -> "<import>"
+    | DCompileIf(_, _, _)              -> "<compile_if>"
+    | DFn(_, n, _, _, _, _, _)
+    | DStruct(_, n, _, _)
+    | DEnum(_, n, _, _)
+    | DCEnum(_, n, _, _)
+    | DTypeAlias(_, n, _, _)
+    | DConst(_, n, _, _)
+    | DExternal(_, n, _, _, _)
+    | DLink(_, _, n)                   -> n
     }
 }
 
@@ -177,11 +179,11 @@ let rename_with_pkg(d: ast.Decl, pkg: string, local_fns: Map<string, bool>): ast
 // Rewrite intra-package call sites in a fn body to the prefixed C name.
 let rewrite_ident_refs(e: ast.Expr, pkg: string, local_fns: Map<string, bool>): ast.Expr = {
     match e {
-    | EInt(_, _)              -> e
-    | EFloat(_, _)            -> e
-    | EString(_, _)           -> e
-    | EChar(_, _)             -> e
-    | EBool(_, _)             -> e
+    | EInt(_, _)
+    | EFloat(_, _)
+    | EString(_, _)
+    | EChar(_, _)
+    | EBool(_, _)
     | ENil(_)                 -> e
     | EIdent(sp, name)        -> {
         if map.contains(&local_fns, name) {
@@ -436,6 +438,7 @@ let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>,
             match d {
             | DStruct(_, name, _, _)    -> add_type_home(type_homes, name, home_for_type)
             | DEnum(_, name, _, _)      -> add_type_home(type_homes, name, home_for_type)
+            | DCEnum(_, name, _, _)     -> add_type_home(type_homes, name, home_for_type)
             | DTypeAlias(_, name, _, _) -> add_type_home(type_homes, name, home_for_type)
             | _ -> { }
             }
@@ -495,14 +498,15 @@ let make_qualify_ctx(decls: Vec<ast.Decl>, file_pkgs: Map<string, string>): main
 // carries a span as its first payload.
 let decl_span(d: ast.Decl): ast.Span = {
     match d {
-    | DImport(sp, _, _)          -> sp
-    | DFn(sp, _, _, _, _, _, _)  -> sp
-    | DStruct(sp, _, _, _)       -> sp
-    | DEnum(sp, _, _, _)         -> sp
-    | DTypeAlias(sp, _, _, _)    -> sp
-    | DConst(sp, _, _, _)        -> sp
-    | DExternal(sp, _, _, _, _)  -> sp
-    | DLink(sp, _, _)            -> sp
+    | DImport(sp, _, _)
+    | DFn(sp, _, _, _, _, _, _)
+    | DStruct(sp, _, _, _)
+    | DEnum(sp, _, _, _)
+    | DCEnum(sp, _, _, _)
+    | DTypeAlias(sp, _, _, _)
+    | DConst(sp, _, _, _)
+    | DExternal(sp, _, _, _, _)
+    | DLink(sp, _, _)
     | DCompileIf(sp, _, _)       -> sp
     }
 }
@@ -511,10 +515,11 @@ let decl_span(d: ast.Decl): ast.Span = {
 // empty string for anything else.
 let type_decl_name(d: ast.Decl): string = {
     match d {
-    | DStruct(_, n, _, _)     -> n
-    | DEnum(_, n, _, _)       -> n
+    | DStruct(_, n, _, _)
+    | DEnum(_, n, _, _)
+    | DCEnum(_, n, _, _)
     | DTypeAlias(_, n, _, _)  -> n
-    | _ -> ""
+    | _                       -> ""
     }
 }
 
@@ -567,6 +572,10 @@ let qualify_decl(d: ast.Decl, pkg: string, ctx: *main.QualifyCtx): ast.Decl = {
         let new_name = if !strings.eq_raw(pkg, "") { qualified_type_name(pkg, n) } else { n }
         DTypeAlias(sp, new_name, tps, qualify_te(target, pkg, ctx))
     }
+    | DCEnum(sp, n, underlying, variants) -> {
+        let new_name = if !strings.eq_raw(pkg, "") { qualified_type_name(pkg, n) } else { n }
+        DCEnum(sp, new_name, qualify_te(underlying, pkg, ctx), variants)
+    }
     | DFn(sp, n, tps, fp, rt, body, attr) -> {
         var nfp: Vec<ast.FnParam> = vec.make()
         for p in fp { vec.push(&nfp, ast.FnParam { name: p.name, ty: qualify_te(p.ty, pkg, ctx) }) }
@@ -578,6 +587,10 @@ let qualify_decl(d: ast.Decl, pkg: string, ctx: *main.QualifyCtx): ast.Decl = {
         DExternal(sp, n, sym, nfp, qualify_te(rt, pkg, ctx))
     }
     | DConst(sp, n, t, v) -> DConst(sp, n, qualify_te(t, pkg, ctx), qualify_expr(v, pkg, ctx))
+    // DImport, DLink, and DCompileIf carry no TypeExprs to rewrite.
+    // They pass through verbatim. Adding new decl kinds here is a
+    // load-bearing decision; if they introduce types, extend the
+    // explicit arms above instead of routing through the wildcard.
     | _ -> d
     }
 }

@@ -1524,6 +1524,26 @@ let parse_top_type(p: *Parser): ast.Decl = {
     advance(p)
     let name = expect_ident(p)
     let type_params = parse_type_params(p)
+    // `type Name: <prim> = A | B | C` is a C-style integer enum.
+    // The colon-and-underlying-type discriminator must come before
+    // the type parameters consume the angle brackets; tparams on a
+    // C-enum are not supported.
+    if is_punct(peek(p), ":") {
+        if len(type_params) > 0 {
+            record_error(p, "C-style enum cannot have type parameters")
+        }
+        advance(p)
+        let underlying = parse_type(p)
+        expect_punct(p, "=")
+        var variants: Vec<string> = vec.make()
+        if is_punct(peek(p), "|") { advance(p) }
+        vec.push(&variants, expect_ident(p))
+        while is_punct(peek(p), "|") {
+            advance(p)
+            vec.push(&variants, expect_ident(p))
+        }
+        return DCEnum(span, name, underlying, variants)
+    }
     expect_punct(p, "=")
     if is_punct(peek(p), "{") {
         let fields = parse_struct_fields(p)
@@ -1708,15 +1728,16 @@ let parse_top_let_with_op(p: *Parser, operator: string): ast.Decl = {
         return d
     }
     match d {
-    | DImport(_, _, _) -> d
-    | DStruct(_, _, _, _) -> d
-    | DEnum(_, _, _, _) -> d
-    | DTypeAlias(_, _, _, _) -> d
-    | DConst(_, _, _, _) -> d
-    | DExternal(_, _, _, _, _) -> d
-    | DLink(_, _, _) -> d
-    | DCompileIf(_, _, _) -> d
     | DFn(s, n, tps, ps, ret, body, _) -> DFn(s, n, tps, ps, ret, body, operator)
+    | DImport(_, _, _)
+    | DStruct(_, _, _, _)
+    | DEnum(_, _, _, _)
+    | DCEnum(_, _, _, _)
+    | DTypeAlias(_, _, _, _)
+    | DConst(_, _, _, _)
+    | DExternal(_, _, _, _, _)
+    | DLink(_, _, _)
+    | DCompileIf(_, _, _)              -> d
     }
 }
 

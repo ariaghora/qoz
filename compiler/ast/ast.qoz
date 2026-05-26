@@ -163,6 +163,13 @@ type Decl =
     | DFn(ast.Span, string, Vec<string>, Vec<ast.FnParam>, ast.TypeExpr, ast.Expr, string)
     | DStruct(ast.Span, string, Vec<string>, Vec<ast.StructField>)
     | DEnum(ast.Span, string, Vec<string>, Vec<ast.VariantDecl>)
+    // C-style integer enum: `type Name: <prim> = A | B | C`. Each
+    // variant is a named integer constant of the underlying type.
+    // Payload-less by design. At runtime the value is the
+    // underlying primitive; the typed distinction exists only at
+    // compile time so call sites cannot mix enum kinds or feed
+    // raw integers in.
+    | DCEnum(ast.Span, string, ast.TypeExpr, Vec<string>)
     | DTypeAlias(ast.Span, string, Vec<string>, ast.TypeExpr)
     | DConst(ast.Span, string, ast.TypeExpr, ast.Expr)
     | DExternal(ast.Span, string, string, Vec<ast.FnParam>, ast.TypeExpr)

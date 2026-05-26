@@ -33,6 +33,11 @@ type Ty =
     // cross-package access rule do not need an ambient current_pkg.
     | TyAdt(string, string, Vec<ty.Ty>)
     | TyRecord(string, string, Vec<ty.Ty>)
+    // C-style integer enum. `(home, name, underlying)`. The
+    // underlying TyInt determines the C representation; the
+    // type-checker keeps the named identity so distinct enums
+    // built on the same width are not interchangeable.
+    | TyCEnum(string, string, ty.Ty)
     | TyFn(Vec<ty.Ty>, ty.Ty)
     | TyTuple(Vec<ty.Ty>)
     | TyVar(i64, string)
@@ -59,6 +64,7 @@ let ty_adt_(name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt("", name, args)
 let ty_record_(name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord("", name, args)
 let ty_adt_homed(home: string, name: string, args: Vec<ty.Ty>): ty.Ty = TyAdt(home, name, args)
 let ty_record_homed(home: string, name: string, args: Vec<ty.Ty>): ty.Ty = TyRecord(home, name, args)
+let ty_cenum_(home: string, name: string, underlying: ty.Ty): ty.Ty = TyCEnum(home, name, underlying)
 let ty_fn_(params: Vec<ty.Ty>, ret: ty.Ty): ty.Ty = TyFn(params, ret)
 let ty_tuple_(elems: Vec<ty.Ty>): ty.Ty = TyTuple(elems)
 
@@ -135,6 +141,12 @@ let ty_eq(a: ty.Ty, b: ty.Ty): bool = {
         | _                -> false
         }
     }
+    | TyCEnum(_, an, _) -> {
+        match b {
+        | TyCEnum(_, bn, _) -> strings.eq_raw(an, bn)
+        | _                 -> false
+        }
+    }
     | TyFn(ap, ar) -> {
         match b {
         | TyFn(bp, br) -> ty_args_eq(ap, bp) && ty_eq(ar, br)
@@ -174,6 +186,7 @@ let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
     | TyAdt(home, name, args) -> named_with_args_homed(sp, home, name, args)
     | TyRecord(home, name, args) -> named_with_args_homed(sp, home, name, args)
+    | TyCEnum(home, name, _) -> named_with_args_homed(sp, home, name, vec.make())
     | TyFn(fparams, ret) -> {
         var pte: Vec<ast.TypeExpr> = vec.make()
         for p in fparams { vec.push(&pte, ty_to_type_expr_at(p, sp)) }
@@ -271,6 +284,7 @@ let ty_show(t: ty.Ty): string = {
         }
         strings.cat(out, ">")
     }
+    | TyCEnum(_, n, _) -> n
     | TyFn(params, ret) -> {
         var out = "fn("
         var i: i64 = 0
