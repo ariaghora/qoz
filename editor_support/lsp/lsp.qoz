@@ -1,18 +1,17 @@
-// compiler/lsp/frame: JSON-RPC frame reader and writer.
+// editor_support/lsp: Qoz language server.
 //
-// LSP uses Content-Length-framed JSON over stdio:
-//
-//     Content-Length: 42\r\n
-//     \r\n
-//     <42 bytes of JSON>
-//
-// The pure parser (parse_content_length) is separated from the
-// stdin-driven reader so unit tests can exercise the parsing logic
-// without touching real I/O.
+// JSON-RPC over stdio. The frame layer reads Content-Length blocks
+// from stdin and writes them back to stdout. The dispatcher routes
+// each parsed message to a handler. The buffer store keeps the
+// latest text per open URI so the next iteration can run the
+// existing check pipeline against it.
 
 import strings
 import fmt
 import io
+import map
+import os
+import encoding/json
 
 // Read one complete frame from stdin. Returns None at EOF or when
 // the header is malformed. Blocking I/O suspends the process, so a
@@ -103,4 +102,199 @@ let has_prefix_ci(s: string, prefix: string): bool = {
 let lower_byte(b: i64): i64 = {
     if b >= 65 && b <= 90 { return b + 32 }
     b
+}
+
+// --- Server state ---------------------------------------------------
+
+type Server = {
+    buffers:            Map<string, string>,
+    shutdown_requested: bool,
+}
+
+let make_server(): Server = Server {
+    buffers:            map.make(),
+    shutdown_requested: false,
+}
+
+// --- JSON helpers --------------------------------------------------
+
+let get_field(j: json.Json, key: string): Option<json.Json> = {
+    match j {
+    | Obj(m) -> map.get(&m, key)
+    | _      -> None
+    }
+}
+
+let json_as_string(j: json.Json): string = {
+    match j { | Str(s) -> s | _ -> "" }
+}
+
+let uri_of(params: json.Json): string = {
+    match get_field(params, "textDocument") {
+    | None    -> ""
+    | Some(td) -> {
+        match get_field(td, "uri") {
+        | None    -> ""
+        | Some(u) -> json_as_string(u)
+        }
+    }
+    }
+}
+
+let open_text_of(params: json.Json): Option<string> = {
+    if let Some(td) = get_field(params, "textDocument") {
+        if let Some(t) = get_field(td, "text") {
+            return Some(json_as_string(t))
+        }
+    }
+    None
+}
+
+let change_text_of(params: json.Json): Option<string> = {
+    if let Some(changes) = get_field(params, "contentChanges") {
+        match changes {
+        | Arr(items) -> {
+            if items.len == 0 { return None }
+            if let Some(t) = get_field(items.data[0], "text") {
+                return Some(json_as_string(t))
+            }
+        }
+        | _ -> { }
+        }
+    }
+    None
+}
+
+// --- Response envelopes --------------------------------------------
+
+let envelope_result(id_field: Option<json.Json>, result: json.Json): json.Json = {
+    var m: Map<string, json.Json> = map.make()
+    m["jsonrpc"] = Str("2.0")
+    if let Some(i) = id_field { m["id"] = i }
+    m["result"] = result
+    Obj(m)
+}
+
+let envelope_error(id_field: Option<json.Json>, code: i64, message: string): json.Json = {
+    var err: Map<string, json.Json> = map.make()
+    err["code"]    = Num(code as f64)
+    err["message"] = Str(message)
+    var m: Map<string, json.Json> = map.make()
+    m["jsonrpc"] = Str("2.0")
+    if let Some(i) = id_field { m["id"] = i }
+    m["error"] = Obj(err)
+    Obj(m)
+}
+
+let initialize_result(): json.Json = {
+    var caps: Map<string, json.Json> = map.make()
+    // textDocumentSync = 1 means full document sync. didChange
+    // payloads carry the entire new buffer each time, which is the
+    // simplest model and matches the per-request reparse below.
+    caps["textDocumentSync"] = Num(1.0)
+
+    var server_info: Map<string, json.Json> = map.make()
+    server_info["name"]    = Str("qoz-language-server")
+    server_info["version"] = Str("0.1.0")
+
+    var result: Map<string, json.Json> = map.make()
+    result["capabilities"] = Obj(caps)
+    result["serverInfo"]   = Obj(server_info)
+    Obj(result)
+}
+
+// --- Dispatcher ----------------------------------------------------
+
+// Apply one parsed request to the server state. Returns Some(json)
+// when a response is owed (the request had an `id`), or None for
+// notifications and for `exit` (which terminates the process from
+// the main loop instead of responding).
+let dispatch(s: *Server, msg: json.Json): Option<json.Json> = {
+    let method = match get_field(msg, "method") {
+    | Some(m) -> json_as_string(m)
+    | None    -> ""
+    }
+    let id = get_field(msg, "id")
+    let params = match get_field(msg, "params") {
+    | Some(p) -> p
+    | None    -> Null
+    }
+
+    if strings.eq_raw(method, "initialize") {
+        return Some(envelope_result(id, initialize_result()))
+    }
+    if strings.eq_raw(method, "initialized") {
+        return None
+    }
+    if strings.eq_raw(method, "shutdown") {
+        s.shutdown_requested = true
+        return Some(envelope_result(id, Null))
+    }
+    if strings.eq_raw(method, "exit") {
+        // The main loop checks shutdown_requested after dispatch
+        // returns to choose the exit code.
+        return None
+    }
+    if strings.eq_raw(method, "textDocument/didOpen") {
+        let uri = uri_of(params)
+        if let Some(text) = open_text_of(params) {
+            map.insert(&s.buffers, uri, text)
+        }
+        return None
+    }
+    if strings.eq_raw(method, "textDocument/didChange") {
+        let uri = uri_of(params)
+        if let Some(text) = change_text_of(params) {
+            map.insert(&s.buffers, uri, text)
+        }
+        return None
+    }
+    if strings.eq_raw(method, "textDocument/didClose") {
+        let uri = uri_of(params)
+        map.delete(&s.buffers, uri)
+        return None
+    }
+
+    // Unknown request: respond with method-not-found. Unknown
+    // notifications are dropped per the LSP spec.
+    match id {
+    | Some(_) -> Some(envelope_error(id, 0 - 32601, "Method not found"))
+    | None    -> None
+    }
+}
+
+// --- Main loop -----------------------------------------------------
+
+// Read frames from stdin, dispatch each, write any response.
+// Returns when stdin closes or the client sends `exit`.
+let run_server() = {
+    var s: Server = make_server()
+    var running = true
+    while running {
+        match read_frame() {
+        | None       -> running = false
+        | Some(body) -> {
+            match json.parse_text(body) {
+            | Err(_)  -> { }
+            | Ok(req) -> {
+                let was_exit = is_exit_method(req)
+                if let Some(resp) = dispatch(&s, req) {
+                    write_frame(json.encode(resp))
+                }
+                if was_exit {
+                    let code: i64 = if s.shutdown_requested { 0 } else { 1 }
+                    os.exit(code)
+                }
+            }
+            }
+        }
+        }
+    }
+}
+
+let is_exit_method(msg: json.Json): bool = {
+    match get_field(msg, "method") {
+    | Some(m) -> strings.eq_raw(json_as_string(m), "exit")
+    | None    -> false
+    }
 }

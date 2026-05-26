@@ -1,0 +1,82 @@
+// expect: 0
+// Drive the LSP dispatcher with hand-built JSON requests and assert
+// the buffer store and response envelopes behave as expected. No
+// stdio is exercised; the test calls dispatch() directly.
+
+import editor_support/lsp
+import encoding/json
+import strings
+import map
+
+let parse(body: string): json.Json = {
+    match json.parse_text(body) {
+    | Ok(j)  -> j
+    | Err(_) -> Null
+    }
+}
+
+let check_initialize(): i64 = {
+    var s: lsp.Server = lsp.make_server()
+    let req = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")
+    match lsp.dispatch(&s, req) {
+    | None       -> 1
+    | Some(resp) -> {
+        match resp {
+        | Obj(_) -> 0
+        | _      -> 2
+        }
+    }
+    }
+}
+
+let check_did_open_change_close(): i64 = {
+    var s: lsp.Server = lsp.make_server()
+    let open_req = parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.qoz\",\"languageId\":\"qoz\",\"version\":1,\"text\":\"let x = 1\"}}}")
+    let _ = lsp.dispatch(&s, open_req)
+    if len(&s.buffers) != 1 { return 10 }
+
+    let change_req = parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.qoz\",\"version\":2},\"contentChanges\":[{\"text\":\"let x = 2\"}]}}")
+    let _ = lsp.dispatch(&s, change_req)
+    match map.get(&s.buffers, "file:///a.qoz") {
+    | None      -> return 11
+    | Some(txt) -> {
+        if !strings.eq_raw(txt, "let x = 2") { return 12 }
+    }
+    }
+
+    let close_req = parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.qoz\"}}}")
+    let _ = lsp.dispatch(&s, close_req)
+    if len(&s.buffers) != 0 { return 13 }
+    0
+}
+
+let check_shutdown(): i64 = {
+    var s: lsp.Server = lsp.make_server()
+    let req = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}")
+    let _ = lsp.dispatch(&s, req)
+    if !s.shutdown_requested { 20 } else { 0 }
+}
+
+let check_method_not_found(): i64 = {
+    var s: lsp.Server = lsp.make_server()
+    let req = parse("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/banana\"}")
+    match lsp.dispatch(&s, req) {
+    | None       -> 30
+    | Some(resp) -> {
+        match resp {
+        | Obj(_) -> 0
+        | _      -> 31
+        }
+    }
+    }
+}
+
+let main(): i64 = {
+    let a = check_initialize()
+    if a != 0 { return a }
+    let b = check_did_open_change_close()
+    if b != 0 { return b }
+    let c = check_shutdown()
+    if c != 0 { return c }
+    check_method_not_found()
+}

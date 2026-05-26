@@ -1,0 +1,8 @@
+// qoz language server binary. Build with:
+//     qoz build editor_support/lsp_server
+
+import editor_support/lsp
+
+let main() = {
+    lsp.run_server()
+}
