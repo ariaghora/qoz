@@ -10,3 +10,10 @@ external let unix(): i64
 
 @link_name("qoz_time_unix_micros")
 external let unix_micros(): i64
+
+// Suspend the calling thread for `ms` milliseconds. Negative or
+// zero values return immediately. Precision is best-effort and
+// depends on the host scheduler; expect millisecond-class accuracy
+// on a quiet system and worse under contention.
+@link_name("qoz_time_sleep_ms")
+external let sleep_ms(ms: i64)

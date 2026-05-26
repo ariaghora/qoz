@@ -1,7 +1,8 @@
 // std/fs: minimal file I/O.
 //
-// Reads and writes whole files at once. A return of `""` length -1 from
-// `read_file` signals an error (the file could not be opened or read).
+// Reads and writes whole files at once. The lenient `read_file`
+// returns length -1 on any failure; `read_file_strict` returns a
+// descriptive error through the prelude Result.
 
 @link_name("qoz_fs_read_file")
 external let read_file(path: string): string
@@ -17,3 +18,19 @@ external let file_exists(path: string): bool
 // exist or cannot be opened. No trailing newline.
 @link_name("qoz_fs_list_qoz_files")
 external let list_qoz_files(dir: string): string
+
+@link_name("qoz_fs_read_strict_raw")
+external let read_file_strict_raw(path: string, data_out: *string, err_out: *string)
+
+// Read a file with descriptive error reporting. On success the file
+// content is returned in `Ok`. On failure the error message names
+// the cause: "file not found", "permission denied", "path is a
+// directory", "path too long", "out of memory", or the platform's
+// strerror text for any other case.
+let read_file_strict(path: string): Result<string, string> = {
+    var data: string = ""
+    var err: string = ""
+    read_file_strict_raw(path, &data, &err)
+    if len(err) > 0 { return Err(err) }
+    Ok(data)
+}

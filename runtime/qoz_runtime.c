@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <errno.h>
 
 static int qoz_argc_val = 0;
 static char **qoz_argv_val = NULL;
@@ -25,6 +26,17 @@ int64_t qoz_time_unix_micros(void) {
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0) return 0;
     return (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec;
+}
+
+void qoz_time_sleep_ms(int64_t ms) {
+    if (ms <= 0) return;
+    struct timeval tv;
+    tv.tv_sec  = (time_t)(ms / 1000);
+    tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+    /* select() with a NULL fd-set is the most portable cross-POSIX
+     * sleep with sub-second precision. nanosleep() exists but its
+     * struct timespec ABI varies across platforms; this avoids that. */
+    select(0, NULL, NULL, NULL, &tv);
 }
 
 int64_t qoz_os_argc(void) { return (int64_t)qoz_argc_val; }
@@ -115,6 +127,76 @@ qoz_string qoz_fs_read_file(qoz_string path) {
     size_t got = fread(data, 1, (size_t)n, f);
     fclose(f);
     return (qoz_string){ data, (int64_t)got, data };
+}
+
+/* read_file_strict reports the cause of failure in a separate
+ * out-parameter so Qoz callers can branch on "not found",
+ * "permission denied", or a generic I/O message. err_out receives
+ * the empty string on success and a descriptive Qoz string
+ * otherwise. The data return value carries the file content on
+ * success and a NULL/-1 sentinel on failure (same shape as
+ * qoz_fs_read_file). */
+void qoz_fs_read_strict_raw(qoz_string path, qoz_string *data_out, qoz_string *err_out) {
+    char buf[4096];
+    *err_out = (qoz_string){ NULL, 0 };
+    *data_out = (qoz_string){ NULL, -1 };
+    if (path.len < 0 || (size_t)path.len >= sizeof(buf)) {
+        const char *m = "path too long";
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        return;
+    }
+    memcpy(buf, path.data, (size_t)path.len);
+    buf[path.len] = 0;
+    FILE *f = fopen(buf, "rb");
+    if (!f) {
+        const char *m;
+        if (errno == ENOENT)       { m = "file not found"; }
+        else if (errno == EACCES)  { m = "permission denied"; }
+        else if (errno == EISDIR)  { m = "path is a directory"; }
+        else                       { m = strerror(errno); }
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        return;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        const char *m = strerror(errno);
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        fclose(f);
+        return;
+    }
+    long n = ftell(f);
+    if (n < 0) {
+        const char *m = strerror(errno);
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        fclose(f);
+        return;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        const char *m = strerror(errno);
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        fclose(f);
+        return;
+    }
+    if (n == 0) {
+        *data_out = (qoz_string){ NULL, 0, NULL };
+        fclose(f);
+        return;
+    }
+    char *blob = (char *)qoz_alloc((int64_t)n);
+    if (blob == NULL) {
+        const char *m = "out of memory";
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        fclose(f);
+        return;
+    }
+    size_t got = fread(blob, 1, (size_t)n, f);
+    if (got != (size_t)n && ferror(f)) {
+        const char *m = strerror(errno);
+        *err_out = (qoz_string){ m, (int64_t)strlen(m), NULL };
+        fclose(f);
+        return;
+    }
+    fclose(f);
+    *data_out = (qoz_string){ blob, (int64_t)got, blob };
 }
 
 bool qoz_fs_file_exists(qoz_string path) {

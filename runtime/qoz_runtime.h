@@ -107,6 +107,16 @@ void qoz_print_line(qoz_string s);
 void qoz_eprint_str(qoz_string s);
 void qoz_eprint_nl(void);
 
+/* Strict file read with structured error reporting. On success
+ * `*data_out` carries the file content and `*err_out` is the empty
+ * string. On failure `*err_out` carries a descriptive message and
+ * `*data_out` carries (NULL, -1). Backs std/fs::read_file_strict. */
+void qoz_fs_read_strict_raw(qoz_string path, qoz_string *data_out, qoz_string *err_out);
+
+/* Sleep the current process for `ms` milliseconds. Backs
+ * std/time::sleep_ms. */
+void qoz_time_sleep_ms(int64_t ms);
+
 /* Growable byte buffer used by std/strings::Strbuf. The struct layout
  * matches the Qoz-side Strbuf record so a Qoz value can be passed in
  * directly. */

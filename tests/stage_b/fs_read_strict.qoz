@@ -1,0 +1,16 @@
+// expect: 0
+// fs.read_file_strict returns Err with a descriptive message when
+// the file does not exist, and Ok with the content when it does.
+
+import fs
+
+let main(): i64 = {
+    match fs.read_file_strict("/this/path/definitely/does/not/exist.qoz") {
+    | Ok(_)  -> return 1
+    | Err(_) -> { }
+    }
+    match fs.read_file_strict("Makefile") {
+    | Ok(content) -> if len(content) > 0 { 0 } else { 2 }
+    | Err(_)      -> 3
+    }
+}

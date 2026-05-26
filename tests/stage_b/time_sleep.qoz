@@ -1,0 +1,16 @@
+// expect: 0
+// time.sleep_ms blocks for at least the requested duration.
+// Records the wall-clock before and after a 50 ms sleep and
+// asserts the elapsed microseconds are within the expected range.
+
+import time
+
+let main(): i64 = {
+    let before = time.unix_micros()
+    time.sleep_ms(50)
+    let after = time.unix_micros()
+    let elapsed = after - before
+    if elapsed < 40000 { return 1 }
+    if elapsed > 1000000 { return 2 }
+    0
+}

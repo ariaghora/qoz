@@ -6,7 +6,6 @@
 
 import strings
 import encoding/json
-import result
 
 let main(): i64 = {
     var s = "\""

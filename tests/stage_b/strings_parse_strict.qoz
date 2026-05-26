@@ -4,7 +4,6 @@
 // silent-zero behaviour for the compiler's internal call sites.
 
 import strings
-import result
 
 let assert_int_err(label: string, s: string): i64 = {
     match strings.parse_int_strict(s) {
