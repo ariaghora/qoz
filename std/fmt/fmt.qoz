@@ -15,9 +15,26 @@ external let print_str_raw(s: string): void
 @link_name("qoz_print_nl")
 external let print_nl_raw(): void
 
+@link_name("qoz_eprint_str")
+external let eprint_str_raw(s: string): void
+
+@link_name("qoz_eprint_nl")
+external let eprint_nl_raw(): void
+
 let println(s: string): void = {
     print_str_raw(s)
     print_nl_raw()
 }
 
 let print(s: string): void = { print_str_raw(s) }
+
+// Same shape as print / println but writes to stderr. Use for
+// diagnostics, log lines, and warnings. The two streams are buffered
+// independently so a `cmd > out.txt` redirect keeps program output
+// in the file and diagnostics on the terminal.
+let eprint(s: string): void = { eprint_str_raw(s) }
+
+let eprintln(s: string): void = {
+    eprint_str_raw(s)
+    eprint_nl_raw()
+}

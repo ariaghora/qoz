@@ -445,6 +445,17 @@ void qoz_print_line(qoz_string s) {
     fflush(stdout);
 }
 
+void qoz_eprint_str(qoz_string s) {
+    if (s.len > 0) {
+        fwrite(s.data, 1, (size_t)s.len, stderr);
+    }
+}
+
+void qoz_eprint_nl(void) {
+    fputc('\n', stderr);
+    fflush(stderr);
+}
+
 #include <unistd.h>
 #include <sys/wait.h>
 #include <errno.h>

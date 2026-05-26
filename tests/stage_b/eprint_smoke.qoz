@@ -1,0 +1,12 @@
+// expect: 0
+// fmt.eprint and fmt.eprintln return without raising. The test
+// itself only asserts the calls compile and run; stdout vs stderr
+// separation is exercised by the runtime smoke test in run.sh.
+
+import fmt
+
+let main(): i64 = {
+    fmt.eprint("to stderr ")
+    fmt.eprintln("with newline")
+    0
+}

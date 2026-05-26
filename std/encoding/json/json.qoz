@@ -35,9 +35,18 @@ type Parser = {
     pos: i64,
     line: i64,
     col:  i64,
+    // Current nesting depth across arrays and objects. Bounded by
+    // MAX_DEPTH to keep a hostile input with deeply nested brackets
+    // from blowing the C stack.
+    depth: i64,
 }
 
-let make_parser(s: string): Parser = Parser { src: s, pos: 0, line: 1, col: 1 }
+let make_parser(s: string): Parser = Parser { src: s, pos: 0, line: 1, col: 1, depth: 0 }
+
+// Cap on parse_value recursion. Real-world JSON rarely exceeds a few
+// dozen levels. The cap balances headroom for legitimate input
+// against bounded stack consumption when parsing untrusted bytes.
+let MAX_DEPTH(): i64 = 256
 
 let at_end(p: *Parser): bool = p.pos >= len(p.src)
 
@@ -83,8 +92,15 @@ let parse_value(p: *Parser): Result<Json, string> = {
     skip_ws(p)
     if at_end(p) { return Err("unexpected end of input") }
     let c = cur(p)
-    if c == 123 { return parse_object(p) }  // '{'
-    if c == 91  { return parse_array(p) }   // '['
+    if c == 123 || c == 91 {
+        if p.depth >= MAX_DEPTH() {
+            return Err(error_at(p, "JSON nesting too deep"))
+        }
+        p.depth += 1
+        let r = if c == 123 { parse_object(p) } else { parse_array(p) }
+        p.depth -= 1
+        return r
+    }
     if c == 34  { return parse_string_value(p) }  // '"'
     if c == 116 { return parse_true(p) }    // 't'
     if c == 102 { return parse_false(p) }   // 'f'
@@ -224,6 +240,14 @@ let parse_string_raw(p: *Parser): Result<string, string> = {
                 i += 1
             }
         } else {
+            // JSON spec: control characters U+0000 through U+001F
+            // must be escaped. A raw control byte inside a string
+            // body is rejected so untrusted input cannot smuggle
+            // through, for example, a newline or NUL that the
+            // application later treats as a delimiter.
+            if c >= 0 && c < 32 {
+                return Err(error_at(p, "raw control character inside string; escape it as \\uXXXX"))
+            }
             if i + 1 > bcap { bcap = grow_to(&buf, bcap, i + 1) }
             buf[i] = c as u8
             i += 1
@@ -353,7 +377,7 @@ let error_at(p: *Parser, msg: string): string = {
 let encode(v: Json): string = {
     var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
-    encode_into(&sb, v)
+    encode_into(&sb, v, 0)
     strings.sb_finish(&sb)
 }
 
@@ -364,7 +388,16 @@ let encode_pretty(v: Json, indent: string): string = {
     strings.sb_finish(&sb)
 }
 
+// `depth` doubles as the indentation depth and the recursion guard
+// for hand-built Json values. Once it exceeds MAX_DEPTH the encoder
+// emits "null" in place of the nested structure rather than risk a
+// stack overflow. Parser-produced values can never reach this cap
+// because the parser refuses to construct them past MAX_DEPTH.
 let encode_pretty_into(sb: *strings.Strbuf, v: Json, indent: string, depth: i64) = {
+    if depth > MAX_DEPTH() {
+        strings.sb_append(sb, "null")
+        return
+    }
     match v {
     | Null    -> strings.sb_append(sb, "null")
     | Bool(b) -> {
@@ -432,7 +465,11 @@ let encode_number(sb: *strings.Strbuf, n: f64) = {
     }
 }
 
-let encode_into(sb: *strings.Strbuf, v: Json) = {
+let encode_into(sb: *strings.Strbuf, v: Json, depth: i64) = {
+    if depth > MAX_DEPTH() {
+        strings.sb_append(sb, "null")
+        return
+    }
     match v {
     | Null    -> strings.sb_append(sb, "null")
     | Bool(b) -> {
@@ -446,7 +483,7 @@ let encode_into(sb: *strings.Strbuf, v: Json) = {
         var i: i64 = 0
         for el in items {
             if i > 0 { strings.sb_append(sb, ",") }
-            encode_into(sb, el)
+            encode_into(sb, el, depth + 1)
             i += 1
         }
         strings.sb_append(sb, "]")
@@ -460,7 +497,7 @@ let encode_into(sb: *strings.Strbuf, v: Json) = {
             encode_string(sb, k)
             strings.sb_append(sb, ":")
             match map.get(&fields, k) {
-            | Some(v) -> encode_into(sb, v)
+            | Some(v) -> encode_into(sb, v, depth + 1)
             | None    -> { }
             }
             i += 1

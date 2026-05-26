@@ -19,6 +19,10 @@ let contains<T>(s: *Set<T>, x: T): bool = {
     map.contains(&s.items, x)
 }
 
+let remove<T>(s: *Set<T>, x: T) = {
+    map.delete(&s.items, x)
+}
+
 let size<T>(s: *Set<T>): i64 = s.items.len
 
 // Return the set's elements in the key-sort order produced by

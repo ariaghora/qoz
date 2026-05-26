@@ -1,0 +1,21 @@
+// expect: 0
+// The 64-bit LCG must exercise the upper bits of its u64 state.
+// The 32-bit multiplier the older version used left the high 32
+// bits stuck at zero for many seed values. Drawing 100 samples
+// from seed 1 and asserting at least one of them has a bit set
+// above position 32 catches the regression.
+
+import random
+
+let main(): i64 = {
+    var r: random.Rng = random.make(1)
+    var seen_high = false
+    var i: i64 = 0
+    while i < 100 {
+        let v = random.next_u64(&r)
+        if (v as i64) < 0 { seen_high = true }
+        if v > 0xFFFFFFFF { seen_high = true }
+        i += 1
+    }
+    if seen_high { 0 } else { 1 }
+}

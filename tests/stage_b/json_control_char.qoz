@@ -1,0 +1,17 @@
+// expect: 0
+// Raw control byte inside a JSON string body is rejected per spec.
+// The test feeds a literal newline (byte 0x0A) inside a quoted
+// string and asserts the parser returns Err.
+
+import strings
+import encoding/json
+import result
+
+let main(): i64 = {
+    let nl = strings.slice("\n", 0, 1)
+    let bad = strings.cat(strings.cat("\"a", nl), "b\"")
+    match json.parse_text(bad) {
+    | Err(_) -> 0
+    | Ok(_)  -> 1
+    }
+}

@@ -1,0 +1,21 @@
+// expect: 0
+// Deeply nested JSON input is rejected with an explicit error
+// rather than blowing the C stack. Constructs a string of 1000
+// opening brackets and asserts the parser returns Err.
+
+import strings
+import encoding/json
+import result
+
+let main(): i64 = {
+    var s = ""
+    var i: i64 = 0
+    while i < 1000 {
+        s = strings.cat(s, "[")
+        i += 1
+    }
+    match json.parse_text(s) {
+    | Err(_) -> 0
+    | Ok(_)  -> 1
+    }
+}

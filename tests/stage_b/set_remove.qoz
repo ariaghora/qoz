@@ -1,0 +1,19 @@
+// expect: 0
+// set.remove takes an element out of the set; subsequent contains
+// queries return false and size reports the lower count.
+
+import set
+
+let main(): i64 = {
+    var s: set.Set<string> = set.make()
+    set.add(&s, "a")
+    set.add(&s, "b")
+    set.add(&s, "c")
+    if set.size(&s) != 3 { return 1 }
+    set.remove(&s, "b")
+    if set.size(&s) != 2 { return 2 }
+    if set.contains(&s, "b") { return 3 }
+    if !set.contains(&s, "a") { return 4 }
+    if !set.contains(&s, "c") { return 5 }
+    0
+}

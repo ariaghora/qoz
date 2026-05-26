@@ -103,6 +103,10 @@ void qoz_print_nl(void);
  * single-argument std/fmt::println. */
 void qoz_print_line(qoz_string s);
 
+/* stderr equivalents. std/fmt::eprint and ::eprintln dispatch here. */
+void qoz_eprint_str(qoz_string s);
+void qoz_eprint_nl(void);
+
 /* Growable byte buffer used by std/strings::Strbuf. The struct layout
  * matches the Qoz-side Strbuf record so a Qoz value can be passed in
  * directly. */
