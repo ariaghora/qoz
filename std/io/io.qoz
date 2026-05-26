@@ -28,13 +28,13 @@ external let string_alias(buf: *void, n: i64): string
 @link_name("qoz_bytes_copy")
 external let bytes_copy(dst: *void, src: *void, n: i64)
 
-// Marker returned by read_line on EOF before any byte was read.
+/// Sentinel returned by `fgetc` and used internally for EOF.
 let EOF: i32 = 0 - 1
 
-// Read one line from stdin, up to and including the trailing
-// newline. Returns None when stdin reaches EOF before any byte was
-// read. The trailing newline is preserved so LSP-style framing
-// callers can distinguish blank-line terminators.
+/// Read one line from stdin, up to and including the trailing
+/// newline. Returns `None` when stdin reaches EOF before any byte
+/// is read. The trailing newline is preserved so framing callers
+/// can distinguish blank-line terminators.
 let read_line(): Option<string> = {
     let fp = stdin_handle()
     var cap: i64 = 128
@@ -63,8 +63,8 @@ let read_line(): Option<string> = {
     Some(string_alias(buf as *void, n))
 }
 
-// Read exactly `n` bytes from stdin. Returns the bytes that were
-// actually read. A shorter result means EOF arrived early.
+/// Read exactly `n` bytes from stdin. Returns the bytes actually
+/// read; a shorter result means EOF arrived early.
 let read_bytes(n: i64): string = {
     if n <= 0 { return string_alias(nil as *void, 0) }
     let fp = stdin_handle()
@@ -85,15 +85,15 @@ let read_bytes(n: i64): string = {
     string_alias(buf, total)
 }
 
-// Flush stdout. LSP frame writers must call this after every frame
-// so the response reaches the client before the next read blocks.
+/// Flush buffered output on stdout. Required after writing a
+/// response when stdout is piped, so the bytes reach the reader
+/// before the next blocking read.
 let flush() = {
     let _ = fflush(stdout_handle())
 }
 
-// Read every byte available on stdin until EOF and return the
-// concatenation. Suitable for `qoz check`, which receives the
-// buffer text as one piped blob.
+/// Read every byte available on stdin until EOF and return the
+/// concatenation as one string.
 let read_all_stdin(): string = {
     var out: string = ""
     var done = false

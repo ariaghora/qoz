@@ -15,12 +15,16 @@ type Slot<K, V> = {
     deleted:  bool,
 }
 
+/// Open-addressed hash table from `K` to `V`. `len` is the live
+/// entry count and `cap` the allocated slot count.
 type Map<K, V> = {
     slots: *Slot<K, V>,
     len:   i64,
     cap:   i64,
 }
 
+/// Return a fresh empty Map. No allocation happens until the
+/// first insert.
 let make<K, V>(): Map<K, V> = Map { slots: nil, len: 0, cap: 0 }
 
 // Lookup probe. Walks the collision chain until it finds the key or
@@ -99,6 +103,9 @@ let grow<K, V>(m: *Map<K, V>) = {
     }
 }
 
+/// Set `key` to `value`. Inserts a new entry or replaces the
+/// existing one. Triggers a grow when the load factor reaches
+/// half.
 let insert<K, V>(m: *Map<K, V>, key: K, value: V) = {
     if m.cap == 0 {
         grow(m)
@@ -109,9 +116,12 @@ let insert<K, V>(m: *Map<K, V>, key: K, value: V) = {
     insert_raw(m, key, value)
 }
 
+/// Indexed assignment. `m[key] = value` lowers to this call.
 @operator("[]=")
 let set<K, V>(m: *Map<K, V>, key: K, value: V) = insert(m, key, value)
 
+/// Look up `key`. Returns `Some(value)` when present, `None`
+/// otherwise.
 let get<K, V>(m: *Map<K, V>, key: K): Option<V> = {
     if m.cap == 0 { return None }
     let idx = probe(m, key)
@@ -123,6 +133,7 @@ let get<K, V>(m: *Map<K, V>, key: K): Option<V> = {
     None
 }
 
+/// True when `key` is present in the map.
 let contains<K, V>(m: *Map<K, V>, key: K): bool = {
     if m.cap == 0 { return false }
     let idx = probe(m, key)
@@ -134,6 +145,9 @@ let contains<K, V>(m: *Map<K, V>, key: K): bool = {
     false
 }
 
+/// Remove `key` from the map. A no-op when the key is absent.
+/// The slot is marked as a tombstone so probe chains continue
+/// past it.
 let delete<K, V>(m: *Map<K, V>, key: K) = {
     if m.cap == 0 { return }
     let idx = probe(m, key)
@@ -143,6 +157,7 @@ let delete<K, V>(m: *Map<K, V>, key: K) = {
     }
 }
 
+/// Remove every entry while keeping the allocated buffer.
 let clear<K, V>(m: *Map<K, V>) = {
     if m.cap == 0 { return }
     var i: i64 = 0
@@ -154,10 +169,11 @@ let clear<K, V>(m: *Map<K, V>) = {
     m.len = 0
 }
 
+/// `len(m)` returns the number of live entries.
 @operator("len")
 let len<K, V>(m: *Map<K, V>): i64 = m.len
 
-// In-place insertion sort using K's `<` operator. K must overload `<`.
+/// In-place insertion sort using `K`'s `<` operator.
 let sort_keys<K>(keys: *Vec<K>) = {
     var i: i64 = 1
     while i < keys.len {
@@ -172,7 +188,8 @@ let sort_keys<K>(keys: *Vec<K>) = {
     }
 }
 
-// Return the map's keys in K's `<` order. Requires K: <.
+/// Return the map's keys sorted by `K`'s `<` operator. Useful for
+/// emitting maps in deterministic order.
 let sorted_keys<K, V>(m: *Map<K, V>): Vec<K> = {
     var out: Vec<K> = vec.make()
     var i: i64 = 0

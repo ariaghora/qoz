@@ -11,6 +11,10 @@ import map
 import mem
 import result
 
+/// A parsed JSON value. Numbers use f64; arrays and objects own
+/// their elements through `Vec` and `Map`. Use `parse_text` to
+/// build one from source, `encode` to render it back, and pattern
+/// matching to inspect it.
 type Json =
     | Null
     | Bool(bool)
@@ -72,6 +76,9 @@ let skip_ws(p: *Parser) = {
     }
 }
 
+/// Parse a JSON document from `text` into a `Json` value.
+/// Returns `Err` with a human-readable message on syntax errors,
+/// unexpected trailing content, or excessive nesting depth.
 let parse_text(text: string): Result<Json, string> = {
     var p = make_parser(text)
     skip_ws(&p)
@@ -374,6 +381,7 @@ let error_at(p: *Parser, msg: string): string = {
 
 // ---- Encoder ----
 
+/// Render `v` as compact JSON without spaces or newlines.
 let encode(v: Json): string = {
     var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
@@ -381,6 +389,8 @@ let encode(v: Json): string = {
     strings.sb_finish(&sb)
 }
 
+/// Render `v` with one element per line. `indent` is the prefix
+/// added per nesting level (typically `"  "` or `"\t"`).
 let encode_pretty(v: Json, indent: string): string = {
     var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
@@ -541,22 +551,27 @@ let hex_byte(c: i64): string = {
 
 // ---- Accessor helpers ----
 
+/// `Some(b)` when `v` is a JSON boolean; `None` otherwise.
 let as_bool(v: Json): Option<bool> = {
     match v { | Bool(b) -> Some(b) | _ -> None }
 }
 
+/// `Some(n)` when `v` is a JSON number; `None` otherwise.
 let as_num(v: Json): Option<f64> = {
     match v { | Num(n) -> Some(n) | _ -> None }
 }
 
+/// `Some(s)` when `v` is a JSON string; `None` otherwise.
 let as_str(v: Json): Option<string> = {
     match v { | Str(s) -> Some(s) | _ -> None }
 }
 
+/// `Some(a)` when `v` is a JSON array; `None` otherwise.
 let as_arr(v: Json): Option<Vec<Json>> = {
     match v { | Arr(a) -> Some(a) | _ -> None }
 }
 
+/// `Some(o)` when `v` is a JSON object; `None` otherwise.
 let as_obj(v: Json): Option<Map<string, Json>> = {
     match v { | Obj(o) -> Some(o) | _ -> None }
 }

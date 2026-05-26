@@ -4,29 +4,35 @@
 // returns length -1 on any failure. `read_file_strict` returns a
 // descriptive error through the prelude Result.
 
+/// Read the entire contents of `path`. Returns a string with
+/// length -1 on any failure. Use `read_file_strict` to get a
+/// descriptive error message instead.
 @link_name("qoz_fs_read_file")
 external let read_file(path: string): string
 
+/// Write `content` to `path`, creating or truncating the file.
+/// Returns true on success.
 @link_name("qoz_fs_write_file")
 external let write_file(path: string, content: string): bool
 
+/// True when `path` refers to a regular file or directory on disk.
 @link_name("qoz_fs_file_exists")
 external let file_exists(path: string): bool
 
-// Returns a newline-joined, sorted list of every regular file in `dir`
-// whose name ends in ".qoz". Empty string if the directory does not
-// exist or cannot be opened. No trailing newline.
+/// Newline-joined sorted list of every regular file in `dir` whose
+/// name ends in `.qoz`. Empty string when the directory is missing
+/// or cannot be opened. No trailing newline.
 @link_name("qoz_fs_list_qoz_files")
 external let list_qoz_files(dir: string): string
 
 @link_name("qoz_fs_read_strict_raw")
 external let read_file_strict_raw(path: string, data_out: *string, err_out: *string)
 
-// Read a file with descriptive error reporting. On success the file
-// content is returned in `Ok`. On failure the error message names
-// the cause: "file not found", "permission denied", "path is a
-// directory", "path too long", "out of memory", or the platform's
-// strerror text for any other case.
+/// Read a file with descriptive error reporting. On success the
+/// content is returned in `Ok`. On failure the error message names
+/// the cause: "file not found", "permission denied", "path is a
+/// directory", "path too long", "out of memory", or the platform's
+/// strerror text for any other case.
 let read_file_strict(path: string): Result<string, string> = {
     var data: string = ""
     var err: string = ""

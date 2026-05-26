@@ -4,62 +4,83 @@
 // linked with -lm on platforms that need it (Linux). macOS folds libm
 // into libSystem. No extra flag is required.
 
+/// Non-negative square root of `x`. Returns NaN for negative input.
 @link_name("sqrt")
 external let sqrt(x: f64): f64
 
+/// `x` raised to the power `y`.
 @link_name("pow")
 external let pow(x: f64, y: f64): f64
 
+/// Absolute value of `x`.
 @link_name("fabs")
 external let fabs(x: f64): f64
 
+/// Largest integer value less than or equal to `x`.
 @link_name("floor")
 external let floor(x: f64): f64
 
+/// Smallest integer value greater than or equal to `x`.
 @link_name("ceil")
 external let ceil(x: f64): f64
 
+/// Nearest integer to `x`. Halves round away from zero.
 @link_name("round")
 external let round(x: f64): f64
 
+/// Floating-point remainder of `x / y`. The result carries the sign of `x`.
 @link_name("fmod")
 external let fmod(x: f64, y: f64): f64
 
+/// Sine of `x` in radians.
 @link_name("sin")
 external let sin(x: f64): f64
 
+/// Cosine of `x` in radians.
 @link_name("cos")
 external let cos(x: f64): f64
 
+/// Tangent of `x` in radians.
 @link_name("tan")
 external let tan(x: f64): f64
 
+/// Inverse sine of `x`. Result in `[-pi/2, pi/2]`.
 @link_name("asin")
 external let asin(x: f64): f64
 
+/// Inverse cosine of `x`. Result in `[0, pi]`.
 @link_name("acos")
 external let acos(x: f64): f64
 
+/// Inverse tangent of `x`. Result in `(-pi/2, pi/2)`.
 @link_name("atan")
 external let atan(x: f64): f64
 
+/// Inverse tangent of `y/x` using the signs of both arguments to
+/// place the result in the correct quadrant.
 @link_name("atan2")
 external let atan2(y: f64, x: f64): f64
 
+/// `e` raised to the power `x`.
 @link_name("exp")
 external let exp(x: f64): f64
 
+/// Natural logarithm of `x`.
 @link_name("log")
 external let log(x: f64): f64
 
+/// Base-10 logarithm of `x`.
 @link_name("log10")
 external let log10(x: f64): f64
 
+/// Base-2 logarithm of `x`.
 @link_name("log2")
 external let log2(x: f64): f64
 
+/// The smaller of `x` and `y`. Treats NaN as missing.
 @link_name("fmin")
 external let fmin(x: f64, y: f64): f64
 
+/// The larger of `x` and `y`. Treats NaN as missing.
 @link_name("fmax")
 external let fmax(x: f64, y: f64): f64

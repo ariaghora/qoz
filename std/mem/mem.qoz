@@ -4,11 +4,18 @@
 // runtime. The user does not free. The collector reclaims unreachable
 // memory on its own schedule.
 
+/// Allocate `size` bytes on the GC heap. The returned pointer is
+/// uninitialised. The collector reclaims it once no live reference
+/// remains.
 @link_name("qoz_alloc")
 external let alloc(size: i64): *void
 
+/// Allocate `size` bytes on the GC heap and zero them.
 @link_name("qoz_calloc")
 external let calloc(size: i64): *void
 
+/// Resize the GC allocation at `ptr` to `size` bytes. Existing
+/// bytes up to the smaller of the old and new size are preserved.
+/// Pass `nil` for `ptr` to allocate a fresh buffer.
 @link_name("qoz_realloc")
 external let realloc(ptr: *void, size: i64): *void

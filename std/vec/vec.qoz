@@ -9,14 +9,21 @@ let bounds_die(op: string, i: i64, n: i64) = {
     panic_raw(`vec.{op}: index {i} out of bounds for vec of length {n}`)
 }
 
+/// Growable contiguous array of `T`. `len` is the current size and
+/// `cap` is the allocated capacity. The underlying buffer lives in
+/// the GC heap and grows by doubling.
 type Vec<T> = {
     data: *T,
     len:  i64,
     cap:  i64,
 }
 
+/// Return a fresh empty Vec. No allocation happens until the first
+/// `push`.
 let make<T>(): Vec<T> = Vec { data: nil, len: 0, cap: 0 }
 
+/// Double the backing buffer (or allocate the initial 8 elements).
+/// Called automatically by `push`; user code rarely needs this.
 let grow<T>(v: *Vec<T>) = {
     let new_cap = if v.cap == 0 { 8 } else { v.cap * 2 }
     let new_data = mem.realloc(v.data as *void, new_cap * size_of(T)) as *T
@@ -24,6 +31,8 @@ let grow<T>(v: *Vec<T>) = {
     v.cap = new_cap
 }
 
+/// Append `x` to the end of the vector. Grows the buffer when the
+/// current capacity is exhausted.
 let push<T>(v: *Vec<T>, x: T) = {
     if v.len == v.cap {
         grow(v)
@@ -32,26 +41,34 @@ let push<T>(v: *Vec<T>, x: T) = {
     v.len = v.len + 1
 }
 
+/// Return the element at index `i`. Panics when `i` is out of
+/// bounds. Prefer the `v[i]` operator for clarity.
 let get<T>(v: *Vec<T>, i: i64): T = {
     if i < 0 || i >= v.len { bounds_die("get", i, v.len) }
     v.data[i]
 }
 
+/// Remove and return the last element. Returns `None` when the
+/// vector is empty.
 let pop<T>(v: *Vec<T>): Option<T> = {
     if v.len == 0 { return None }
     v.len = v.len - 1
     Some(v.data[v.len])
 }
 
+/// Reset the length to zero. The backing buffer is retained so a
+/// later sequence of pushes does not reallocate immediately.
 let clear<T>(v: *Vec<T>) = {
     v.len = 0
 }
 
+/// Indexing operator. `v[i]` lowers to this call.
 @operator("[]")
 let index<T>(v: *Vec<T>, i: i64): T = {
     if i < 0 || i >= v.len { bounds_die("index", i, v.len) }
     v.data[i]
 }
 
+/// `len(v)` returns the number of elements currently stored.
 @operator("len")
 let len<T>(v: *Vec<T>): i64 = v.len

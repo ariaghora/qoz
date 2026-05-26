@@ -6,11 +6,14 @@
 // are as random as the low bits. Deterministic given the seed.
 // NOT cryptographically secure.
 
+/// 64-bit linear-congruential pseudo-random generator state.
+/// Deterministic given the seed. Not cryptographically secure.
 type Rng = { state: u64 }
 
+/// Construct a new generator with the given seed.
 let make(seed: u64): random.Rng = random.Rng { state: seed }
 
-// Advance the state and return the next u64 value.
+/// Advance the state and return the next u64 value.
 let next_u64(r: *Rng): u64 = {
     let a: u64 = 6364136223846793005
     let c: u64 = 1442695040888963407
@@ -18,9 +21,10 @@ let next_u64(r: *Rng): u64 = {
     r.state
 }
 
-// Return an integer in the half-open interval [0, bound). `bound`
-// must be positive. The result is biased by at most 1 / bound when
-// the generator's range is not a multiple of bound.
+/// Return an integer in the half-open interval `[0, bound)`.
+/// `bound` must be positive. The result is biased by at most
+/// `1 / bound` when the generator's range is not a multiple of
+/// bound.
 let next_below(r: *Rng, bound: i64): i64 = {
     if bound <= 0 { return 0 }
     let raw = next_u64(r)

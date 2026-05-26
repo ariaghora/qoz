@@ -5,15 +5,16 @@
 // implementations are thin wrappers over `time(2)` and
 // `gettimeofday(2)`.
 
+/// Current Unix time in whole seconds since 1970-01-01 UTC.
 @link_name("qoz_time_unix")
 external let unix(): i64
 
+/// Current Unix time in microseconds since 1970-01-01 UTC.
 @link_name("qoz_time_unix_micros")
 external let unix_micros(): i64
 
-// Suspend the calling thread for `ms` milliseconds. Negative or
-// zero values return immediately. Precision is best-effort and
-// depends on the host scheduler. Expect millisecond-class accuracy
-// on a quiet system and worse under contention.
+/// Suspend the calling thread for `ms` milliseconds. Negative or
+/// zero values return immediately. Precision is best-effort and
+/// depends on the host scheduler.
 @link_name("qoz_time_sleep_ms")
 external let sleep_ms(ms: i64)

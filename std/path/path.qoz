@@ -7,7 +7,7 @@
 import strings
 import vec
 
-// Index of the last `/` byte in `p`. Returns -1 when there is none.
+/// Index of the last `/` byte in `p`. Returns -1 when there is none.
 let last_slash(p: string): i64 = {
     var found: i64 = 0 - 1
     var i: i64 = len(p) - 1
@@ -22,10 +22,10 @@ let last_slash(p: string): i64 = {
     found
 }
 
-// The directory part of `p`. Returns `.` when `p` has no slash, `/`
-// when `p` is rooted at the top level, and the substring up to the
-// last slash otherwise. Trailing slashes are stripped except for the
-// root `/`.
+/// The directory part of `p`. Returns `.` when `p` has no slash, `/`
+/// when `p` is rooted at the top level, and the substring up to the
+/// last slash otherwise. Trailing slashes are stripped except for the
+/// root `/`.
 let dir(p: string): string = {
     let i = last_slash(p)
     if i < 0 { return "." }
@@ -33,18 +33,19 @@ let dir(p: string): string = {
     strings.slice(p, 0, i)
 }
 
-// The final segment of `p`. Returns the input unchanged when there is
-// no slash, and the substring after the last slash otherwise. A path
-// ending in `/` returns the empty string.
+/// The final segment of `p`. Returns the input unchanged when
+/// there is no slash, and the substring after the last slash
+/// otherwise. A path ending in `/` returns the empty string.
 let base(p: string): string = {
     let i = last_slash(p)
     if i < 0 { return p }
     strings.slice(p, i + 1, len(p))
 }
 
-// The extension of `p`, including the leading dot. `foo.txt` returns
-// `.txt`. A leading dot on the final segment (`.bashrc`) is treated
-// as part of the name, not an extension. Returns "".
+/// The extension of `p`, including the leading dot. `foo.txt`
+/// returns `.txt`. A leading dot on the final segment (`.bashrc`)
+/// is treated as part of the name, not an extension. Returns ""
+/// when no extension is present.
 let ext(p: string): string = {
     let b = base(p)
     let n = len(b)
@@ -58,9 +59,9 @@ let ext(p: string): string = {
     ""
 }
 
-// `b` joined onto `a` with exactly one `/` between them. Either part
-// being empty returns the other. An absolute `b` (leading `/`)
-// replaces `a` entirely.
+/// `b` joined onto `a` with exactly one `/` between them. Either
+/// part being empty returns the other. An absolute `b` (leading
+/// `/`) replaces `a` entirely.
 let join2(a: string, b: string): string = {
     if len(a) == 0 { return b }
     if len(b) == 0 { return a }
@@ -71,8 +72,8 @@ let join2(a: string, b: string): string = {
     strings.cat(strings.cat(a, "/"), b)
 }
 
-// Join a sequence of path segments. Each pair is combined with
-// `join2`, so segments that begin with `/` reset the accumulator.
+/// Join a sequence of path segments. Each pair is combined with
+/// `join2`, so segments that begin with `/` reset the accumulator.
 let join(parts: Vec<string>): string = {
     var acc = ""
     for p in parts {
@@ -81,10 +82,11 @@ let join(parts: Vec<string>): string = {
     acc
 }
 
-// Collapse repeated slashes and resolve `.` and `..` segments. An
-// absolute path stays absolute. A relative path stays relative.
-// `..` that walks above the root collapses to the root. Above a
-// relative start it becomes a literal `..` segment.
+/// Collapse repeated slashes and resolve `.` and `..` segments.
+/// An absolute path stays absolute; a relative path stays
+/// relative. `..` that walks above the root collapses to the
+/// root; above a relative start it becomes a literal `..`
+/// segment.
 let clean(p: string): string = {
     let n = len(p)
     if n == 0 { return "." }

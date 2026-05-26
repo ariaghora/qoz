@@ -7,26 +7,31 @@
 import map
 import vec
 
+/// Hash set of `T` backed by `Map<T, bool>`.
 type Set<T> = { items: Map<T, bool> }
 
+/// Return a fresh empty Set.
 let make<T>(): set.Set<T> = set.Set { items: map.make() }
 
+/// Insert `x` into the set. A no-op when `x` is already present.
 let add<T>(s: *Set<T>, x: T) = {
     map.insert(&s.items, x, true)
 }
 
+/// True when `x` is a member of the set.
 let contains<T>(s: *Set<T>, x: T): bool = {
     map.contains(&s.items, x)
 }
 
+/// Remove `x` from the set. A no-op when `x` is not present.
 let remove<T>(s: *Set<T>, x: T) = {
     map.delete(&s.items, x)
 }
 
+/// Number of elements currently in the set.
 let size<T>(s: *Set<T>): i64 = s.items.len
 
-// Return the set's elements in the key-sort order produced by
-// `map.sorted_keys`. Iteration order is stable across runs.
+/// Return the set's elements sorted by `T`'s `<` operator.
 let sorted_elements<T>(s: *Set<T>): Vec<T> = {
     map.sorted_keys(&s.items)
 }

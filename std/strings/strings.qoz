@@ -28,6 +28,7 @@ let bytes_eq(ad: *u8, ao: i64, bd: *u8, bo: i64, n: i64): bool = {
     true
 }
 
+/// True when `a` and `b` contain the same bytes in the same order.
 let eq_raw(a: string, b: string): bool = {
     let an = len(a)
     let bn = len(b)
@@ -56,6 +57,8 @@ let hash_raw(s: string): u64 = {
     h
 }
 
+/// True when `s` begins with `p`. The empty prefix matches every
+/// string.
 let has_prefix(s: string, p: string): bool = {
     let sn = len(s)
     let pn = len(p)
@@ -66,6 +69,8 @@ let has_prefix(s: string, p: string): bool = {
     bytes_eq(sd, 0, pd, 0, pn)
 }
 
+/// True when `s` ends with `suf`. The empty suffix matches every
+/// string.
 let has_suffix(s: string, suf: string): bool = {
     let sn = len(s)
     let sufn = len(suf)
@@ -76,6 +81,9 @@ let has_suffix(s: string, suf: string): bool = {
     bytes_eq(sd, sn - sufn, sufd, 0, sufn)
 }
 
+/// Return the byte at offset `i` as an i64 (0..255). Returns -1
+/// when `i` is out of range; this is the only way to inspect raw
+/// bytes without a separate length check.
 let byte_at(s: string, i: i64): i64 = {
     if i < 0 { return 0 - 1 }
     if i >= len(s) { return 0 - 1 }
@@ -83,6 +91,8 @@ let byte_at(s: string, i: i64): i64 = {
     data[i] as i64
 }
 
+/// Index of the first occurrence of `byte` in `s`. Returns -1
+/// when the byte does not appear.
 let index_byte(s: string, byte: i64): i64 = {
     let n = len(s)
     if n == 0 { return 0 - 1 }
@@ -95,6 +105,9 @@ let index_byte(s: string, byte: i64): i64 = {
     0 - 1
 }
 
+/// Substring of `s` from byte offset `from` (inclusive) to `to`
+/// (exclusive). Out-of-range bounds are clamped to `[0, len(s)]`.
+/// Returns a freshly allocated string; the source is not mutated.
 let slice(s: string, from: i64, to: i64): string = {
     var lo = from
     var hi = to
@@ -111,6 +124,7 @@ let slice(s: string, from: i64, to: i64): string = {
     string_alias(buf, m)
 }
 
+/// Concatenate `a` and `b` into a freshly allocated string.
 let cat(a: string, b: string): string = {
     let an = len(a)
     let bn = len(b)
@@ -126,12 +140,9 @@ let cat(a: string, b: string): string = {
     string_alias(buf, n)
 }
 
-// Lenient decimal parser. Returns 0 on empty input and on any
-// non-digit byte. The compiler's internal call sites accept this
-// looseness because the input has already been validated upstream
-// (the tokenizer rejects malformed integer literals before they
-// reach here). Callers that need explicit failure should use
-// parse_int_strict instead.
+/// Lenient decimal parser. Returns 0 on empty input and stops at
+/// the first non-digit byte. Use `parse_int_strict` to get
+/// explicit failure for malformed input.
 let parse_int(s: string): i64 = {
     let n = len(s)
     if n == 0 { return 0 }
@@ -153,12 +164,11 @@ let parse_int(s: string): i64 = {
     if neg { 0 - acc } else { acc }
 }
 
-// Strict decimal parser. Empty input, leading sign without digits,
-// non-digit bytes, and arithmetic overflow each produce an Err. The
-// range accepted is the positive i64 domain plus zero on the negative
-// side. INT64_MIN (-9223372036854775808) is rejected as overflow
-// because the magnitude does not fit in a positive i64. Callers that
-// require INT64_MIN should use parse_f64 and round.
+/// Strict decimal parser. Empty input, a leading sign without
+/// digits, non-digit bytes, and arithmetic overflow each produce
+/// an Err. INT64_MIN is rejected as overflow because the
+/// magnitude does not fit in a positive i64; callers that need
+/// INT64_MIN should use `parse_f64` and round.
 let parse_int_strict(s: string): Result<i64, string> = {
     let n = len(s)
     if n == 0 { return Err("empty input") }
@@ -192,7 +202,8 @@ let eq(a: *string, b: *string): bool = eq_raw(*a, *b)
 @operator("hash")
 let hash(s: *string): u64 = hash_raw(*s)
 
-// Lexicographic byte-order comparison.
+/// Lexicographic byte-order comparison. Returns true when `a`
+/// sorts strictly before `b`.
 let lt_raw(a: string, b: string): bool = {
     let an = len(a)
     let bn = len(b)
@@ -209,10 +220,9 @@ let lt_raw(a: string, b: string): bool = {
 @operator("<")
 let lt(a: *string, b: *string): bool = lt_raw(*a, *b)
 
-// Replace every occurrence of `needle` in `s` with `replacement`.
-// Empty needle returns `s` unchanged. Linear time: a single forward
-// scan compares needle bytes against `s` and copies literal runs
-// into a Strbuf rather than re-allocating the output on every byte.
+/// Replace every occurrence of `needle` in `s` with
+/// `replacement`. Empty needle returns `s` unchanged. Runs in
+/// linear time using a Strbuf to assemble the result.
 let replace_all(s: string, needle: string, replacement: string): string = {
     let nn = len(needle)
     if nn == 0 { return s }
@@ -242,10 +252,9 @@ let replace_all(s: string, needle: string, replacement: string): string = {
     sb_finish(&sb)
 }
 
-// Render an i64 as a decimal string. The integer `0` returns "0".
-// INT64_MIN is special-cased because negating it overflows in two's
-// complement (`0 - INT64_MIN == INT64_MIN`). Detect that case by
-// observing that negation did not flip the sign.
+/// Render an i64 as a decimal string. Zero returns "0". INT64_MIN
+/// is handled correctly despite the two's-complement negation
+/// edge case.
 let i64_to_string(v: i64): string = {
     if v == 0 { return "0" }
     let scratch = mem.alloc(21)
@@ -279,10 +288,10 @@ let i64_to_string(v: i64): string = {
     string_alias(out, out_len)
 }
 
-// Strict decimal-float parser. Empty input, a leading sign without
-// digits, a `.` without surrounding digits, and an `e`/`E` without
-// exponent digits each produce an Err. Trailing non-numeric bytes
-// after a valid number also produce an Err.
+/// Strict decimal-float parser. Empty input, a sign without
+/// digits, a `.` without surrounding digits, an `e`/`E` without
+/// exponent digits, or trailing non-numeric bytes each produce an
+/// Err.
 let parse_f64_strict(s: string): Result<f64, string> = {
     let n = len(s)
     if n == 0 { return Err("empty input") }
@@ -320,11 +329,10 @@ let parse_f64_strict(s: string): Result<f64, string> = {
     Ok(parse_f64(s))
 }
 
-// Parse a decimal floating-point string. Accepts an optional sign,
-// integer digits, an optional fractional part, and an optional
-// exponent (`e` or `E`). Non-conforming input returns 0.0. The
-// algorithm accumulates a mantissa in f64 and applies a power of ten
-// at the end.
+/// Parse a decimal floating-point string. Accepts an optional
+/// sign, integer digits, an optional fractional part, and an
+/// optional exponent (`e` or `E`). Non-conforming input returns
+/// 0.0; use `parse_f64_strict` for explicit failure.
 let parse_f64(s: string): f64 = {
     let n = len(s)
     if n == 0 { return 0.0 }
@@ -374,6 +382,8 @@ let parse_f64(s: string): f64 = {
     result
 }
 
+/// Split `s` on every occurrence of the byte `sep` and return the
+/// pieces in order. Consecutive separators produce empty strings.
 let split(s: string, sep: i64): Vec<string> = {
     var out: Vec<string> = vec.make()
     let total = len(s)

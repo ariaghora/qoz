@@ -3,6 +3,9 @@
 // Result<T, E> is automatically registered as a prelude type by the
 // compiler.
 
+/// A value that represents either success (`Ok(x)`) or failure
+/// (`Err(e)`). Use the `?` operator to propagate failures through
+/// functions that return Result.
 type Result<T, E> =
     | Ok(T)
     | Err(E)

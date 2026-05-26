@@ -4,6 +4,9 @@
 // compiler, so user code does not need to import it. The definition is
 // provided here as the canonical source.
 
+/// A value that is either present (`Some(x)`) or absent (`None`).
+/// Used in place of a nullable type. Pattern-match on it to handle
+/// the two cases.
 type Option<T> =
     | Some(T)
     | None
