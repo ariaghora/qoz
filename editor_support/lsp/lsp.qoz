@@ -821,6 +821,10 @@ let completion_response(s: *Server, params: json.Json): json.Json = {
     | None -> { }
     }
     if !have_text { return empty_completion_list() }
+    match import_context_at(text, lc._0, lc._1) {
+    | Some(ctx) -> return import_path_completions(ctx._0, ctx._1)
+    | None      -> { }
+    }
     let dot = dot_qualifier_at(text, lc._0, lc._1)
     if !strings.eq_raw(dot._0, "") {
         return package_member_completions(text, dot._0, dot._1)
@@ -932,6 +936,170 @@ let identifier_prefix_at(text: string, line: i64, col: i64): string = {
         lo -= 1
     }
     strings.slice(text, 0, offset)
+}
+
+// When the cursor sits inside an `import ` statement, return the
+// (dir_prefix, name_prefix) split of the partial path to the left
+// of the cursor. None when the line is not an import. For
+// `import encoding/json` with the cursor right after `json`, the
+// split is `("encoding", "json")`.
+let import_context_at(text: string, line: i64, col: i64): Option<(string, string)> = {
+    let offset = byte_offset_of(text, line, col)
+    if offset < 0 { return None }
+    let n = len(text)
+    if offset > n { return None }
+    // Walk back to the start of the line.
+    var line_start = offset
+    while line_start > 0 && strings.byte_at(text, line_start - 1) != 10 { line_start -= 1 }
+    let line_text = strings.slice(text, line_start, offset)
+    // Skip leading whitespace, require the keyword `import`, then a
+    // separating space. Reject anything else so an `imported` local
+    // variable does not trigger import completions.
+    var i: i64 = 0
+    let nl = len(line_text)
+    while i < nl && (strings.byte_at(line_text, i) == 32 || strings.byte_at(line_text, i) == 9) { i += 1 }
+    let kw = "import"
+    if i + len(kw) > nl { return None }
+    var k: i64 = 0
+    while k < len(kw) {
+        if strings.byte_at(line_text, i + k) != strings.byte_at(kw, k) { return None }
+        k += 1
+    }
+    i += len(kw)
+    if i >= nl || strings.byte_at(line_text, i) != 32 { return None }
+    while i < nl && strings.byte_at(line_text, i) == 32 { i += 1 }
+    let partial = strings.slice(line_text, i, nl)
+    // Split on the LAST '/'. Everything before is the directory
+    // prefix; everything after is the name prefix the user is
+    // typing.
+    var slash = len(partial) - 1
+    while slash >= 0 && strings.byte_at(partial, slash) != 47 { slash -= 1 }
+    if slash < 0 { return Some(("", partial)) }
+    Some((strings.slice(partial, 0, slash), strings.slice(partial, slash + 1, len(partial))))
+}
+
+// List package candidates under `dir_prefix` and emit completion
+// items whose name starts with `name_prefix`. Search roots are the
+// repository root (QOZ_ROOT or CWD) and QOZ_ROOT/std, mirroring
+// resolve_import_path so the LSP and the compiler agree on the
+// set of reachable imports.
+let import_path_completions(dir_prefix: string, name_prefix: string): json.Json = {
+    var items: Vec<json.Json> = vec.make()
+    var seen: Map<string, bool> = map.make()
+    let qoz_root = os.getenv("QOZ_ROOT")
+    let roots = repo_roots_for_import(qoz_root)
+    for root in roots {
+        let scan = if strings.eq_raw(dir_prefix, "") { root } else { strings.cat(strings.cat(root, "/"), dir_prefix) }
+        let pkgful = dirs_containing_qoz(scan)
+        for sub in list_subdirs(scan) {
+            if strings.has_prefix(sub, name_prefix) && !map.contains(&seen, sub) && map.contains(&pkgful, sub) {
+                map.set(&seen, sub, true)
+                var item: Map<string, json.Json> = map.make()
+                item["label"] = Str(sub)
+                item["kind"]  = Num(9.0)
+                vec.push(&items, Obj(item))
+            }
+        }
+    }
+    var m: Map<string, json.Json> = map.make()
+    m["isIncomplete"] = Bool(false)
+    m["items"]        = Arr(items)
+    Obj(m)
+}
+
+// Return the set of immediate subdirectories of `parent` that
+// contain at least one Qoz package transitively. A Qoz package is
+// a directory whose own `.qoz` file matches the directory name
+// (`compiler/parse/parse.qoz`). One `find` invocation walks the
+// whole subtree once. Each .qoz file path is matched against the
+// package convention; only matches contribute their first path
+// segment to the candidate set. This filters tests, examples, and
+// asset directories that contain .qoz files but are not packages.
+let dirs_containing_qoz(parent: string): Map<string, bool> = {
+    var out: Map<string, bool> = map.make()
+    if !fs.file_exists(parent) { return out }
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "find")
+    vec.push(&argv, parent)
+    vec.push(&argv, "-name")
+    vec.push(&argv, "*.qoz")
+    vec.push(&argv, "-type")
+    vec.push(&argv, "f")
+    let r = os.process_exec(argv)
+    if r.exit_code != 0 { return out }
+    let prefix_with_slash = strings.cat(parent, "/")
+    for line in strings.split(r.stdout, 10) {
+        if !strings.has_prefix(line, prefix_with_slash) { } else {
+            let rest = strings.slice(line, len(prefix_with_slash), len(line))
+            let last_slash = last_index_of_byte(rest, 47)
+            if last_slash < 0 { } else {
+                let file_name = strings.slice(rest, last_slash + 1, len(rest))
+                let stem = strip_qoz_extension(file_name)
+                let dir = strings.slice(rest, 0, last_slash)
+                let dir_base = path_basename_of(dir)
+                if strings.eq_raw(dir_base, stem) {
+                    let first_slash = index_of_byte(rest, 47)
+                    let first = if first_slash > 0 { strings.slice(rest, 0, first_slash) } else { rest }
+                    if strings.byte_at(first, 0) != 46 {
+                        map.set(&out, first, true)
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+let strip_qoz_extension(file_name: string): string = {
+    if strings.has_suffix(file_name, ".qoz") {
+        return strings.slice(file_name, 0, len(file_name) - 4)
+    }
+    file_name
+}
+
+let repo_roots_for_import(qoz_root: string): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    if len(qoz_root) > 0 {
+        vec.push(&out, strings.cat(qoz_root, "/std"))
+        vec.push(&out, qoz_root)
+    }
+    vec.push(&out, ".")
+    out
+}
+
+// Names of immediate subdirectories of `dir`. Hidden directories
+// and missing roots return nothing. Shells out to `find` because
+// the runtime exposes only .qoz-file enumeration.
+let list_subdirs(dir: string): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    if !fs.file_exists(dir) { return out }
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "find")
+    vec.push(&argv, dir)
+    vec.push(&argv, "-mindepth")
+    vec.push(&argv, "1")
+    vec.push(&argv, "-maxdepth")
+    vec.push(&argv, "1")
+    vec.push(&argv, "-type")
+    vec.push(&argv, "d")
+    let r = os.process_exec(argv)
+    if r.exit_code != 0 { return out }
+    let lines = strings.split(r.stdout, 10)
+    for line in lines {
+        if len(line) > 0 {
+            let base = path_basename_of(line)
+            if len(base) > 0 && strings.byte_at(base, 0) != 46 {
+                vec.push(&out, base)
+            }
+        }
+    }
+    out
+}
+
+let path_basename_of(path: string): string = {
+    let i = last_index_of_byte(path, 47)
+    if i < 0 { return path }
+    strings.slice(path, i + 1, len(path))
 }
 
 let qoz_keywords(): Vec<string> = {
