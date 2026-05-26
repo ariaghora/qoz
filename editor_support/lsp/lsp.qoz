@@ -13,6 +13,8 @@ import map
 import vec
 import os
 import encoding/json
+import compiler/tokenize
+import compiler/parse
 
 // Read one complete frame from stdin. Returns None at EOF or when
 // the header is malformed. Blocking I/O suspends the process, so a
@@ -218,15 +220,25 @@ let initialize_result(): json.Json = {
 
 // --- Diagnostics ---------------------------------------------------
 
-// Compute diagnostics for a buffer. Returns an empty list while
-// the emit phase still keys generic_decls and struct_decls by bare
-// type name. The LSP imports `compiler/parse` and `encoding/json`,
-// which both declare `Parser`, so wiring the real check_buffer
-// through requires renaming type declarations with their package
-// prefix at load time and rewriting every TENamed reference in the
-// AST. That change is tracked as a follow-up.
+// Compute diagnostics for a buffer. Runs the compiler's tokenize
+// and parse phases against the buffer text and converts each parse
+// error string into a one-line Diagnostic spanning the column at
+// the start of the line. The check phase needs the full package
+// graph and is wired through in a later step.
 let check_buffer(uri: string, text: string): Vec<lsp.Diagnostic> = {
-    vec.make()
+    let tokens = tokenize.run(text)
+    let parsed = parse.run(tokens, uri)
+    var diags: Vec<lsp.Diagnostic> = vec.make()
+    for msg in parsed.errors {
+        let line = extract_line_from_msg(msg)
+        vec.push(&diags, lsp.Diagnostic {
+            line:    line,
+            col:     0,
+            end_col: 80,
+            message: msg,
+        })
+    }
+    diags
 }
 
 // Best-effort extraction of "at line N" out of a parse error
