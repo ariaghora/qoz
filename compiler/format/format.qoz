@@ -1,0 +1,312 @@
+// AST-based Qoz source formatter. Consumes a parsed File plus a
+// list of source comments and emits canonical source text. The
+// printer makes structural decisions (single-line vs multi-line,
+// where to break, indent depth); comment placement is handled by
+// a parallel walk that interleaves the comment stream with the
+// node stream by source position.
+
+import fmt
+import vec
+import map
+import strings
+import compiler/ast
+import compiler/tokenize
+
+type Printer = {
+    out:    strings.Strbuf,
+    indent: i64,
+    // Column of the next byte to be written, 0-indexed. Reset by
+    // p_newline. Used by width-aware wrapping decisions.
+    col:    i64,
+    // Comments captured by the tokenizer, in source order.
+    // Consumed greedily as the printer walks nodes: any comment
+    // whose span is <= the cursor is emitted before the next
+    // node.
+    comments: Vec<tokenize.Comment>,
+    cmt_idx:  i64,
+    // Line of the last node emitted. Used to detect blank lines
+    // in the original source that should be preserved.
+    last_line: i64,
+}
+
+let make_printer(comments: Vec<tokenize.Comment>): format.Printer = {
+    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    strings.sb_init(&sb)
+    Printer { out: sb, indent: 0, col: 0, comments: comments, cmt_idx: 0, last_line: 0 }
+}
+
+let p_emit(p: *format.Printer, s: string) = {
+    let n = len(s)
+    if n == 0 { return }
+    if p.col == 0 && p.indent > 0 {
+        let pad = p.indent * 4
+        var i: i64 = 0
+        while i < pad {
+            strings.sb_append(&p.out, " ")
+            i += 1
+        }
+        p.col = pad
+    }
+    strings.sb_append(&p.out, s)
+    p.col += n
+}
+
+let p_newline(p: *format.Printer) = {
+    strings.sb_append(&p.out, "\n")
+    p.col = 0
+}
+
+let p_indent_in(p: *format.Printer) = { p.indent += 1 }
+let p_indent_out(p: *format.Printer) = { p.indent -= 1 }
+
+let p_finish(p: *format.Printer): string = strings.sb_finish(&p.out)
+
+// --- TypeExpr ---
+
+let print_te(p: *format.Printer, te: ast.TypeExpr) = {
+    match te {
+    | TENamed(_, path, args) -> {
+        var first = true
+        for seg in path {
+            if !first { p_emit(p, ".") }
+            first = false
+            p_emit(p, seg)
+        }
+        if len(args) > 0 {
+            p_emit(p, "<")
+            var i: i64 = 0
+            for a in args {
+                if i > 0 { p_emit(p, ", ") }
+                print_te(p, a)
+                i += 1
+            }
+            p_emit(p, ">")
+        }
+    }
+    | TEPtr(_, inner) -> {
+        p_emit(p, "*")
+        print_te(p, inner)
+    }
+    | TETuple(_, elems) -> {
+        p_emit(p, "(")
+        var i: i64 = 0
+        for e in elems {
+            if i > 0 { p_emit(p, ", ") }
+            print_te(p, e)
+            i += 1
+        }
+        p_emit(p, ")")
+    }
+    | TEUnit(_) -> p_emit(p, "()")
+    | TEFn(_, params, ret) -> {
+        p_emit(p, "fn(")
+        var i: i64 = 0
+        for pa in params {
+            if i > 0 { p_emit(p, ", ") }
+            print_te(p, pa)
+            i += 1
+        }
+        p_emit(p, "): ")
+        print_te(p, ret)
+    }
+    }
+}
+
+// --- Comment interleaving ---
+
+// Emit any comments whose start line is strictly before the next
+// node's line. Trailing same-line comments are handled by the
+// node emitter via p_emit_trailing_comments.
+let p_emit_leading_comments(p: *format.Printer, next_line: i64) = {
+    while p.cmt_idx < len(p.comments) {
+        let c = p.comments[p.cmt_idx]
+        if c.line >= next_line { return }
+        if p.last_line > 0 && c.line > p.last_line + 1 { p_newline(p) }
+        p_emit(p, c.text)
+        p_newline(p)
+        p.last_line = c.line
+        p.cmt_idx += 1
+    }
+}
+
+// Emit a comment trailing on the same line as a node ending at
+// `node_line`. Returns true when one was emitted (caller does not
+// add its own newline).
+let p_emit_trailing_comment(p: *format.Printer, node_line: i64): bool = {
+    if p.cmt_idx < len(p.comments) {
+        let c = p.comments[p.cmt_idx]
+        if c.line == node_line {
+            p_emit(p, " ")
+            p_emit(p, c.text)
+            p.cmt_idx += 1
+            return true
+        }
+    }
+    false
+}
+
+// Track that the printer just finished emitting a node ending on
+// `line`. Used so leading-comment emission can preserve blank
+// lines between top-level decls.
+let p_mark_line(p: *format.Printer, line: i64) = {
+    if line > p.last_line { p.last_line = line }
+}
+
+// --- Decl printers (skeleton subset) ---
+
+let print_import(p: *format.Printer, path: Vec<string>, alias: string) = {
+    p_emit(p, "import ")
+    var i: i64 = 0
+    for seg in path {
+        if i > 0 { p_emit(p, "/") }
+        p_emit(p, seg)
+        i += 1
+    }
+    if !strings.eq_raw(alias, "") {
+        p_emit(p, " as ")
+        p_emit(p, alias)
+    }
+}
+
+let print_link(p: *format.Printer, kind: ast.LinkKind, target: string) = {
+    p_emit(p, "#link_")
+    match kind {
+    | LinkLibrary   -> p_emit(p, "library")
+    | LinkFramework -> p_emit(p, "framework")
+    | LinkPath      -> p_emit(p, "path")
+    }
+    p_emit(p, " \"")
+    p_emit(p, target)
+    p_emit(p, "\"")
+}
+
+let print_type_alias(p: *format.Printer, name: string, tparams: Vec<string>, target: ast.TypeExpr) = {
+    p_emit(p, "type ")
+    p_emit(p, name)
+    print_type_params(p, tparams)
+    p_emit(p, " = ")
+    print_te(p, target)
+}
+
+let print_type_params(p: *format.Printer, tparams: Vec<string>) = {
+    if len(tparams) > 0 {
+        p_emit(p, "<")
+        var i: i64 = 0
+        for tp in tparams {
+            if i > 0 { p_emit(p, ", ") }
+            p_emit(p, tp)
+            i += 1
+        }
+        p_emit(p, ">")
+    }
+}
+
+let print_struct(p: *format.Printer, name: string, tparams: Vec<string>, fields: Vec<ast.StructField>) = {
+    p_emit(p, "type ")
+    p_emit(p, name)
+    print_type_params(p, tparams)
+    p_emit(p, " = {")
+    p_newline(p)
+    p_indent_in(p)
+    var i: i64 = 0
+    let align = struct_field_align(fields)
+    for f in fields {
+        p_emit(p, f.name)
+        p_emit(p, ":")
+        var pad: i64 = align - len(f.name)
+        while pad > 0 {
+            p_emit(p, " ")
+            pad -= 1
+        }
+        p_emit(p, " ")
+        print_te(p, f.ty)
+        p_emit(p, ",")
+        p_newline(p)
+        i += 1
+    }
+    p_indent_out(p)
+    p_emit(p, "}")
+}
+
+let struct_field_align(fields: Vec<ast.StructField>): i64 = {
+    var m: i64 = 0
+    for f in fields {
+        let n = len(f.name)
+        if n > m { m = n }
+    }
+    m
+}
+
+let print_c_enum(p: *format.Printer, name: string, underlying: ast.TypeExpr, variants: Vec<string>) = {
+    p_emit(p, "type ")
+    p_emit(p, name)
+    p_emit(p, ": ")
+    print_te(p, underlying)
+    p_emit(p, " = ")
+    var i: i64 = 0
+    for v in variants {
+        if i > 0 { p_emit(p, " | ") }
+        p_emit(p, v)
+        i += 1
+    }
+}
+
+let print_extern(p: *format.Printer, name: string, sym: string, params: Vec<ast.FnParam>, ret: ast.TypeExpr) = {
+    p_emit(p, "external(\"")
+    p_emit(p, sym)
+    p_emit(p, "\") ")
+    p_emit(p, name)
+    p_emit(p, "(")
+    var i: i64 = 0
+    for pa in params {
+        if i > 0 { p_emit(p, ", ") }
+        p_emit(p, pa.name)
+        p_emit(p, ": ")
+        print_te(p, pa.ty)
+        i += 1
+    }
+    p_emit(p, "): ")
+    print_te(p, ret)
+}
+
+let print_enum(p: *format.Printer, name: string, tparams: Vec<string>, variants: Vec<ast.VariantDecl>) = {
+    p_emit(p, "type ")
+    p_emit(p, name)
+    print_type_params(p, tparams)
+    p_emit(p, " =")
+    p_newline(p)
+    p_indent_in(p)
+    var i: i64 = 0
+    for v in variants {
+        p_emit(p, "| ")
+        p_emit(p, v.name)
+        match v.kind {
+        | VPKNone -> { }
+        | VPKPositional -> {
+            p_emit(p, "(")
+            var j: i64 = 0
+            for pe in v.pos {
+                if j > 0 { p_emit(p, ", ") }
+                print_te(p, pe)
+                j += 1
+            }
+            p_emit(p, ")")
+        }
+        | VPKNamed -> {
+            p_emit(p, " { ")
+            var j: i64 = 0
+            for sf in v.named {
+                if j > 0 { p_emit(p, ", ") }
+                p_emit(p, sf.name)
+                p_emit(p, ": ")
+                print_te(p, sf.ty)
+                j += 1
+            }
+            p_emit(p, " }")
+        }
+        }
+        if i + 1 < len(variants) { p_newline(p) }
+        i += 1
+    }
+    p_indent_out(p)
+}
