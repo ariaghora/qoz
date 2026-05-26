@@ -10,6 +10,7 @@ import compiler/tokenize
 import compiler/ast
 import compiler/parse
 import compiler/check
+import compiler/format
 import compiler/emit
 
 #if target_os == "windows" {
@@ -1157,8 +1158,16 @@ let cmd_fmt(path: string) = {
         fmt.println(`qoz fmt: cannot read '{path}'`)
         os.exit(1)
     }
-    let normalised = normalise_whitespace(src)
-    if !fs.write_file(path, normalised) {
+    let tres = tokenize.run_with_comments(src)
+    let pres = parse.run(tres.tokens, path)
+    if len(pres.errors) > 0 {
+        for e in pres.errors { fmt.println(`qoz fmt: {e}`) }
+        os.exit(1)
+    }
+    var p = format.make_printer(tres.comments)
+    format.print_file(&p, pres.file)
+    let out = format.p_finish(&p)
+    if !fs.write_file(path, out) {
         fmt.println(`qoz fmt: cannot write '{path}'`)
         os.exit(1)
     }

@@ -12,6 +12,12 @@ import strings
 import compiler/ast
 import compiler/tokenize
 
+type InterpPart = {
+    lit:      bool,
+    lit_text: string,
+    expr:     ast.Expr,
+}
+
 type Printer = {
     out:    strings.Strbuf,
     indent: i64,
@@ -251,6 +257,633 @@ let print_c_enum(p: *format.Printer, name: string, underlying: ast.TypeExpr, var
     }
 }
 
+// --- File driver ---
+
+let print_decl(p: *format.Printer, d: ast.Decl) = {
+    match d {
+    | DImport(_, path, alias)           -> print_import(p, path, alias)
+    | DStruct(_, n, tps, fs)            -> print_struct(p, n, tps, fs)
+    | DEnum(_, n, tps, vs)              -> print_enum(p, n, tps, vs)
+    | DCEnum(_, n, under, vs)           -> print_c_enum(p, n, under, vs)
+    | DTypeAlias(_, n, tps, target)     -> print_type_alias(p, n, tps, target)
+    | DConst(_, n, te, val)             -> print_const(p, n, te, val)
+    | DFn(_, n, tps, ps, ret, body, at) -> print_fn(p, n, tps, ps, ret, body, at)
+    | DExternal(_, n, sym, ps, ret)     -> print_extern(p, n, sym, ps, ret)
+    | DLink(_, kind, target)            -> print_link(p, kind, target)
+    | DCompileIf(_, arms, defaults)     -> print_compile_if(p, arms, defaults)
+    }
+}
+
+let print_compile_if(p: *format.Printer, arms: Vec<ast.CompileIfArm>, defaults: Vec<ast.Decl>) = {
+    var i: i64 = 0
+    for arm in arms {
+        p_emit(p, if i == 0 { "#if " } else { "#elif " })
+        print_expr(p, arm.cond)
+        p_newline(p)
+        for d in arm.decls {
+            print_decl(p, d)
+            p_newline(p)
+        }
+        i += 1
+    }
+    if len(defaults) > 0 {
+        p_emit(p, "#else")
+        p_newline(p)
+        for d in defaults {
+            print_decl(p, d)
+            p_newline(p)
+        }
+    }
+    p_emit(p, "#endif")
+}
+
+let print_file(p: *format.Printer, f: ast.File) = {
+    var prev_span_line: i64 = 0
+    var i: i64 = 0
+    for d in f.decls {
+        let sp = decl_span(d)
+        if i > 0 {
+            p_newline(p)
+            if sp.line > prev_span_line + 1 { p_newline(p) }
+        }
+        print_decl(p, d)
+        prev_span_line = sp.line
+        i += 1
+    }
+    if i > 0 { p_newline(p) }
+}
+
+let decl_span(d: ast.Decl): ast.Span = {
+    match d {
+    | DImport(sp, _, _)
+    | DStruct(sp, _, _, _)
+    | DEnum(sp, _, _, _)
+    | DCEnum(sp, _, _, _)
+    | DTypeAlias(sp, _, _, _)
+    | DConst(sp, _, _, _)
+    | DFn(sp, _, _, _, _, _, _)
+    | DExternal(sp, _, _, _, _)
+    | DLink(sp, _, _)
+    | DCompileIf(sp, _, _) -> sp
+    }
+}
+
+// --- Operators ---
+
+let unary_op_text(op: ast.UnaryOp): string = {
+    match op {
+    | UOpNeg   -> "-"
+    | UOpNot   -> "!"
+    | UOpDeref -> "*"
+    | UOpAddr  -> "&"
+    }
+}
+
+let binary_op_text(op: ast.BinaryOp): string = {
+    match op {
+    | BOpAdd            -> "+"
+    | BOpSub            -> "-"
+    | BOpMul            -> "*"
+    | BOpDiv            -> "/"
+    | BOpMod            -> "%"
+    | BOpEq             -> "=="
+    | BOpNe             -> "!="
+    | BOpLt             -> "<"
+    | BOpGt             -> ">"
+    | BOpLe             -> "<="
+    | BOpGe             -> ">="
+    | BOpAnd            -> "&&"
+    | BOpOr             -> "||"
+    | BOpBitAnd         -> "&"
+    | BOpBitOr          -> "|"
+    | BOpBitXor         -> "^"
+    | BOpShl            -> "<<"
+    | BOpShr            -> ">>"
+    | BOpRange          -> ".."
+    | BOpRangeInclusive -> "..="
+    }
+}
+
+let assign_op_text(op: ast.AssignOp): string = {
+    match op {
+    | AOpSet    -> "="
+    | AOpAddSet -> "+="
+    | AOpSubSet -> "-="
+    | AOpMulSet -> "*="
+    | AOpDivSet -> "/="
+    | AOpModSet -> "%="
+    }
+}
+
+// --- Patterns ---
+
+let print_pattern(p: *format.Printer, pat: ast.Pattern) = {
+    match pat {
+    | PatWild(_)             -> p_emit(p, "_")
+    | PatBind(_, n)          -> p_emit(p, n)
+    | PatLitInt(_, t)        -> p_emit(p, t)
+    | PatLitString(_, t)     -> {
+        p_emit(p, "\"")
+        p_emit(p, t)
+        p_emit(p, "\"")
+    }
+    | PatLitBool(_, b)       -> p_emit(p, if b { "true" } else { "false" })
+    | PatVariant(_, path, subs) -> {
+        var i: i64 = 0
+        for seg in path {
+            if i > 0 { p_emit(p, ".") }
+            p_emit(p, seg)
+            i += 1
+        }
+        if len(subs) > 0 {
+            p_emit(p, "(")
+            var j: i64 = 0
+            for s in subs {
+                if j > 0 { p_emit(p, ", ") }
+                print_pattern(p, s)
+                j += 1
+            }
+            p_emit(p, ")")
+        }
+    }
+    | PatTuple(_, subs) -> {
+        p_emit(p, "(")
+        var i: i64 = 0
+        for s in subs {
+            if i > 0 { p_emit(p, ", ") }
+            print_pattern(p, s)
+            i += 1
+        }
+        p_emit(p, ")")
+    }
+    }
+}
+
+// --- Statements ---
+
+let print_stmt(p: *format.Printer, s: ast.Stmt) = {
+    match s {
+    | SLet(_, name, te, val) -> {
+        p_emit(p, "let ")
+        p_emit(p, name)
+        if !is_unit_te(te) {
+            p_emit(p, ": ")
+            print_te(p, te)
+        }
+        p_emit(p, " = ")
+        print_expr(p, val)
+    }
+    | SVar(_, name, te, val) -> {
+        p_emit(p, "var ")
+        p_emit(p, name)
+        if !is_unit_te(te) {
+            p_emit(p, ": ")
+            print_te(p, te)
+        }
+        p_emit(p, " = ")
+        print_expr(p, val)
+    }
+    | SExpr(_, e) -> print_expr(p, e)
+    }
+}
+
+let is_unit_te(te: ast.TypeExpr): bool = {
+    match te {
+    | TEUnit(_) -> true
+    | _         -> false
+    }
+}
+
+// --- Expressions ---
+
+// Single-line render of an Expr into a side buffer. Used by the
+// width-aware wrap decision. Multi-line constructs (blocks,
+// matches, multi-arm ifs) are still rendered with newlines; the
+// result is then used only when no newline appears.
+let render_expr_oneline(e: ast.Expr): string = {
+    var sub = make_printer(vec.make())
+    print_expr(&sub, e)
+    p_finish(&sub)
+}
+
+let no_newlines(s: string): bool = {
+    let n = len(s)
+    var i: i64 = 0
+    while i < n {
+        if strings.byte_at(s, i) == 10 { return false }
+        i += 1
+    }
+    true
+}
+
+let print_expr(p: *format.Printer, e: ast.Expr) = {
+    match e {
+    | EInt(_, t)       -> p_emit(p, t)
+    | EFloat(_, t)     -> p_emit(p, t)
+    | EString(_, t)    -> {
+        p_emit(p, "\"")
+        p_emit(p, t)
+        p_emit(p, "\"")
+    }
+    | EChar(_, t)      -> {
+        p_emit(p, "'")
+        p_emit(p, t)
+        p_emit(p, "'")
+    }
+    | EBool(_, b)      -> p_emit(p, if b { "true" } else { "false" })
+    | ENil(_)          -> p_emit(p, "nil")
+    | EIdent(_, n)     -> p_emit(p, n)
+    | EPath(_, segs)   -> {
+        var i: i64 = 0
+        for s in segs {
+            if i > 0 { p_emit(p, ".") }
+            p_emit(p, s)
+            i += 1
+        }
+    }
+    | EUnary(_, op, rhs) -> {
+        p_emit(p, unary_op_text(op))
+        print_expr(p, rhs)
+    }
+    | EBinary(_, op, l, r) -> {
+        print_expr(p, l)
+        p_emit(p, " ")
+        p_emit(p, binary_op_text(op))
+        p_emit(p, " ")
+        print_expr(p, r)
+    }
+    | EAssign(_, op, l, r) -> {
+        print_expr(p, l)
+        p_emit(p, " ")
+        p_emit(p, assign_op_text(op))
+        p_emit(p, " ")
+        print_expr(p, r)
+    }
+    | ECall(_, callee, tas, args) -> {
+        print_expr(p, callee)
+        if len(tas) > 0 {
+            p_emit(p, "<")
+            var i: i64 = 0
+            for ta in tas {
+                if i > 0 { p_emit(p, ", ") }
+                print_te(p, ta)
+                i += 1
+            }
+            p_emit(p, ">")
+        }
+        p_emit(p, "(")
+        var i: i64 = 0
+        for a in args {
+            if i > 0 { p_emit(p, ", ") }
+            print_expr(p, a)
+            i += 1
+        }
+        p_emit(p, ")")
+    }
+    | EField(_, base, name) -> {
+        print_expr(p, base)
+        p_emit(p, ".")
+        p_emit(p, name)
+    }
+    | EIndex(_, base, idx) -> {
+        print_expr(p, base)
+        p_emit(p, "[")
+        print_expr(p, idx)
+        p_emit(p, "]")
+    }
+    | ECast(_, v, te) -> {
+        print_expr(p, v)
+        p_emit(p, " as ")
+        print_te(p, te)
+    }
+    | ETry(_, v) -> {
+        print_expr(p, v)
+        p_emit(p, "?")
+    }
+    | ETuple(_, elems) -> {
+        p_emit(p, "(")
+        var i: i64 = 0
+        for el in elems {
+            if i > 0 { p_emit(p, ", ") }
+            print_expr(p, el)
+            i += 1
+        }
+        p_emit(p, ")")
+    }
+    | ERecord(_, te, fields) -> print_record(p, te, fields)
+    | EClosure(_, params, ret, body) -> {
+        p_emit(p, "|")
+        var i: i64 = 0
+        for pa in params {
+            if i > 0 { p_emit(p, ", ") }
+            p_emit(p, pa.name)
+            if !is_unit_te(pa.ty) {
+                p_emit(p, ": ")
+                print_te(p, pa.ty)
+            }
+            i += 1
+        }
+        p_emit(p, "|")
+        if !is_unit_te(ret) {
+            p_emit(p, ": ")
+            print_te(p, ret)
+        }
+        p_emit(p, " ")
+        print_expr(p, body)
+    }
+    | EBlock(_, stmts, tail) -> print_block(p, stmts, tail)
+    | EIf(_, c, t, f) -> {
+        p_emit(p, "if ")
+        print_expr(p, c)
+        p_emit(p, " ")
+        print_expr(p, t)
+        if !is_unit_block(f) {
+            p_emit(p, " else ")
+            print_expr(p, f)
+        }
+    }
+    | EMatch(_, scrut, arms) -> print_match(p, scrut, arms)
+    | EWhile(_, c, body) -> {
+        p_emit(p, "while ")
+        print_expr(p, c)
+        p_emit(p, " ")
+        print_expr(p, body)
+    }
+    | EFor(_, b1, b2, it, body) -> {
+        p_emit(p, "for ")
+        p_emit(p, b1)
+        if !strings.eq_raw(b2, "") {
+            p_emit(p, ", ")
+            p_emit(p, b2)
+        }
+        p_emit(p, " in ")
+        print_expr(p, it)
+        p_emit(p, " ")
+        print_expr(p, body)
+    }
+    | EReturn(_, v) -> {
+        p_emit(p, "return")
+        if !is_unit_expr(v) {
+            p_emit(p, " ")
+            print_expr(p, v)
+        }
+    }
+    | EDefer(_, v) -> {
+        p_emit(p, "defer ")
+        print_expr(p, v)
+    }
+    | ESizeOf(_, te) -> {
+        p_emit(p, "size_of(")
+        print_te(p, te)
+        p_emit(p, ")")
+    }
+    | EArrayLit(_, elems) -> {
+        p_emit(p, "[")
+        var i: i64 = 0
+        for el in elems {
+            if i > 0 { p_emit(p, ", ") }
+            print_expr(p, el)
+            i += 1
+        }
+        p_emit(p, "]")
+    }
+    }
+}
+
+let is_unit_expr(e: ast.Expr): bool = {
+    match e {
+    | EBlock(_, stmts, tail) -> {
+        if len(stmts) > 0 { return false }
+        is_unit_block_tail(tail)
+    }
+    | _ -> false
+    }
+}
+
+let is_unit_block_tail(e: ast.Expr): bool = {
+    match e {
+    | EBlock(_, stmts, tail) -> {
+        if len(stmts) > 0 { return false }
+        is_unit_block_tail(tail)
+    }
+    | _ -> false
+    }
+}
+
+let is_unit_block(e: ast.Expr): bool = is_unit_expr(e)
+
+let print_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
+    if try_print_interp_block(p, stmts, tail) { return }
+    if len(stmts) == 0 && is_unit_expr(tail) {
+        p_emit(p, "{ }")
+        return
+    }
+    p_emit(p, "{")
+    p_newline(p)
+    p_indent_in(p)
+    for s in stmts {
+        print_stmt(p, s)
+        p_newline(p)
+    }
+    if !is_unit_expr(tail) {
+        print_expr(p, tail)
+        p_newline(p)
+    }
+    p_indent_out(p)
+    p_emit(p, "}")
+}
+
+// Detect the parser's interpolation-block desugar
+// `{ let sb = __qoz_interp_init(); ...push...; __qoz_interp_finish(sb) }`
+// and reconstruct the original `` `...` `` template. Returns true
+// when the block matches the pattern. False leaves the caller to
+// print the block as a regular expression.
+let try_print_interp_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr): bool = {
+    if len(stmts) < 1 { return false }
+    var sb_name = ""
+    match stmts[0] {
+    | SLet(_, n, _, val) -> {
+        if !is_builtin_call(val, "__qoz_interp_init") { return false }
+        sb_name = n
+    }
+    | _ -> return false
+    }
+    if !is_builtin_call_on(tail, "__qoz_interp_finish", sb_name) { return false }
+    var parts: Vec<format.InterpPart> = vec.make()
+    var i: i64 = 1
+    while i < len(stmts) {
+        match stmts[i] {
+        | SExpr(_, e) -> {
+            match extract_push_arg(e, sb_name) {
+            | Some(arg) -> {
+                match arg {
+                | EString(_, raw) -> vec.push(&parts, format.InterpPart { lit: true, lit_text: strip_string_quotes(raw), expr: arg })
+                | _               -> vec.push(&parts, format.InterpPart { lit: false, lit_text: "", expr: arg })
+                }
+            }
+            | None -> return false
+            }
+        }
+        | _ -> return false
+        }
+        i += 1
+    }
+    p_emit(p, "`")
+    for part in parts {
+        if part.lit {
+            p_emit(p, part.lit_text)
+        } else {
+            p_emit(p, "{")
+            print_expr(p, part.expr)
+            p_emit(p, "}")
+        }
+    }
+    p_emit(p, "`")
+    true
+}
+
+let is_builtin_call(e: ast.Expr, name: string): bool = {
+    match e {
+    | ECall(_, callee, _, _) -> {
+        match callee {
+        | EIdent(_, n) -> strings.eq_raw(n, name)
+        | _            -> false
+        }
+    }
+    | _ -> false
+    }
+}
+
+let is_builtin_call_on(e: ast.Expr, name: string, sb: string): bool = {
+    match e {
+    | ECall(_, callee, _, args) -> {
+        match callee {
+        | EIdent(_, n) -> {
+            if !strings.eq_raw(n, name) { return false }
+            if len(args) < 1 { return false }
+            match args[0] {
+            | EIdent(_, sbn) -> strings.eq_raw(sbn, sb)
+            | _              -> false
+            }
+        }
+        | _ -> false
+        }
+    }
+    | _ -> false
+    }
+}
+
+// Returns the second argument of a `__qoz_interp_push_*(sb, x)` call
+// when the call targets `sb_name`. None otherwise.
+let extract_push_arg(e: ast.Expr, sb_name: string): Option<ast.Expr> = {
+    match e {
+    | ECall(_, callee, _, args) -> {
+        match callee {
+        | EIdent(_, n) -> {
+            if !strings.has_prefix(n, "__qoz_interp_push") { return None }
+            if len(args) != 2 { return None }
+            match args[0] {
+            | EIdent(_, sbn) -> {
+                if !strings.eq_raw(sbn, sb_name) { return None }
+                Some(args[1])
+            }
+            | _ -> None
+            }
+        }
+        | _ -> None
+        }
+    }
+    | _ -> None
+    }
+}
+
+// `EString` arrives carrying its surrounding `"..."` quotes
+// because the parser captures the raw source slice. Drop them so
+// the interpolation chunk can be emitted between backticks.
+let strip_string_quotes(s: string): string = {
+    let n = len(s)
+    if n >= 2 && strings.byte_at(s, 0) == 34 && strings.byte_at(s, n - 1) == 34 {
+        return strings.slice(s, 1, n - 1)
+    }
+    s
+}
+
+let print_match(p: *format.Printer, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
+    p_emit(p, "match ")
+    print_expr(p, scrut)
+    p_emit(p, " {")
+    p_newline(p)
+    for a in arms {
+        p_emit(p, "| ")
+        print_pattern(p, a.pat)
+        if a.has_guard {
+            p_emit(p, " if ")
+            print_expr(p, a.guard)
+        }
+        p_emit(p, " -> ")
+        print_expr(p, a.body)
+        p_newline(p)
+    }
+    p_emit(p, "}")
+}
+
+let print_record(p: *format.Printer, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>) = {
+    print_te(p, te)
+    p_emit(p, " {")
+    if len(fields) == 0 { p_emit(p, "}"); return }
+    let single_line = record_inline(te, fields)
+    if single_line {
+        p_emit(p, " ")
+        var i: i64 = 0
+        for f in fields {
+            if i > 0 { p_emit(p, ", ") }
+            p_emit(p, f.name)
+            p_emit(p, ": ")
+            print_expr(p, f.value)
+            i += 1
+        }
+        p_emit(p, " }")
+        return
+    }
+    p_newline(p)
+    p_indent_in(p)
+    let align = record_field_align(fields)
+    for f in fields {
+        p_emit(p, f.name)
+        p_emit(p, ":")
+        var pad: i64 = align - len(f.name)
+        while pad > 0 {
+            p_emit(p, " ")
+            pad -= 1
+        }
+        p_emit(p, " ")
+        print_expr(p, f.value)
+        p_emit(p, ",")
+        p_newline(p)
+    }
+    p_indent_out(p)
+    p_emit(p, "}")
+}
+
+let record_inline(te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): bool = {
+    var rendered_len: i64 = 0
+    for f in fields {
+        let v_str = render_expr_oneline(f.value)
+        if !no_newlines(v_str) { return false }
+        rendered_len += len(f.name) + 2 + len(v_str) + 2
+    }
+    rendered_len < 60
+}
+
+let record_field_align(fields: Vec<ast.RecordFieldLit>): i64 = {
+    var m: i64 = 0
+    for f in fields {
+        let n = len(f.name)
+        if n > m { m = n }
+    }
+    m
+}
+
 let print_extern(p: *format.Printer, name: string, sym: string, params: Vec<ast.FnParam>, ret: ast.TypeExpr) = {
     p_emit(p, "external(\"")
     p_emit(p, sym)
@@ -267,6 +900,44 @@ let print_extern(p: *format.Printer, name: string, sym: string, params: Vec<ast.
     }
     p_emit(p, "): ")
     print_te(p, ret)
+}
+
+let print_const(p: *format.Printer, name: string, te: ast.TypeExpr, val: ast.Expr) = {
+    p_emit(p, "let ")
+    p_emit(p, name)
+    if !is_unit_te(te) {
+        p_emit(p, ": ")
+        print_te(p, te)
+    }
+    p_emit(p, " = ")
+    print_expr(p, val)
+}
+
+let print_fn(p: *format.Printer, name: string, tparams: Vec<string>, params: Vec<ast.FnParam>, ret: ast.TypeExpr, body: ast.Expr, attr: string) = {
+    if !strings.eq_raw(attr, "") {
+        p_emit(p, "#")
+        p_emit(p, attr)
+        p_newline(p)
+    }
+    p_emit(p, "let ")
+    p_emit(p, name)
+    print_type_params(p, tparams)
+    p_emit(p, "(")
+    var i: i64 = 0
+    for pa in params {
+        if i > 0 { p_emit(p, ", ") }
+        p_emit(p, pa.name)
+        p_emit(p, ": ")
+        print_te(p, pa.ty)
+        i += 1
+    }
+    p_emit(p, ")")
+    if !is_unit_te(ret) {
+        p_emit(p, ": ")
+        print_te(p, ret)
+    }
+    p_emit(p, " = ")
+    print_expr(p, body)
 }
 
 let print_enum(p: *format.Printer, name: string, tparams: Vec<string>, variants: Vec<ast.VariantDecl>) = {
