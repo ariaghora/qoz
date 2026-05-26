@@ -66,6 +66,66 @@ Plug 'your-fork/qoz-odin', { 'rtp': 'editor_support/vim' }
 - `@link_name` and `@operator` attributes.
 - Line and block comments with `TODO` / `FIXME` recognition.
 
+## Language server (Neovim)
+
+The Qoz language server is a separate binary built from the same
+repo. Build steps:
+
+```
+make                                  # builds ./qoz
+./qoz build editor_support/lsp_server # builds editor_support/lsp_server/lsp_server.bin
+```
+
+The server reads JSON-RPC frames over stdio and supports:
+
+- `textDocument/publishDiagnostics` from parse and type-check
+  output. The server shells out to `qoz check --stdin` with the
+  unsaved buffer piped in.
+- `textDocument/definition` for buffer-local and cross-package
+  symbols.
+- `textDocument/hover` showing the declaration's source line.
+- `textDocument/completion` for top-level declarations, Qoz
+  keywords, and dotted package members (`strings.<TAB>`).
+
+A small Lua module at `editor_support/vim/lua/qoz/lsp.lua`
+attaches the server to every Qoz buffer in Neovim 0.10+. Once
+the plugin is on `runtimepath`:
+
+```lua
+require("qoz.lsp").setup()
+```
+
+The defaults resolve `lsp_server.bin`, the `qoz` binary, and
+`QOZ_ROOT` from the repository root next to the Lua module.
+Override any of them with explicit paths:
+
+```lua
+require("qoz.lsp").setup({
+  lsp_server_path = "/abs/path/to/lsp_server.bin",
+  qoz_binary      = "/abs/path/to/qoz",
+  qoz_root        = "/abs/path/to/qoz-odin",
+})
+```
+
+With lazy.nvim:
+
+```lua
+return {
+  {
+    dir = "/absolute/path/to/qoz-odin/editor_support/vim",
+    name = "qoz.vim",
+    ft = "qoz",
+    config = function() require("qoz.lsp").setup() end,
+  },
+}
+```
+
+After opening a `.qoz` file, `:checkhealth vim.lsp` or `:LspInfo`
+(if you have nvim-lspconfig) lists a client named `qoz` attached
+to the buffer. Built-in keymaps work once the client attaches:
+`gd` for goto definition, `K` for hover, and `<C-x><C-o>` for
+omni-completion.
+
 ## Treesitter
 
 A Treesitter grammar would give finer-grained highlighting and
