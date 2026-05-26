@@ -214,6 +214,8 @@ let initialize_result(): json.Json = {
     var comp: Map<string, json.Json> = map.make()
     var triggers: Vec<json.Json> = vec.make()
     vec.push(&triggers, Str("."))
+    vec.push(&triggers, Str("/"))
+    vec.push(&triggers, Str(" "))
     comp["triggerCharacters"]   = Arr(triggers)
     caps["completionProvider"]  = Obj(comp)
 

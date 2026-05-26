@@ -57,7 +57,7 @@ function M.start(opts)
         return
     end
 
-    vim.lsp.start({
+    local client_id = vim.lsp.start({
         name = "qoz",
         cmd  = { server },
         cmd_env = {
@@ -66,6 +66,12 @@ function M.start(opts)
         },
         root_dir = find_root(0),
     })
+    -- Auto-trigger completion on the server's triggerCharacters
+    -- (".", "/", " ") when nvim's built-in completion module is
+    -- available. Falls back silently on older nvim.
+    if client_id and vim.lsp.completion and vim.lsp.completion.enable then
+        pcall(vim.lsp.completion.enable, true, client_id, 0, { autotrigger = true })
+    end
 end
 
 function M.setup(opts)
