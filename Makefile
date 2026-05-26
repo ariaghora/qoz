@@ -116,7 +116,7 @@ clean:
 	rm -f stage1-emit.qoz.c qoz-emit.qoz.c
 	rm -f compiler/main.qoz.c
 	find tests -name '*.qoz.c' -delete 2>/dev/null || true
-	find tests -name '*.qoz.bin' -delete 2>/dev/null || true
+	find tests -name '*.qoz' | while read f; do rm -f "${f%.qoz}"; done
 
 help:
 	@echo "Qoz build targets:"

@@ -72,8 +72,8 @@ The Qoz language server is a separate binary built from the same
 repo. Build steps:
 
 ```
-make                                  # builds ./qoz
-./qoz build editor_support/lsp_server # builds editor_support/lsp_server/lsp_server.bin
+make                           # builds ./qoz
+./qoz build editor_support/lsp # builds editor_support/lsp/lsp
 ```
 
 The server reads JSON-RPC frames over stdio and supports:
@@ -95,13 +95,13 @@ the plugin is on `runtimepath`:
 require("qoz.lsp").setup()
 ```
 
-The defaults resolve `lsp_server.bin`, the `qoz` binary, and
+The defaults resolve the `lsp` binary, the `qoz` binary, and
 `QOZ_ROOT` from the repository root next to the Lua module.
 Override any of them with explicit paths:
 
 ```lua
 require("qoz.lsp").setup({
-  lsp_server_path = "/abs/path/to/lsp_server.bin",
+  lsp_server_path = "/abs/path/to/editor_support/lsp/lsp",
   qoz_binary      = "/abs/path/to/qoz",
   qoz_root        = "/abs/path/to/qoz-odin",
 })
@@ -128,7 +128,4 @@ omni-completion.
 
 ## Treesitter
 
-A Treesitter grammar would give finer-grained highlighting and
-incremental updates. It is not in this directory yet. The Vim regex
-syntax above is correct for the language as it stands, and a
-grammar is a separate project.
+TODO

@@ -12,6 +12,12 @@ import compiler/parse
 import compiler/check
 import compiler/emit
 
+#if target_os == "windows" {
+    let EXE_SUFFIX: string = ".exe"
+} #else {
+    let EXE_SUFFIX: string = ""
+}
+
 @link_name("qoz_target_os")
 external let target_os_raw(): string
 
@@ -918,9 +924,28 @@ let resolve_entry_paths(path: string): EntryPaths = {
         fmt.println(`{norm}: no .qoz files found in directory`)
         os.exit(1)
     }
-    let base = path_basename(norm)
+    var base = path_basename(norm)
+    // `qoz build .` and `qoz build /` produce a base of `.` or the
+    // empty string. Resolve to the cwd's basename so the binary has
+    // a real name instead of literally `.`.
+    if strings.eq_raw(base, ".") || strings.eq_raw(base, "") {
+        base = cwd_basename()
+    }
     let c_path = strings.cat(strings.cat(strings.cat(norm, "/"), base), ".c")
     EntryPaths { entries: files, primary: files[0], c_path: c_path }
+}
+
+let cwd_basename(): string = {
+    var argv: Vec<string> = vec.make()
+    vec.push(&argv, "pwd")
+    let r = os.process_exec(argv)
+    if r.exit_code != 0 {
+        fmt.println(`could not resolve current directory: pwd exited {r.exit_code}`)
+        os.exit(1)
+    }
+    var n = len(r.stdout)
+    while n > 0 && strings.byte_at(r.stdout, n - 1) == 10 { n -= 1 }
+    path_basename(strings.slice(r.stdout, 0, n))
 }
 
 // Count top-level `main` function declarations in the aggregated AST.
@@ -1018,16 +1043,23 @@ let cmd_build(path: string, qoz_root: string): main.BuildResult = {
     main.BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred) }
 }
 
-// Derive the executable path from a C output path. Strips the
-// trailing `.c` and appends `.bin` so the result is parallel to the
-// generated source. Falls back to appending `.bin` when the input
-// somehow does not end in `.c`.
+// Derive the executable path from a C output path. The generated
+// C is `<base>.qoz.c` for a single-file entry and `<dir>/<base>.c`
+// for a directory entry. Both forms collapse to `<base>` plus the
+// platform's executable suffix so the binary has no extension on
+// Unix and a `.exe` on Windows, and never collides with the
+// source. Any other shape is a compiler bug in resolve_entry_paths.
 let bin_path_for(c_path: string): string = {
+    if strings.has_suffix(c_path, ".qoz.c") {
+        let n = len(c_path)
+        return strings.cat(strings.slice(c_path, 0, n - 6), EXE_SUFFIX)
+    }
     if strings.has_suffix(c_path, ".c") {
         let n = len(c_path)
-        return strings.cat(strings.slice(c_path, 0, n - 2), ".bin")
+        return strings.cat(strings.slice(c_path, 0, n - 2), EXE_SUFFIX)
     }
-    strings.cat(c_path, ".bin")
+    os.panic(`bin_path_for: c_path '{c_path}' does not end in .c`)
+    ""
 }
 
 // Clang flags used for both `build` and `run`. Kept in one place so

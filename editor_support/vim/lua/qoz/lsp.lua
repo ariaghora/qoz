@@ -35,7 +35,7 @@ local function default_paths()
     -- is four parents up.
     local repo_root = vim.fn.fnamemodify(src, ":h:h:h:h:h")
     return {
-        lsp_server_path = repo_root .. "/editor_support/lsp_server/lsp_server.bin",
+        lsp_server_path = repo_root .. "/editor_support/lsp/lsp",
         qoz_binary      = repo_root .. "/qoz",
         qoz_root        = repo_root,
     }

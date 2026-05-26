@@ -44,7 +44,7 @@ run_pos() {
     fi
     out=$(QOZ_ROOT="$PWD" "$QOZ" run "$t" 2>&1)
     rc=$?
-    rm -f "${t}.c" "${t}.bin"
+    rm -f "${t}.c" "${t%.qoz}"
     if [ $rc -ne 0 ]; then
         FAIL=$((FAIL+1))
         fails+=("$t (expected pass; exit $rc; $out)")
