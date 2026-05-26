@@ -229,54 +229,32 @@ let initialize_result(): json.Json = {
 
 // --- Diagnostics ---------------------------------------------------
 
-// Compute diagnostics for a buffer. Writes the buffer text to a
-// temp file under /tmp, then shells out to `qoz check <temp>`.
-// The compiler treats the temp file as the entry. Imports resolve
-// from disk so cross-package type errors surface. The temp file
-// is removed after the check returns. Diagnostics arrive on
-// stdout as `file:line:col: message`, one per line. Each line is
-// rewritten back to the original URI before the editor sees it.
+// Compute diagnostics for a buffer. Shells out to
+// `qoz check --stdin <path>` with the buffer piped on stdin. The
+// compiler treats the on-disk path as the entry but substitutes
+// stdin for its content during the load, so cross-package type
+// errors surface against the unsaved version. Diagnostics arrive
+// on stdout as `file:line:col: message`, one per line.
 let check_buffer(uri: string, text: string): Vec<lsp.Diagnostic> = {
     var diags: Vec<lsp.Diagnostic> = vec.make()
     let path = file_path_of_uri(uri)
     if strings.eq_raw(path, "") { return diags }
-    let tmp = temp_path_for(path)
-    if strings.eq_raw(tmp, "") { return diags }
-    if !fs.write_file(tmp, text) { return diags }
     var argv: Vec<string> = vec.make()
     vec.push(&argv, qoz_binary_path())
     vec.push(&argv, "check")
-    vec.push(&argv, tmp)
-    let result = os.process_exec(argv)
-    let _ = remove_quiet(tmp)
+    vec.push(&argv, "--stdin")
+    vec.push(&argv, path)
+    let result = os.process_exec_input(argv, text)
     let lines = strings.split(result.stdout, 10)
     for line in lines {
         if len(line) > 0 {
-            match parse_diagnostic_line(line, tmp) {
+            match parse_diagnostic_line(line, path) {
             | Some(d) -> vec.push(&diags, d)
             | None    -> { }
             }
         }
     }
     diags
-}
-
-// Build a temp file path that lives outside the source tree. The
-// file becomes the entry the compiler checks. Imports resolve via
-// QOZ_ROOT, so cross-package references still work. The trade-off
-// is that intra-package references from the buffer to its own
-// sibling files are not seen by the check, since the temp file is
-// outside the original package directory.
-let temp_path_for(path: string): string = {
-    let suffix = basename_of(path)
-    let safe   = if len(suffix) > 0 { suffix } else { "buffer.qoz" }
-    strings.cat("/tmp/qoz_lsp_buffer_", safe)
-}
-
-let basename_of(path: string): string = {
-    let i = last_index_of_byte(path, 47)
-    if i < 0 { return path }
-    strings.slice(path, i + 1, len(path))
 }
 
 let last_index_of_byte(s: string, b: i64): i64 = {
@@ -286,14 +264,6 @@ let last_index_of_byte(s: string, b: i64): i64 = {
         i -= 1
     }
     0 - 1
-}
-
-let remove_quiet(path: string) = {
-    var argv: Vec<string> = vec.make()
-    vec.push(&argv, "rm")
-    vec.push(&argv, "-f")
-    vec.push(&argv, path)
-    let _ = os.process_exec(argv)
 }
 
 // Translate a single `file:line:col: message` line into a

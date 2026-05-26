@@ -722,13 +722,12 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
     }
 }
 
-#if 0
-/* Reserved for a future runtime refresh that bakes the symbol into
- * bootstrap/stage1.c. The LSP currently surfaces buffer content to
- * `qoz check` through a sibling temp file rather than stdin, so this
- * symbol is not yet referenced from generated code. */
+/* Variant of qoz_process_exec that pipes `in_buf` of length
+ * `in_len` to the child's stdin then closes the pipe. The LSP
+ * uses it to ship a buffer to `qoz check` without writing to
+ * disk. */
 void qoz_process_exec_input(qoz_string *argv, int64_t n,
-                            const char *in_buf, int64_t in_len,
+                            void *in_buf, int64_t in_len,
                             int64_t *out_exit,
                             qoz_string *out_stdout,
                             qoz_string *out_stderr) {
@@ -788,7 +787,7 @@ void qoz_process_exec_input(qoz_string *argv, int64_t n,
     signal(SIGPIPE, SIG_IGN);
     int64_t written = 0;
     while (written < in_len) {
-        ssize_t w = write(in_pipe[1], in_buf + written, (size_t)(in_len - written));
+        ssize_t w = write(in_pipe[1], (char *)in_buf + written, (size_t)(in_len - written));
         if (w < 0) {
             if (errno == EINTR) continue;
             break;
@@ -843,4 +842,3 @@ void qoz_process_exec_input(qoz_string *argv, int64_t n,
         *out_exit = -1;
     }
 }
-#endif

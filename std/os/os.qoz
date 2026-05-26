@@ -1,6 +1,7 @@
 // std/os: process and environment.
 
 import vec
+import strings
 
 type ProcessResult = {
     exit_code: i64,
@@ -42,6 +43,11 @@ let args(): Vec<string> = {
 external let process_exec_raw(argv: *string, n: i64,
                               out_exit: *i64, out_stdout: *string, out_stderr: *string)
 
+@link_name("qoz_process_exec_input")
+external let process_exec_input_raw(argv: *string, n: i64,
+                                    in_buf: *void, in_len: i64,
+                                    out_exit: *i64, out_stdout: *string, out_stderr: *string)
+
 // Fork-exec a child process and return its exit code together with the
 // stdout and stderr it produced. The first element of `argv` is the
 // program. The rest are its arguments. The function does not block on
@@ -51,5 +57,16 @@ let process_exec(argv: Vec<string>): os.ProcessResult = {
     var so: string = ""
     var se: string = ""
     process_exec_raw(argv.data, argv.len, &exit_code, &so, &se)
+    ProcessResult { exit_code: exit_code, stdout: so, stderr: se }
+}
+
+// Variant that pipes `stdin_text` to the child's stdin then closes
+// the pipe. The LSP uses it to ship the unsaved buffer to
+// `qoz check` without touching the filesystem.
+let process_exec_input(argv: Vec<string>, stdin_text: string): os.ProcessResult = {
+    var exit_code: i64 = 0
+    var so: string = ""
+    var se: string = ""
+    process_exec_input_raw(argv.data, argv.len, strings.string_data(stdin_text), len(stdin_text), &exit_code, &so, &se)
     ProcessResult { exit_code: exit_code, stdout: so, stderr: se }
 }

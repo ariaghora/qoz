@@ -2,6 +2,7 @@
 
 import fmt
 import fs
+import io
 import os
 import vec
 import strings
@@ -878,13 +879,18 @@ let cmd_run(path: string, qoz_root: string) = {
 
 // Run tokenize, parse, and check against `path`. Prints each
 // diagnostic on one line as `file:line:col: message` and exits 0
-// even when diagnostics are produced. Used by the LSP to surface
-// real-time errors on a buffer that was written to a temp file
-// before invocation.
-let cmd_check(path: string, qoz_root: string) = {
+// even when diagnostics are produced. When `from_stdin` is true,
+// stdin is read to EOF and replaces the on-disk content for
+// `path` during the load. The LSP relies on this to type-check
+// an unsaved buffer without touching the source tree.
+let cmd_check(path: string, qoz_root: string, from_stdin: bool) = {
     let paths = resolve_entry_paths(path)
     let ctx = make_compile_ctx(qoz_root)
-    let overrides: Map<string, string> = map.make()
+    var overrides: Map<string, string> = map.make()
+    if from_stdin {
+        let buffer = io.read_all_stdin()
+        for ep in paths.entries { map.set(&overrides, ep, buffer) }
+    }
     let loaded = load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides)
     for msg in loaded.errors { fmt.println(msg) }
     let file = loaded.file
@@ -926,11 +932,20 @@ let main() = {
         cmd_fmt(args[2])
         os.exit(0)
     } else { if strings.eq_raw(first, "check") {
-        if len(args) < 3 {
-            fmt.println("usage: qoz check <path>")
+        // `qoz check <path>` reads <path> from disk.
+        // `qoz check --stdin <path>` substitutes stdin for <path>.
+        var from_stdin = false
+        var target = ""
+        if len(args) >= 4 && strings.eq_raw(args[2], "--stdin") {
+            from_stdin = true
+            target = args[3]
+        } else { if len(args) >= 3 {
+            target = args[2]
+        } else {
+            fmt.println("usage: qoz check [--stdin] <path>")
             os.exit(1)
-        }
-        cmd_check(args[2], qoz_root)
+        } }
+        cmd_check(target, qoz_root, from_stdin)
         os.exit(0)
     } else { if strings.eq_raw(first, "emit") {
         if len(args) < 3 {

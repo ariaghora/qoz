@@ -166,4 +166,12 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
                       qoz_string *out_stdout,
                       qoz_string *out_stderr);
 
+/* Variant that pipes `in_buf` of length `in_len` to the child's
+ * stdin and closes the pipe so the child sees EOF. */
+void qoz_process_exec_input(qoz_string *argv, int64_t n,
+                            void *in_buf, int64_t in_len,
+                            int64_t *out_exit,
+                            qoz_string *out_stdout,
+                            qoz_string *out_stderr);
+
 #endif
