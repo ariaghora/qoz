@@ -102,7 +102,7 @@ let clean(p: string): string = {
             if strings.eq_raw(seg, ".") {
                 // Drop.
             }
-            else if strings.eq_raw(seg, "..") {
+            elif strings.eq_raw(seg, "..") {
                 let segs_len = len(segs)
                 if segs_len > 0 && !strings.eq_raw(segs[segs_len - 1], "..") {
                     // Pop the previous segment.
@@ -114,7 +114,7 @@ let clean(p: string): string = {
                     }
                     segs = rebuilt
                 }
-                else if !rooted {
+                elif !rooted {
                     vec.push(&segs, seg)
                 }
             }

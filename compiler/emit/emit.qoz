@@ -4066,7 +4066,7 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
         | DFn(_, name, tparams, params, ret, body, _) -> {
             if is_main(name) {
                 emit_main(&e, ret, body)
-            } else if len(tparams) == 0 {
+            } elif len(tparams) == 0 {
                 emit_fn(&e, name, params, ret, body)
             }
         }

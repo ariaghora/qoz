@@ -1,0 +1,14 @@
+// expect: 3
+// `elif` chains multiple conditions without nesting the parse
+// tree the way old `else if` did. The body returns the matched
+// integer; this case selects the third arm.
+
+let classify(n: i64): i64 = {
+    if n < 0 { 0 }
+    elif n == 0 { 1 }
+    elif n < 10 { 2 }
+    elif n < 100 { 3 }
+    else { 4 }
+}
+
+let main(): i64 = classify(42)

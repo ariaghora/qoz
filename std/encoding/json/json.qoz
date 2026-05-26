@@ -142,7 +142,7 @@ let parse_number(p: *Parser): Result<Json, string> = {
     if at_end(p) { return Err(error_at(p, "expected digit after `-`")) }
     if cur(p) == 48 {
         advance(p)
-    } else if cur(p) >= 49 && cur(p) <= 57 {
+    } elif cur(p) >= 49 && cur(p) <= 57 {
         while !at_end(p) && cur(p) >= 48 && cur(p) <= 57 { advance(p) }
     } else {
         return Err(error_at(p, "expected digit"))
@@ -194,14 +194,14 @@ let parse_string_raw(p: *Parser): Result<string, string> = {
             let e = cur(p)
             advance(p)
             let mapped = if e == 34 { 34 }
-                else if e == 92 { 92 }
-                else if e == 47 { 47 }
-                else if e == 98 { 8 }
-                else if e == 102 { 12 }
-                else if e == 110 { 10 }
-                else if e == 114 { 13 }
-                else if e == 116 { 9 }
-                else if e == 117 { -1 }
+                elif e == 92 { 92 }
+                elif e == 47 { 47 }
+                elif e == 98 { 8 }
+                elif e == 102 { 12 }
+                elif e == 110 { 10 }
+                elif e == 114 { 13 }
+                elif e == 116 { 9 }
+                elif e == 117 { -1 }
                 else { -2 }
             if mapped == -2 { return Err("invalid escape character") }
             if mapped == -1 {
@@ -227,7 +227,7 @@ let parse_string_raw(p: *Parser): Result<string, string> = {
                             final_code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
                         }
                         }
-                    } else if code >= 0xDC00 && code <= 0xDFFF {
+                    } elif code >= 0xDC00 && code <= 0xDFFF {
                         return Err("unpaired low surrogate")
                     }
                     if i + 4 > bcap { bcap = grow_to(&buf, bcap, i + 4) }
@@ -265,8 +265,8 @@ let parse_hex4(p: *Parser): Result<i64, string> = {
         let c = strings.byte_at(p.src, p.pos + k)
         let d =
             if c >= 48 && c <= 57 { c - 48 }
-            else if c >= 65 && c <= 70 { c - 55 }
-            else if c >= 97 && c <= 102 { c - 87 }
+            elif c >= 65 && c <= 70 { c - 55 }
+            elif c >= 97 && c <= 102 { c - 87 }
             else { -1 }
         if d < 0 { return Err("non-hex digit after `\\u`") }
         v = v * 16 + d
@@ -327,7 +327,7 @@ let parse_array(p: *Parser): Result<Json, string> = {
         if at_end(p) { return Err("unterminated array") }
         let c = cur(p)
         if c == 44 { advance(p); skip_ws(p) }
-        else if c == 93 { advance(p); done = true }
+        elif c == 93 { advance(p); done = true }
         else { return Err(error_at(p, "expected `,` or `]` in array")) }
     }
     Ok(Arr(items))
@@ -360,7 +360,7 @@ let parse_object(p: *Parser): Result<Json, string> = {
         if at_end(p) { return Err("unterminated object") }
         let c = cur(p)
         if c == 44 { advance(p) }
-        else if c == 125 { advance(p); done = true }
+        elif c == 125 { advance(p); done = true }
         else { return Err(error_at(p, "expected `,` or `}` in object")) }
     }
     Ok(Obj(fields))
@@ -458,7 +458,7 @@ let emit_indent(sb: *strings.Strbuf, indent: string, depth: i64) = {
 let encode_number(sb: *strings.Strbuf, n: f64) = {
     if n != n {
         strings.sb_append(sb, "null")
-    } else if n > 1.0e308 || n < -1.0e308 {
+    } elif n > 1.0e308 || n < -1.0e308 {
         strings.sb_append(sb, "null")
     } else {
         strings.sb_append_f64(sb, n)
@@ -514,13 +514,13 @@ let encode_string(sb: *strings.Strbuf, s: string) = {
     while i < n {
         let c = strings.byte_at(s, i)
         if c == 34 { strings.sb_append(sb, "\\\"") }
-        else if c == 92 { strings.sb_append(sb, "\\\\") }
-        else if c == 8 { strings.sb_append(sb, "\\b") }
-        else if c == 9 { strings.sb_append(sb, "\\t") }
-        else if c == 10 { strings.sb_append(sb, "\\n") }
-        else if c == 12 { strings.sb_append(sb, "\\f") }
-        else if c == 13 { strings.sb_append(sb, "\\r") }
-        else if c < 32 {
+        elif c == 92 { strings.sb_append(sb, "\\\\") }
+        elif c == 8 { strings.sb_append(sb, "\\b") }
+        elif c == 9 { strings.sb_append(sb, "\\t") }
+        elif c == 10 { strings.sb_append(sb, "\\n") }
+        elif c == 12 { strings.sb_append(sb, "\\f") }
+        elif c == 13 { strings.sb_append(sb, "\\r") }
+        elif c < 32 {
             strings.sb_append(sb, "\\u00")
             strings.sb_append(sb, hex_byte(c))
         }

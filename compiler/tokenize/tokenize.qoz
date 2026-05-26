@@ -69,9 +69,9 @@ let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = 
         match cur.kind {
         | TokPunct -> {
             if strings.eq_raw(cur.text, "(") { paren_depth += 1 }
-            else if strings.eq_raw(cur.text, "[") { paren_depth += 1 }
-            else if strings.eq_raw(cur.text, ")") { paren_depth -= 1 }
-            else if strings.eq_raw(cur.text, "]") { paren_depth -= 1 }
+            elif strings.eq_raw(cur.text, "[") { paren_depth += 1 }
+            elif strings.eq_raw(cur.text, ")") { paren_depth -= 1 }
+            elif strings.eq_raw(cur.text, "]") { paren_depth -= 1 }
         }
         | _ -> { }
         }
@@ -136,7 +136,7 @@ let skip_whitespace_and_comments(l: *Lexer) = {
             while depth > 0 && l.pos < len(l.src) {
                 if l.pos + 1 < len(l.src) && lex_at(l) == 47 && strings.byte_at(l.src, l.pos + 1) == 42 {
                     lex_advance(l); lex_advance(l); depth += 1
-                } else if l.pos + 1 < len(l.src) && lex_at(l) == 42 && strings.byte_at(l.src, l.pos + 1) == 47 {
+                } elif l.pos + 1 < len(l.src) && lex_at(l) == 42 && strings.byte_at(l.src, l.pos + 1) == 47 {
                     lex_advance(l); lex_advance(l); depth -= 1
                 } else {
                     lex_advance(l)
@@ -161,6 +161,7 @@ let build_keywords(): Map<string, bool> = {
     m["var"]      = true
     m["type"]     = true
     m["if"]       = true
+    m["elif"]     = true
     m["else"]     = true
     m["match"]    = true
     m["while"]    = true
@@ -377,6 +378,7 @@ let is_line_continuation(t: tokenize.Token): bool = {
     match t.kind {
     | TokKeyword -> {
         if strings.eq_raw(t.text, "else") { return true }
+        if strings.eq_raw(t.text, "elif") { return true }
         if strings.eq_raw(t.text, "as")   { return true }
         if strings.eq_raw(t.text, "in")   { return true }
         false
@@ -452,9 +454,9 @@ let run(src: string): Vec<tokenize.Token> = {
         match cur.kind {
         | TokPunct -> {
             if strings.eq_raw(cur.text, "(") { paren_depth += 1 }
-            else if strings.eq_raw(cur.text, "[") { paren_depth += 1 }
-            else if strings.eq_raw(cur.text, ")") { paren_depth -= 1 }
-            else if strings.eq_raw(cur.text, "]") { paren_depth -= 1 }
+            elif strings.eq_raw(cur.text, "[") { paren_depth += 1 }
+            elif strings.eq_raw(cur.text, ")") { paren_depth -= 1 }
+            elif strings.eq_raw(cur.text, "]") { paren_depth -= 1 }
         }
         | _ -> { }
         }

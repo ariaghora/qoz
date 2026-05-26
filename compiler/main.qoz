@@ -646,7 +646,7 @@ let clean_line(s: string): string = {
     while i < n {
         let c = strings.byte_at(s, i)
         if c == 9 { strings.sb_append(&b, "    ") }
-        else if c == 13 { }
+        elif c == 13 { }
         else { strings.sb_append(&b, strings.slice(s, i, i + 1)) }
         i += 1
     }

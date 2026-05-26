@@ -435,12 +435,12 @@ let looks_like_call_type_args(p: *Parser): bool = {
         if is_punct(t, "<") {
             depth += 1
             off += 1
-        } else if is_punct(t, ">") {
+        } elif is_punct(t, ">") {
             depth -= 1
             off += 1
-        } else if is_punct(t, ",") || is_punct(t, ".") || is_punct(t, "*") || is_punct(t, "&") || is_punct(t, "::") {
+        } elif is_punct(t, ",") || is_punct(t, ".") || is_punct(t, "*") || is_punct(t, "&") || is_punct(t, "::") {
             off += 1
-        } else if is_ident(t) {
+        } elif is_ident(t) {
             off += 1
         } else {
             return false
@@ -532,7 +532,7 @@ let parse_postfix(p: *Parser): ast.Expr = {
             | _ -> { }
             }
             if !handled { more = false }
-        } else if is_punct(tok, "<") && looks_like_call_type_args(p) {
+        } elif is_punct(tok, "<") && looks_like_call_type_args(p) {
             advance(p)
             var type_args: Vec<ast.TypeExpr> = vec.make()
             vec.push(&type_args, parse_type(p))
@@ -552,7 +552,7 @@ let parse_postfix(p: *Parser): ast.Expr = {
             }
             expect_punct(p, ")")
             e = ECall(span, e, type_args, args)
-        } else if is_punct(tok, "(") {
+        } elif is_punct(tok, "(") {
             var handled_sizeof = false
             match e {
             | EIdent(_, ename) -> {
@@ -588,12 +588,12 @@ let parse_postfix(p: *Parser): ast.Expr = {
                 expect_punct(p, ")")
                 e = ECall(span, e, vec.make(), args)
             }
-        } else if is_punct(tok, "[") {
+        } elif is_punct(tok, "[") {
             advance(p)
             let idx = parse_expr(p)
             expect_punct(p, "]")
             e = EIndex(span, e, idx)
-        } else if is_punct(tok, ".") {
+        } elif is_punct(tok, ".") {
             advance(p)
             let name_tok = peek(p)
             if is_ident(name_tok) {
@@ -603,11 +603,11 @@ let parse_postfix(p: *Parser): ast.Expr = {
                 err_unexpected(p, "field name after `.`", name_tok)
                 more = false
             }
-        } else if is_kw(tok, "as") {
+        } elif is_kw(tok, "as") {
             advance(p)
             let target = parse_type(p)
             e = ECast(span, e, target)
-        } else if is_punct(tok, "?") {
+        } elif is_punct(tok, "?") {
             advance(p)
             e = ETry(span, e)
         } else {
@@ -674,11 +674,11 @@ let c_escape_bytes(src: string): string = {
     while i < n {
         let b = strings.byte_at(src, i)
         if b == 92 { out = strings.cat(out, "\\\\") }
-        else if b == 34 { out = strings.cat(out, "\\\"") }
-        else if b == 10 { out = strings.cat(out, "\\n") }
-        else if b == 13 { out = strings.cat(out, "\\r") }
-        else if b == 9  { out = strings.cat(out, "\\t") }
-        else if b < 32 || b == 127 {
+        elif b == 34 { out = strings.cat(out, "\\\"") }
+        elif b == 10 { out = strings.cat(out, "\\n") }
+        elif b == 13 { out = strings.cat(out, "\\r") }
+        elif b == 9  { out = strings.cat(out, "\\t") }
+        elif b < 32 || b == 127 {
             out = strings.cat(out, `\\x{hex2(b)}`)
         } else {
             out = strings.cat(out, strings.slice(src, i, i + 1))
@@ -742,8 +742,8 @@ let scan_interp_end(body: string, start: i64): i64 = {
             }
         } else {
             if c == 34 { in_str = true }
-            else if c == 123 { depth += 1 }
-            else if c == 125 {
+            elif c == 123 { depth += 1 }
+            elif c == 125 {
                 depth -= 1
                 if depth == 0 { return i }
             }
@@ -839,15 +839,15 @@ let build_string_lit_or_interp(raw: string, span: ast.Span): ast.Expr = {
     while i < bn {
         let b = strings.byte_at(body, i)
         if b == 92 && i + 1 < bn { i += 2 }
-        else if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
+        elif b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
             needs_rewrite = true
             i = bn
         }
-        else if b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
+        elif b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
             needs_rewrite = true
             i = bn
         }
-        else if b == 123 && i + 1 < bn {
+        elif b == 123 && i + 1 < bn {
             let end = scan_interp_end(body, i + 1)
             if end >= 0 && interp_text_valid(strings.slice(body, i + 1, end)) {
                 needs_rewrite = true; i = bn
@@ -874,10 +874,10 @@ let build_string_lit_or_interp(raw: string, span: ast.Span): ast.Expr = {
         if b == 123 && i + 1 < bn && strings.byte_at(body, i + 1) == 123 {
             template = strings.cat(template, "{")
             i += 2
-        } else if b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
+        } elif b == 125 && i + 1 < bn && strings.byte_at(body, i + 1) == 125 {
             template = strings.cat(template, "}")
             i += 2
-        } else if b == 123 && i + 1 < bn {
+        } elif b == 123 && i + 1 < bn {
             let end = scan_interp_end(body, i + 1)
             let ident_text = if end >= 0 { strings.slice(body, i + 1, end) } else { "" }
             if end >= 0 && interp_text_valid(ident_text) {
@@ -1151,21 +1151,16 @@ let parse_if(p: *Parser): ast.Expr = {
     let kw_tok = peek(p)
     let span = span_of(p, kw_tok)
     advance(p)
-    // `if let PAT = EXPR { ... } else { ... }` desugars to a two-arm match.
     if is_kw(peek(p), "let") {
         advance(p)
         let pat = parse_pattern(p)
         expect_punct(p, "=")
         let scrut = parse_expr(p)
         let then_b = parse_block(p)
-        var else_b: ast.Expr = EBlock(span, vec.make(), ENil(span))
-        if is_kw(peek(p), "else") {
-            advance(p)
-            if is_kw(peek(p), "if") {
-                else_b = parse_if(p)
-            } else {
-                else_b = parse_block(p)
-            }
+        let raw_else = parse_if_tail(p, span)
+        let else_b = match raw_else {
+        | ENil(_) -> EBlock(span, vec.make(), ENil(span))
+        | _       -> raw_else
         }
         var arms: Vec<ast.MatchArm> = vec.make()
         vec.push(&arms, ast.MatchArm { pat: pat, body: then_b, has_guard: false, guard: ENil(span) })
@@ -1174,16 +1169,37 @@ let parse_if(p: *Parser): ast.Expr = {
     }
     let cond = parse_expr(p)
     let then_b = parse_block(p)
-    var else_b: ast.Expr = ENil(span)
+    let else_b = parse_if_tail(p, span)
+    EIf(span, cond, then_b, else_b)
+}
+
+// Tail of an if-chain: zero or more `elif COND { ... }` arms
+// followed by an optional `else { ... }`.
+let parse_if_tail(p: *Parser, anchor: ast.Span): ast.Expr = {
+    if is_kw(peek(p), "elif") {
+        let kw_tok = peek(p)
+        let span = span_of(p, kw_tok)
+        advance(p)
+        let cond = parse_expr(p)
+        let then_b = parse_block(p)
+        let nested = parse_if_tail(p, span)
+        return EIf(span, cond, then_b, nested)
+    }
     if is_kw(peek(p), "else") {
         advance(p)
         if is_kw(peek(p), "if") {
-            else_b = parse_if(p)
-        } else {
-            else_b = parse_block(p)
+            let bad = peek(p)
+            let span = span_of(p, bad)
+            record_error(p, `at line {bad.line} col {bad.col}: write 'elif' instead of 'else if'`)
+            advance(p)
+            let cond = parse_expr(p)
+            let then_b = parse_block(p)
+            let nested = parse_if_tail(p, span)
+            return EIf(span, cond, then_b, nested)
         }
+        return parse_block(p)
     }
-    EIf(span, cond, then_b, else_b)
+    ENil(anchor)
 }
 
 let parse_while(p: *Parser): ast.Expr = {
@@ -1395,7 +1411,7 @@ let parse_block(p: *Parser): ast.Expr = {
                 let value = parse_expr(p)
                 vec.push(&stmts, SLet(stmt_span, name, ann, value))
             }
-        } else if is_kw(t, "var") {
+        } elif is_kw(t, "var") {
             advance(p)
             let name = expect_ident(p)
             var ann: ast.TypeExpr = TEUnit(stmt_span)
@@ -1543,7 +1559,7 @@ let parse_variants(p: *Parser): Vec<ast.VariantDecl> = {
                 }
             }
             expect_punct(p, ")")
-        } else if is_punct(peek(p), "{") {
+        } elif is_punct(peek(p), "{") {
             kind = VPKNamed
             named = parse_struct_fields(p)
         }
@@ -1617,7 +1633,7 @@ let parse_decl(p: *Parser): ast.Decl = {
             if is_str_lit(a) {
                 advance(p)
                 arg = strip_quotes(a.text)
-            } else if is_ident(a) {
+            } elif is_ident(a) {
                 advance(p)
                 arg = a.text
             }
@@ -1625,7 +1641,7 @@ let parse_decl(p: *Parser): ast.Decl = {
         }
         if strings.eq_raw(name, "link_name") {
             attr_link_name = arg
-        } else if strings.eq_raw(name, "operator") {
+        } elif strings.eq_raw(name, "operator") {
             attr_operator = arg
         }
     }
@@ -1718,7 +1734,7 @@ let parse_link_directive(p: *Parser): ast.Decl = {
     var kind: ast.LinkKind = LinkLibrary
     if strings.eq_raw(name, "link_framework") {
         kind = LinkFramework
-    } else if strings.eq_raw(name, "link_path") {
+    } elif strings.eq_raw(name, "link_path") {
         kind = LinkPath
     }
     DLink(span, kind, lib_name)
