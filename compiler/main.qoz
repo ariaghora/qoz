@@ -974,7 +974,12 @@ type BuildResult = {
 // that produces the matching behaviour. Returned in the order the
 // directives appeared, so a user-controlled search path can precede
 // the library reference that depends on it.
-let collect_link_flags(file: ast.File): Vec<string> = {
+//
+// A relative #link_path is resolved against `qoz_root` so that
+// `#link_path("vendor/raylib")` declared inside the qoz repo
+// points at the same on-disk directory regardless of the user's
+// current working directory at compile time.
+let collect_link_flags(file: ast.File, qoz_root: string): Vec<string> = {
     var out: Vec<string> = vec.make()
     for d in file.decls {
         match d {
@@ -988,7 +993,8 @@ let collect_link_flags(file: ast.File): Vec<string> = {
                 vec.push(&out, name)
             }
             | LinkPath      -> {
-                vec.push(&out, strings.cat("-L", name))
+                let resolved = resolve_link_path(name, qoz_root)
+                vec.push(&out, strings.cat("-L", resolved))
             }
             }
         }
@@ -999,6 +1005,13 @@ let collect_link_flags(file: ast.File): Vec<string> = {
         }
     }
     out
+}
+
+let resolve_link_path(name: string, qoz_root: string): string = {
+    if len(name) == 0 { return name }
+    if strings.byte_at(name, 0) == 47 { return name }
+    if len(qoz_root) == 0 { return name }
+    strings.cat(strings.cat(qoz_root, "/"), name)
 }
 
 let cmd_build(path: string, qoz_root: string): main.BuildResult = {
@@ -1040,7 +1053,7 @@ let cmd_build(path: string, qoz_root: string): main.BuildResult = {
         fmt.println(`could not write {out_path}`)
         os.exit(1)
     }
-    main.BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred) }
+    main.BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred, qoz_root) }
 }
 
 // Derive the executable path from a C output path. The generated

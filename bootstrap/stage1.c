@@ -5633,7 +5633,8 @@ qoz_string qoz_path_basename(qoz_string path);
 qoz_EntryPaths qoz_resolve_entry_paths(qoz_string path);
 qoz_string qoz_cwd_basename(void);
 int64_t qoz_count_main_decls(qoz_Vec__qoz_ast_Decl decls);
-qoz_Vec__qoz_string qoz_collect_link_flags(qoz_ast_File file);
+qoz_Vec__qoz_string qoz_collect_link_flags(qoz_ast_File file, qoz_string qoz_root);
+qoz_string qoz_resolve_link_path(qoz_string name, qoz_string qoz_root);
 qoz_BuildResult qoz_cmd_build(qoz_string path, qoz_string qoz_root);
 qoz_string qoz_bin_path_for(qoz_string c_path);
 qoz_Vec__qoz_string qoz_clang_argv(qoz_string c_path, qoz_string bin_path, qoz_Vec__qoz_string link_flags);
@@ -6773,13 +6774,22 @@ int64_t qoz_count_main_decls(qoz_Vec__qoz_ast_Decl decls) {
     int64_t n = 0; { qoz_Vec__qoz_ast_Decl __col = decls; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_ast_Decl* d = __col.data[__i]; (void)d; qoz_ast_Decl* _qoz_ms_1 = d; switch (_qoz_ms_1->tag) { case qoz_ast_Decl_DFn: { qoz_string name = _qoz_ms_1->payload.DFn.f1; if (qoz_strings_eq_raw(name, QOZ_STR_LIT("main"))) { n = n + 1; } 0;  break; } default: { NULL;  break; } } 0; } }qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return n;
 }
 
-qoz_Vec__qoz_string qoz_collect_link_flags(qoz_ast_File file) {
+qoz_Vec__qoz_string qoz_collect_link_flags(qoz_ast_File file, qoz_string qoz_root) {
     int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
     qoz_frame_push("collect_link_flags");
     qoz_Vec__qoz_string out = qoz_vec_make__qoz_string(); { qoz_Vec__qoz_ast_Decl __col = file.decls; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_ast_Decl* d = __col.data[__i]; (void)d; qoz_ast_Decl* _qoz_ms_1 = d; switch (_qoz_ms_1->tag) { case qoz_ast_Decl_DLink: { qoz_ast_LinkKind* kind = _qoz_ms_1->payload.DLink.f1; qoz_string name = _qoz_ms_1->payload.DLink.f2; qoz_ast_LinkKind* _qoz_ms_2 = kind; switch (_qoz_ms_2->tag) { case qoz_ast_LinkKind_LinkLibrary: { qoz_vec_push__qoz_string(&out, qoz_strings_cat(QOZ_STR_LIT("-l"), name));  break; } case qoz_ast_LinkKind_LinkFramework: { {
         qoz_vec_push__qoz_string(&out, QOZ_STR_LIT("-framework")); qoz_vec_push__qoz_string(&out, name); 
     }
-    0;  break; } case qoz_ast_LinkKind_LinkPath: { qoz_vec_push__qoz_string(&out, qoz_strings_cat(QOZ_STR_LIT("-L"), name));  break; } } 0;  break; } default: { NULL;  break; } } 0; } }qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return out;
+    0;  break; } case qoz_ast_LinkKind_LinkPath: { {
+        qoz_string resolved = qoz_resolve_link_path(name, qoz_root); qoz_vec_push__qoz_string(&out, qoz_strings_cat(QOZ_STR_LIT("-L"), resolved)); 
+    }
+    0;  break; } } 0;  break; } default: { NULL;  break; } } 0; } }qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return out;
+}
+
+qoz_string qoz_resolve_link_path(qoz_string name, qoz_string qoz_root) {
+    int64_t _qoz_shadow_guard = qoz_gc_shadow_top();
+    qoz_frame_push("resolve_link_path");
+    if ((name).len == 0) { return name;} if (qoz_strings_byte_at(name, 0) == 47) { return name;} if ((qoz_root).len == 0) { return name;} qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return qoz_strings_cat(qoz_strings_cat(qoz_root, QOZ_STR_LIT("/")), name);
 }
 
 qoz_BuildResult qoz_cmd_build(qoz_string path, qoz_string qoz_root) {
@@ -6787,17 +6797,17 @@ qoz_BuildResult qoz_cmd_build(qoz_string path, qoz_string qoz_root) {
     qoz_frame_push("cmd_build");
     qoz_EntryPaths paths = qoz_resolve_entry_paths(path); qoz_CompileCtx ctx = qoz_make_compile_ctx(qoz_root); qoz_Map__qoz_string__qoz_string overrides = qoz_map_make__qoz_string__qoz_string(); qoz_Loaded loaded = qoz_load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides); if ((loaded.errors.len) > 0) { { qoz_Vec__qoz_string __col = loaded.errors; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_string msg = __col.data[__i]; (void)msg; qoz_fmt_println(msg); } }qoz_os_exit(1); } qoz_ast_File file = loaded.file; int64_t main_count = qoz_count_main_decls(file.decls); if (main_count == 0) { qoz_string _qoz_bv_37;
     {
-        void* _qoz_sb_1016_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1016_21); qoz_interp_push_str(_qoz_sb_1016_21, path); qoz_interp_push_str(_qoz_sb_1016_21, QOZ_STR_LIT(": no main function found")); _qoz_bv_37 = qoz_interp_finish(_qoz_sb_1016_21);
+        void* _qoz_sb_1029_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1029_21); qoz_interp_push_str(_qoz_sb_1029_21, path); qoz_interp_push_str(_qoz_sb_1029_21, QOZ_STR_LIT(": no main function found")); _qoz_bv_37 = qoz_interp_finish(_qoz_sb_1029_21);
     }
     qoz_fmt_println(_qoz_bv_37); qoz_os_exit(1); } if (main_count > 1) { qoz_string _qoz_bv_38;
     {
-        void* _qoz_sb_1020_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1020_21); qoz_interp_push_str(_qoz_sb_1020_21, path); qoz_interp_push_str(_qoz_sb_1020_21, QOZ_STR_LIT(": more than one main function found (")); qoz_interp_push_i64(_qoz_sb_1020_21, main_count); qoz_interp_push_str(_qoz_sb_1020_21, QOZ_STR_LIT(")")); _qoz_bv_38 = qoz_interp_finish(_qoz_sb_1020_21);
+        void* _qoz_sb_1033_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1033_21); qoz_interp_push_str(_qoz_sb_1033_21, path); qoz_interp_push_str(_qoz_sb_1033_21, QOZ_STR_LIT(": more than one main function found (")); qoz_interp_push_i64(_qoz_sb_1033_21, main_count); qoz_interp_push_str(_qoz_sb_1033_21, QOZ_STR_LIT(")")); _qoz_bv_38 = qoz_interp_finish(_qoz_sb_1033_21);
     }
     qoz_fmt_println(_qoz_bv_38); qoz_os_exit(1); } qoz_check_TyContext tc = qoz_check_make_ctx(); tc.type_homes = loaded.type_homes; tc.fn_homes = loaded.fn_homes; tc.file_pkgs = loaded.file_pkgs; qoz_check_register_file(&tc, file); qoz_check_validate_signatures(&tc, file); qoz_ast_File inferred = qoz_check_infer_calls(&tc, file); qoz_check_check_fn_bodies(&tc, inferred); qoz_check_report(&tc); if ((tc.errors.len) > 0) { qoz_os_exit(1); } qoz_string c_source = qoz_emit_emit_program(inferred, tc.expr_types); qoz_Vec__qoz_string _keep_alive = loaded.sources; qoz_string out_path = paths.c_path; bool ok = qoz_fs_write_file(out_path, c_source); if (!ok) { qoz_string _qoz_bv_39;
     {
-        void* _qoz_sb_1040_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1040_21); qoz_interp_push_str(_qoz_sb_1040_21, QOZ_STR_LIT("could not write ")); qoz_interp_push_str(_qoz_sb_1040_21, out_path); _qoz_bv_39 = qoz_interp_finish(_qoz_sb_1040_21);
+        void* _qoz_sb_1053_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1053_21); qoz_interp_push_str(_qoz_sb_1053_21, QOZ_STR_LIT("could not write ")); qoz_interp_push_str(_qoz_sb_1053_21, out_path); _qoz_bv_39 = qoz_interp_finish(_qoz_sb_1053_21);
     }
-    qoz_fmt_println(_qoz_bv_39); qoz_os_exit(1); } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return ((qoz_BuildResult){ .c_path = out_path, .link_flags = qoz_collect_link_flags(inferred) });
+    qoz_fmt_println(_qoz_bv_39); qoz_os_exit(1); } qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return ((qoz_BuildResult){ .c_path = out_path, .link_flags = qoz_collect_link_flags(inferred, qoz_root) });
 }
 
 qoz_string qoz_bin_path_for(qoz_string c_path) {
@@ -6805,7 +6815,7 @@ qoz_string qoz_bin_path_for(qoz_string c_path) {
     qoz_frame_push("bin_path_for");
     if (qoz_strings_has_suffix(c_path, QOZ_STR_LIT(".qoz.c"))) { int64_t n = (c_path).len; return qoz_strings_cat(qoz_strings_slice(c_path, 0, n - 6), qoz_EXE_SUFFIX());} if (qoz_strings_has_suffix(c_path, QOZ_STR_LIT(".c"))) { int64_t n = (c_path).len; return qoz_strings_cat(qoz_strings_slice(c_path, 0, n - 2), qoz_EXE_SUFFIX());} qoz_string _qoz_bv_40;
     {
-        void* _qoz_sb_1061_14 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1061_14); qoz_interp_push_str(_qoz_sb_1061_14, QOZ_STR_LIT("bin_path_for: c_path '")); qoz_interp_push_str(_qoz_sb_1061_14, c_path); qoz_interp_push_str(_qoz_sb_1061_14, QOZ_STR_LIT("' does not end in .c")); _qoz_bv_40 = qoz_interp_finish(_qoz_sb_1061_14);
+        void* _qoz_sb_1074_14 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1074_14); qoz_interp_push_str(_qoz_sb_1074_14, QOZ_STR_LIT("bin_path_for: c_path '")); qoz_interp_push_str(_qoz_sb_1074_14, c_path); qoz_interp_push_str(_qoz_sb_1074_14, QOZ_STR_LIT("' does not end in .c")); _qoz_bv_40 = qoz_interp_finish(_qoz_sb_1074_14);
     }
     qoz_panic(_qoz_bv_40); qoz_frame_pop(); qoz_gc_shadow_set_top(_qoz_shadow_guard); return QOZ_STR_LIT("");
 }
@@ -6827,11 +6837,11 @@ void qoz_cmd_fmt(qoz_string path) {
     qoz_frame_push("cmd_fmt");
     qoz_string src = qoz_fs_read_file(path); if ((src).len < 0) { qoz_string _qoz_bv_41;
     {
-        void* _qoz_sb_1111_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1111_21); qoz_interp_push_str(_qoz_sb_1111_21, QOZ_STR_LIT("qoz fmt: cannot read '")); qoz_interp_push_str(_qoz_sb_1111_21, path); qoz_interp_push_str(_qoz_sb_1111_21, QOZ_STR_LIT("'")); _qoz_bv_41 = qoz_interp_finish(_qoz_sb_1111_21);
+        void* _qoz_sb_1124_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1124_21); qoz_interp_push_str(_qoz_sb_1124_21, QOZ_STR_LIT("qoz fmt: cannot read '")); qoz_interp_push_str(_qoz_sb_1124_21, path); qoz_interp_push_str(_qoz_sb_1124_21, QOZ_STR_LIT("'")); _qoz_bv_41 = qoz_interp_finish(_qoz_sb_1124_21);
     }
     qoz_fmt_println(_qoz_bv_41); qoz_os_exit(1); } qoz_string normalised = qoz_normalise_whitespace(src); if (!qoz_fs_write_file(path, normalised)) { qoz_string _qoz_bv_42;
     {
-        void* _qoz_sb_1116_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1116_21); qoz_interp_push_str(_qoz_sb_1116_21, QOZ_STR_LIT("qoz fmt: cannot write '")); qoz_interp_push_str(_qoz_sb_1116_21, path); qoz_interp_push_str(_qoz_sb_1116_21, QOZ_STR_LIT("'")); _qoz_bv_42 = qoz_interp_finish(_qoz_sb_1116_21);
+        void* _qoz_sb_1129_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1129_21); qoz_interp_push_str(_qoz_sb_1129_21, QOZ_STR_LIT("qoz fmt: cannot write '")); qoz_interp_push_str(_qoz_sb_1129_21, path); qoz_interp_push_str(_qoz_sb_1129_21, QOZ_STR_LIT("'")); _qoz_bv_42 = qoz_interp_finish(_qoz_sb_1129_21);
     }
     qoz_fmt_println(_qoz_bv_42); qoz_os_exit(1); } 
     return;
@@ -6861,7 +6871,7 @@ void qoz_cmd_check(qoz_string path, qoz_string qoz_root, bool from_stdin) {
     qoz_frame_push("cmd_check");
     qoz_EntryPaths paths = qoz_resolve_entry_paths(path); qoz_CompileCtx ctx = qoz_make_compile_ctx(qoz_root); qoz_Map__qoz_string__qoz_string overrides = qoz_map_make__qoz_string__qoz_string(); if (from_stdin) { qoz_string buffer = qoz_io_read_all_stdin(); { qoz_Vec__qoz_string __col = paths.entries; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_string ep = __col.data[__i]; (void)ep; qoz_map_set__qoz_string__qoz_string(&overrides, ep, buffer); } }} qoz_Loaded loaded = qoz_load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides); { qoz_Vec__qoz_string __col = loaded.errors; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_string msg = __col.data[__i]; (void)msg; qoz_fmt_println(msg); } }qoz_ast_File file = loaded.file; qoz_check_TyContext tc = qoz_check_make_ctx(); tc.type_homes = loaded.type_homes; tc.fn_homes = loaded.fn_homes; tc.file_pkgs = loaded.file_pkgs; qoz_check_register_file(&tc, file); qoz_check_validate_signatures(&tc, file); qoz_ast_File inferred = qoz_check_infer_calls(&tc, file); qoz_check_check_fn_bodies(&tc, inferred); { qoz_Vec__qoz_check_TypeError __col = tc.errors; for (int64_t __i = 0; __i < __col.len; __i++) { qoz_check_TypeError e = __col.data[__i]; (void)e; qoz_string _qoz_bv_43;
     {
-        void* _qoz_sb_1220_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1220_21); qoz_interp_push_str(_qoz_sb_1220_21, e.span.file); qoz_interp_push_str(_qoz_sb_1220_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_1220_21, e.span.line); qoz_interp_push_str(_qoz_sb_1220_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_1220_21, e.span.col); qoz_interp_push_str(_qoz_sb_1220_21, QOZ_STR_LIT(": ")); qoz_interp_push_str(_qoz_sb_1220_21, e.message); _qoz_bv_43 = qoz_interp_finish(_qoz_sb_1220_21);
+        void* _qoz_sb_1233_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1233_21); qoz_interp_push_str(_qoz_sb_1233_21, e.span.file); qoz_interp_push_str(_qoz_sb_1233_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_1233_21, e.span.line); qoz_interp_push_str(_qoz_sb_1233_21, QOZ_STR_LIT(":")); qoz_interp_push_i64(_qoz_sb_1233_21, e.span.col); qoz_interp_push_str(_qoz_sb_1233_21, QOZ_STR_LIT(": ")); qoz_interp_push_str(_qoz_sb_1233_21, e.message); _qoz_bv_43 = qoz_interp_finish(_qoz_sb_1233_21);
     }
     qoz_fmt_println(_qoz_bv_43); } }qoz_Vec__qoz_string _keep_alive = loaded.sources; qoz_os_exit(0); 
     return;
@@ -6874,11 +6884,11 @@ int main(int argc, char **argv) {
     qoz_frame_push("main");
     qoz_Vec__qoz_string args = qoz_os_args(); if ((args.len) < 2) { qoz_fmt_println(QOZ_STR_LIT("usage: qoz <subcommand> <path>")); qoz_fmt_println(QOZ_STR_LIT("       qoz build <path>   compile to <path>.c and clang to <path>.bin")); qoz_fmt_println(QOZ_STR_LIT("       qoz run   <path>   build, then execute and propagate exit code")); qoz_fmt_println(QOZ_STR_LIT("       qoz emit  <path>   write <path>.c only (no clang)")); qoz_fmt_println(QOZ_STR_LIT("       qoz fmt   <path>   rewrite <path> with normalised whitespace")); qoz_os_exit(1); } qoz_string qoz_root = qoz_os_getenv(QOZ_STR_LIT("QOZ_ROOT")); qoz_string first = args.data[1]; if (qoz_strings_eq_raw(first, QOZ_STR_LIT("fmt"))) { if ((args.len) < 3) { qoz_fmt_println(QOZ_STR_LIT("usage: qoz fmt <path>")); qoz_os_exit(1); } qoz_cmd_fmt(args.data[2]); qoz_os_exit(0); }  else { if (qoz_strings_eq_raw(first, QOZ_STR_LIT("check"))) { bool from_stdin = false; qoz_string target = QOZ_STR_LIT(""); if (((args.len) >= 4) && qoz_strings_eq_raw(args.data[2], QOZ_STR_LIT("--stdin"))) { from_stdin = true; target = args.data[3]; }  else { if ((args.len) >= 3) { target = args.data[2]; }  else { qoz_fmt_println(QOZ_STR_LIT("usage: qoz check [--stdin] <path>")); qoz_os_exit(1); } } qoz_cmd_check(target, qoz_root, from_stdin); qoz_os_exit(0); }  else { if (qoz_strings_eq_raw(first, QOZ_STR_LIT("emit"))) { if ((args.len) < 3) { qoz_fmt_println(QOZ_STR_LIT("usage: qoz emit <path>")); qoz_os_exit(1); } qoz_BuildResult built = qoz_cmd_build(args.data[2], qoz_root); qoz_string _qoz_bv_44;
     {
-        void* _qoz_sb_1270_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1270_21); qoz_interp_push_str(_qoz_sb_1270_21, QOZ_STR_LIT("wrote ")); qoz_interp_push_str(_qoz_sb_1270_21, built.c_path); _qoz_bv_44 = qoz_interp_finish(_qoz_sb_1270_21);
+        void* _qoz_sb_1283_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1283_21); qoz_interp_push_str(_qoz_sb_1283_21, QOZ_STR_LIT("wrote ")); qoz_interp_push_str(_qoz_sb_1283_21, built.c_path); _qoz_bv_44 = qoz_interp_finish(_qoz_sb_1283_21);
     }
     qoz_fmt_println(_qoz_bv_44); qoz_os_exit(0); }  else { if (qoz_strings_eq_raw(first, QOZ_STR_LIT("build"))) { if ((args.len) < 3) { qoz_fmt_println(QOZ_STR_LIT("usage: qoz build <path>")); qoz_os_exit(1); } qoz_string path = args.data[2]; qoz_BuildResult built = qoz_cmd_build(path, qoz_root); qoz_string bin_path = qoz_bin_path_for(built.c_path); qoz_Vec__qoz_string cargv = qoz_clang_argv(built.c_path, bin_path, built.link_flags); qoz_os_ProcessResult r = qoz_os_process_exec(cargv); if (r.exit_code != 0) { qoz_fmt_print(r.stdout); qoz_fmt_print(r.stderr); qoz_unlink_quiet(built.c_path); qoz_os_exit(1); } qoz_unlink_quiet(built.c_path); qoz_os_exit(0); }  else { if (qoz_strings_eq_raw(first, QOZ_STR_LIT("run"))) { if ((args.len) < 3) { qoz_fmt_println(QOZ_STR_LIT("usage: qoz run <path>")); qoz_os_exit(1); } qoz_cmd_run(args.data[2], qoz_root); }  else { qoz_BuildResult built = qoz_cmd_build(first, qoz_root); qoz_string _qoz_bv_45;
     {
-        void* _qoz_sb_1304_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1304_21); qoz_interp_push_str(_qoz_sb_1304_21, QOZ_STR_LIT("wrote ")); qoz_interp_push_str(_qoz_sb_1304_21, built.c_path); _qoz_bv_45 = qoz_interp_finish(_qoz_sb_1304_21);
+        void* _qoz_sb_1317_21 = qoz_interp_init(); qoz_gc_push_root(&_qoz_sb_1317_21); qoz_interp_push_str(_qoz_sb_1317_21, QOZ_STR_LIT("wrote ")); qoz_interp_push_str(_qoz_sb_1317_21, built.c_path); _qoz_bv_45 = qoz_interp_finish(_qoz_sb_1317_21);
     }
     qoz_fmt_println(_qoz_bv_45); qoz_os_exit(0); } } } } } 
     qoz_shutdown();
