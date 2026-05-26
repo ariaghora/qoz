@@ -418,25 +418,208 @@ let byte_offset_of(text: string, line: i64, col: i64): i64 = {
     off + col
 }
 
+// Read the dotted ident path that contains (line, col). Returns
+// `["parse", "run"]` when the cursor is anywhere inside `parse.run`.
+// Returns a single-element vector for a bare identifier and an
+// empty vector when the cursor is not on an identifier.
+let dotted_ident_path_at(text: string, line: i64, col: i64): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    let offset = byte_offset_of(text, line, col)
+    if offset < 0 { return out }
+    let n = len(text)
+    if offset >= n || !is_ident_byte(strings.byte_at(text, offset)) { return out }
+    // Walk left to the start of the leftmost segment in the dotted
+    // path. `path_lo` ends up at the first byte of segment 0.
+    var path_lo = offset
+    while path_lo > 0 && is_ident_byte(strings.byte_at(text, path_lo - 1)) { path_lo -= 1 }
+    while path_lo >= 2 && strings.byte_at(text, path_lo - 1) == 46 && is_ident_byte(strings.byte_at(text, path_lo - 2)) {
+        path_lo -= 1
+        while path_lo > 0 && is_ident_byte(strings.byte_at(text, path_lo - 1)) { path_lo -= 1 }
+    }
+    // Walk right to the end of the rightmost segment. `path_hi` ends
+    // up one past the last byte of the final segment.
+    var path_hi = offset + 1
+    while path_hi < n && is_ident_byte(strings.byte_at(text, path_hi)) { path_hi += 1 }
+    while path_hi + 1 < n && strings.byte_at(text, path_hi) == 46 && is_ident_byte(strings.byte_at(text, path_hi + 1)) {
+        path_hi += 1
+        while path_hi < n && is_ident_byte(strings.byte_at(text, path_hi)) { path_hi += 1 }
+    }
+    // Split the slice on `.`.
+    var i = path_lo
+    var seg_start = path_lo
+    while i < path_hi {
+        if strings.byte_at(text, i) == 46 {
+            vec.push(&out, strings.slice(text, seg_start, i))
+            seg_start = i + 1
+        }
+        i += 1
+    }
+    vec.push(&out, strings.slice(text, seg_start, path_hi))
+    out
+}
+
 // Search the buffer's AST for a top-level declaration whose name
 // matches `name`. Returns the declaration's span when found. Local
-// variables and cross-package symbols are not supported yet.
+// variables are not resolved.
 let find_definition(text: string, name: string): Option<ast.Span> = {
     if strings.eq_raw(name, "") { return None }
     let tokens = tokenize.run(text)
     let parsed = parse.run(tokens, "")
-    for d in parsed.file.decls {
+    decl_named_in_file(parsed.file, name)
+}
+
+// Walk every top-level declaration in `f` and return the span of
+// the one named `name`. None when no declaration matches. Variant
+// constructors inside an enum count under the enum's variant name.
+let decl_named_in_file(f: ast.File, name: string): Option<ast.Span> = {
+    for d in f.decls {
         match d {
-        | DFn(sp, n, _, _, _, _, _)        -> if strings.eq_raw(n, name) { return Some(sp) }
-        | DStruct(sp, n, _, _)             -> if strings.eq_raw(n, name) { return Some(sp) }
-        | DEnum(sp, n, _, _)               -> if strings.eq_raw(n, name) { return Some(sp) }
-        | DTypeAlias(sp, n, _, _)          -> if strings.eq_raw(n, name) { return Some(sp) }
-        | DConst(sp, n, _, _)              -> if strings.eq_raw(n, name) { return Some(sp) }
-        | DExternal(sp, n, _, _, _)        -> if strings.eq_raw(n, name) { return Some(sp) }
+        | DFn(sp, n, _, _, _, _, _) | DStruct(sp, n, _, _) | DEnum(sp, n, _, _)
+        | DTypeAlias(sp, n, _, _)   | DConst(sp, n, _, _)  | DExternal(sp, n, _, _, _) -> {
+            if strings.eq_raw(n, name) { return Some(sp) }
+        }
         | _ -> { }
         }
     }
     None
+}
+
+// Result of looking up a qualified definition (e.g. `parse.run`)
+// across the imported package. Carries the file the declaration
+// lives in so the LSP can publish the right URI.
+type CrossPkgHit = {
+    file: string,
+    span: ast.Span,
+}
+
+// Resolve `<alias>.<name>` against the buffer's import list. The
+// alias must appear as the last segment of an `import` path or as
+// the explicit alias on `import ... as alias`. Returns None when
+// the import is unknown, the package directory cannot be found,
+// or no declaration in the package is named `name`.
+let find_cross_package_definition(text: string, alias: string, name: string): Option<lsp.CrossPkgHit> = {
+    if strings.eq_raw(alias, "") || strings.eq_raw(name, "") { return None }
+    let imports = imports_of_buffer(text)
+    var ipath: Vec<string> = vec.make()
+    var have = false
+    match map.get(&imports, alias) {
+    | Some(p) -> {
+        ipath = p
+        have = true
+    }
+    | None -> { }
+    }
+    if !have { return None }
+    let dir = resolve_pkg_dir(ipath)
+    if strings.eq_raw(dir, "") { return None }
+    let files = list_pkg_files(dir)
+    for fpath in files {
+        let src = fs.read_file(fpath)
+        if len(src) >= 0 {
+            let tokens = tokenize.run(src)
+            let parsed = parse.run(tokens, fpath)
+            match decl_named_in_file(parsed.file, name) {
+            | Some(sp) -> return Some(lsp.CrossPkgHit { file: fpath, span: sp })
+            | None     -> { }
+            }
+        }
+    }
+    None
+}
+
+// Collect every top-level declaration name from every .qoz file
+// in the directory `dir`. Used by dotted completion to suggest
+// members of an imported package.
+let list_pkg_decls(dir: string): Vec<(string, f64)> = {
+    var out: Vec<(string, f64)> = vec.make()
+    let files = list_pkg_files(dir)
+    for fpath in files {
+        let src = fs.read_file(fpath)
+        if len(src) >= 0 {
+            let tokens = tokenize.run(src)
+            let parsed = parse.run(tokens, fpath)
+            for d in parsed.file.decls {
+                match d {
+                | DFn(_, n, _, _, _, _, _)        -> vec.push(&out, (n, KIND_FUNCTION()))
+                | DExternal(_, n, _, _, _)        -> vec.push(&out, (n, KIND_FUNCTION()))
+                | DStruct(_, n, _, _)             -> vec.push(&out, (n, KIND_STRUCT()))
+                | DEnum(_, n, _, vs)              -> {
+                    vec.push(&out, (n, KIND_ENUM()))
+                    for v in vs { vec.push(&out, (v.name, KIND_FIELD())) }
+                }
+                | DTypeAlias(_, n, _, _)          -> vec.push(&out, (n, KIND_STRUCT()))
+                | DConst(_, n, _, _)              -> vec.push(&out, (n, KIND_CONSTANT()))
+                | _ -> { }
+                }
+            }
+        }
+    }
+    out
+}
+
+// Parse `text` and return its import map keyed by the alias the
+// user writes to reach the package. The value is the path segment
+// vector from the `import` statement, which feeds into
+// resolve_pkg_dir.
+let imports_of_buffer(text: string): Map<string, Vec<string>> = {
+    var out: Map<string, Vec<string>> = map.make()
+    let tokens = tokenize.run(text)
+    let parsed = parse.run(tokens, "")
+    for d in parsed.file.decls {
+        match d {
+        | DImport(_, path, alias) -> {
+            var key = alias
+            if strings.eq_raw(key, "") && len(path) > 0 { key = path[len(path) - 1] }
+            if !strings.eq_raw(key, "") { map.set(&out, key, path) }
+        }
+        | _ -> { }
+        }
+    }
+    out
+}
+
+// Resolve a dotted import path to its on-disk directory. Tries
+// (CWD-relative, std/-prefixed, QOZ_ROOT-prefixed) in the same
+// order as the compiler's loader so the LSP and the compiler
+// agree on which file an import refers to.
+let resolve_pkg_dir(segs: Vec<string>): string = {
+    if len(segs) < 1 { return "" }
+    let last = segs[len(segs) - 1]
+    var joined = ""
+    var i: i64 = 0
+    while i < len(segs) {
+        if i > 0 { joined = strings.cat(joined, "/") }
+        joined = strings.cat(joined, segs[i])
+        i += 1
+    }
+    let probe_rel = strings.cat(joined, strings.cat("/", strings.cat(last, ".qoz")))
+    if fs.file_exists(probe_rel) { return joined }
+    let qoz_root = os.getenv("QOZ_ROOT")
+    if len(qoz_root) > 0 {
+        let std_dir   = strings.cat(strings.cat(qoz_root, "/std/"), joined)
+        let std_probe = strings.cat(strings.cat(qoz_root, "/std/"), probe_rel)
+        if fs.file_exists(std_probe) { return std_dir }
+        let abs_dir   = strings.cat(strings.cat(qoz_root, "/"), joined)
+        let abs_probe = strings.cat(strings.cat(qoz_root, "/"), probe_rel)
+        if fs.file_exists(abs_probe) { return abs_dir }
+    }
+    ""
+}
+
+// Return every .qoz file in `dir`. Mirrors main.qoz's
+// list_package_files. The newline-separated list from
+// fs.list_qoz_files is split here.
+let list_pkg_files(dir: string): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    let raw = fs.list_qoz_files(dir)
+    if len(raw) == 0 { return out }
+    let parts = strings.split(raw, 10)
+    for name in parts {
+        if len(name) > 0 {
+            vec.push(&out, strings.cat(strings.cat(dir, "/"), name))
+        }
+    }
+    out
 }
 
 // Build a LSP Location JSON value pointing at `span` inside `uri`.
@@ -502,12 +685,27 @@ let definition_response(s: *Server, params: json.Json): json.Json = {
     | None -> { }
     }
     if !have_text { return Null }
-    let name = identifier_at(text, line, col)
-    if strings.eq_raw(name, "") { return Null }
+    let path = dotted_ident_path_at(text, line, col)
+    if len(path) == 2 {
+        let alias = path[0]
+        let name  = path[1]
+        match find_cross_package_definition(text, alias, name) {
+        | Some(hit) -> return location_of(file_uri(hit.file), hit.span, len(name))
+        | None      -> { }
+        }
+        return Null
+    }
+    if len(path) != 1 { return Null }
+    let name = path[0]
     match find_definition(text, name) {
     | Some(sp) -> location_of(uri, sp, len(name))
     | None     -> Null
     }
+}
+
+let file_uri(path: string): string = {
+    if strings.has_prefix(path, "/") { strings.cat("file://", path) }
+    else { strings.cat("file://", path) }
 }
 
 // Build the response for textDocument/hover. Returns the source
@@ -537,21 +735,40 @@ let hover_response(s: *Server, params: json.Json): json.Json = {
     | None -> { }
     }
     if !have_text { return Null }
-    let name = identifier_at(text, lc._0, lc._1)
-    if strings.eq_raw(name, "") { return Null }
+    let path = dotted_ident_path_at(text, lc._0, lc._1)
+    if len(path) == 2 {
+        let alias = path[0]
+        let name  = path[1]
+        match find_cross_package_definition(text, alias, name) {
+        | None      -> return Null
+        | Some(hit) -> {
+            let src = fs.read_file(hit.file)
+            if len(src) < 0 { return Null }
+            let line_text = nth_line_of(src, hit.span.line)
+            if strings.eq_raw(line_text, "") { return Null }
+            return hover_markdown(line_text)
+        }
+        }
+    }
+    if len(path) != 1 { return Null }
+    let name = path[0]
     match find_definition(text, name) {
     | None     -> Null
     | Some(sp) -> {
         let line_text = nth_line_of(text, sp.line)
         if strings.eq_raw(line_text, "") { return Null }
-        var contents: Map<string, json.Json> = map.make()
-        contents["kind"]  = Str("markdown")
-        contents["value"] = Str(strings.cat(strings.cat("```qoz\n", line_text), "\n```"))
-        var m: Map<string, json.Json> = map.make()
-        m["contents"] = Obj(contents)
-        Obj(m)
+        hover_markdown(line_text)
     }
     }
+}
+
+let hover_markdown(line_text: string): json.Json = {
+    var contents: Map<string, json.Json> = map.make()
+    contents["kind"]  = Str("markdown")
+    contents["value"] = Str(strings.cat(strings.cat("```qoz\n", line_text), "\n```"))
+    var m: Map<string, json.Json> = map.make()
+    m["contents"] = Obj(contents)
+    Obj(m)
 }
 
 // Return the nth (1-indexed) line of `text` excluding the
@@ -604,6 +821,10 @@ let completion_response(s: *Server, params: json.Json): json.Json = {
     | None -> { }
     }
     if !have_text { return empty_completion_list() }
+    let dot = dot_qualifier_at(text, lc._0, lc._1)
+    if !strings.eq_raw(dot._0, "") {
+        return package_member_completions(text, dot._0, dot._1)
+    }
     let prefix = identifier_prefix_at(text, lc._0, lc._1)
     var items: Vec<json.Json> = vec.make()
     let tokens = tokenize.run(text)
@@ -629,6 +850,57 @@ let completion_response(s: *Server, params: json.Json): json.Json = {
     m["isIncomplete"] = Bool(false)
     m["items"]        = Arr(items)
     Obj(m)
+}
+
+// Suggest every top-level decl in the package reachable through
+// `alias`, filtered by `prefix`. The completion fires when the
+// user types `alias.<prefix>`.
+let package_member_completions(text: string, alias: string, prefix: string): json.Json = {
+    let imports = imports_of_buffer(text)
+    var ipath: Vec<string> = vec.make()
+    var have = false
+    match map.get(&imports, alias) {
+    | Some(p) -> {
+        ipath = p
+        have = true
+    }
+    | None -> { }
+    }
+    if !have { return empty_completion_list() }
+    let dir = resolve_pkg_dir(ipath)
+    if strings.eq_raw(dir, "") { return empty_completion_list() }
+    var items: Vec<json.Json> = vec.make()
+    for entry in list_pkg_decls(dir) {
+        push_completion_if_match(&items, entry._0, prefix, entry._1)
+    }
+    var m: Map<string, json.Json> = map.make()
+    m["isIncomplete"] = Bool(false)
+    m["items"]        = Arr(items)
+    Obj(m)
+}
+
+// Detect whether the cursor sits inside `<alias>.<prefix>`.
+// Returns the alias and the prefix to the right of the dot when
+// so, both empty otherwise. The alias must be an identifier
+// followed directly by `.`.
+let dot_qualifier_at(text: string, line: i64, col: i64): (string, string) = {
+    let offset = byte_offset_of(text, line, col)
+    if offset < 0 { return ("", "") }
+    let n = len(text)
+    if offset > n { return ("", "") }
+    // The prefix is bytes to the LEFT of `offset` that are ident
+    // bytes, up to (but not including) a leading `.`.
+    var prefix_lo = offset
+    while prefix_lo > 0 && is_ident_byte(strings.byte_at(text, prefix_lo - 1)) { prefix_lo -= 1 }
+    let prefix = strings.slice(text, prefix_lo, offset)
+    // The byte at prefix_lo - 1 must be `.` for the dotted form to
+    // apply. Otherwise this is a plain identifier prefix.
+    if prefix_lo == 0 || strings.byte_at(text, prefix_lo - 1) != 46 { return ("", "") }
+    var alias_hi = prefix_lo - 1
+    var alias_lo = alias_hi
+    while alias_lo > 0 && is_ident_byte(strings.byte_at(text, alias_lo - 1)) { alias_lo -= 1 }
+    if alias_lo == alias_hi { return ("", "") }
+    (strings.slice(text, alias_lo, alias_hi), prefix)
 }
 
 let empty_completion_list(): json.Json = {
