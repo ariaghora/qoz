@@ -5524,6 +5524,14 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
         emit_expr(e, arm.guard)
         push(e, ") { ")
     }
+    // Sub-emits inside the arm body may hoist statements (a string
+    // interpolation builder, a nested match-as-value, a closure
+    // construction) into e.pending_prologue. Open a fresh scope so
+    // those land inside this arm's `{ ... }` block where the
+    // pattern-bound locals are in scope. Without the scope they
+    // leak above the enclosing match and reference undeclared
+    // names.
+    let arm_scope = open_statement_scope(e)
     if is_void {
         emit_stmt_expr(e, arm.body)
     } else {
@@ -5532,6 +5540,7 @@ let emit_arm_in_chain_with_te(e: *Emitter, enum_name: string, scrut_tmp: string,
         emit_value_with_hint(e, arm.body, body_hint)
         push(e, "); ")
     }
+    close_statement_scope(e, arm_scope)
     push(e, mflag)
     push(e, " = true; ")
     if arm.has_guard {
