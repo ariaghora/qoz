@@ -3,10 +3,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/time.h>
 #include <errno.h>
+
+/* Platform split: POSIX (linux, macos, BSD) uses dirent/sys-time;
+ * Windows uses the Win32 API for the same tasks. Each function
+ * that touches the platform branches at the body, not at the
+ * declaration, so the Qoz-facing signatures stay identical. */
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  include <io.h>
+#else
+#  include <sys/types.h>
+#  include <sys/time.h>
+#  include <dirent.h>
+#endif
 
 static int qoz_argc_val = 0;
 static char **qoz_argv_val = NULL;
@@ -17,15 +28,34 @@ void qoz_set_argv(int argc, char **argv) {
 }
 
 int64_t qoz_time_unix(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    /* FILETIME counts 100-ns intervals since 1601-01-01 UTC.
+     * Subtract the offset to Unix epoch (1970-01-01) and convert
+     * to seconds. The constant is 11644473600 seconds. */
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (int64_t)(t / 10000000ULL) - 11644473600LL;
+#else
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0) return 0;
     return (int64_t)tv.tv_sec;
+#endif
 }
 
 int64_t qoz_time_unix_micros(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    /* 100-ns to microseconds. */
+    int64_t micros = (int64_t)(t / 10ULL);
+    return micros - 11644473600LL * 1000000LL;
+#else
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0) return 0;
     return (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec;
+#endif
 }
 
 /* Stdio access for std/io. The handles return opaque FILE pointers
@@ -86,6 +116,12 @@ int64_t qoz_target_pointer_size(void) {
 
 void qoz_time_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
+#ifdef _WIN32
+    /* Sleep takes a DWORD; clamp very large requests so we never
+     * sleep forever from an i64 overflow. */
+    DWORD d = (ms > 0xFFFFFFFFLL) ? 0xFFFFFFFFu : (DWORD)ms;
+    Sleep(d);
+#else
     struct timeval tv;
     tv.tv_sec  = (time_t)(ms / 1000);
     tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
@@ -94,6 +130,7 @@ void qoz_time_sleep_ms(int64_t ms) {
      * struct timespec ABI varies across platforms, and this avoids
      * that. */
     select(0, NULL, NULL, NULL, &tv);
+#endif
 }
 
 int64_t qoz_os_argc(void) { return (int64_t)qoz_argc_val; }
@@ -295,12 +332,50 @@ static int qoz_str_lex_less(const void *a, const void *b) {
 qoz_string qoz_fs_list_qoz_files(qoz_string dir) {
     char path[4096];
     if (!qoz_copy_path_nul(dir, path, sizeof(path))) return (qoz_string){ NULL, 0 };
-    DIR *d = opendir(path);
-    if (!d) return (qoz_string){ NULL, 0 };
 
     const char **names = NULL;
     int64_t count = 0;
     int64_t cap = 0;
+
+#ifdef _WIN32
+    /* FindFirstFileA needs a glob pattern, not a directory. Append
+     * `\*.qoz` to filter at the OS level. */
+    char pattern[4112];
+    int pn = snprintf(pattern, sizeof(pattern), "%s\\*.qoz", path);
+    if (pn <= 0 || pn >= (int)sizeof(pattern)) return (qoz_string){ NULL, 0 };
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return (qoz_string){ NULL, 0 };
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const char *name = fd.cFileName;
+        size_t nlen = strlen(name);
+        if (nlen < 4) continue;
+        if (memcmp(name + nlen - 4, ".qoz", 4) != 0) continue;
+        if (count == cap) {
+            int64_t new_cap = cap == 0 ? 8 : cap * 2;
+            const char **new_names = (const char **)realloc((void *)names, (size_t)new_cap * sizeof(*names));
+            if (!new_names) {
+                free((void *)names);
+                FindClose(h);
+                qoz_panic((qoz_string){"qoz_fs_list_qoz_files: realloc failed", 37, NULL});
+            }
+            names = new_names;
+            cap = new_cap;
+        }
+        char *dup = (char *)malloc(nlen + 1);
+        if (!dup) {
+            free((void *)names);
+            FindClose(h);
+            qoz_panic((qoz_string){"qoz_fs_list_qoz_files: malloc failed", 36, NULL});
+        }
+        memcpy(dup, name, nlen + 1);
+        names[count++] = dup;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir(path);
+    if (!d) return (qoz_string){ NULL, 0 };
 
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
@@ -329,6 +404,7 @@ qoz_string qoz_fs_list_qoz_files(qoz_string dir) {
         names[count++] = dup;
     }
     closedir(d);
+#endif
 
     if (count == 0) {
         free((void *)names);
@@ -595,11 +671,13 @@ void qoz_eprint_nl(void) {
     fflush(stderr);
 }
 
-#include <unistd.h>
-#include <sys/wait.h>
+#ifndef _WIN32
+#  include <unistd.h>
+#  include <sys/wait.h>
+#  include <poll.h>
+#  include <signal.h>
+#endif
 #include <errno.h>
-#include <poll.h>
-#include <signal.h>
 
 /* Append `got` bytes from `chunk` into a growing buffer. Doubles `cap`
  * when needed. Allocations go through qoz_alloc so the result stays
@@ -620,6 +698,188 @@ static char *qoz_buf_append(char *buf, int64_t *cap, int64_t *n, const char *chu
     return buf;
 }
 
+#ifdef _WIN32
+/* Quote a single argument according to the MS C runtime convention
+ * (CommandLineToArgvW round-trips it). Doubles internal backslashes
+ * that precede a quote, and quotes the value when it contains
+ * whitespace or special chars. Returns the length written. */
+static size_t qoz_win32_quote(const char *arg, char *out, size_t cap) {
+    size_t in = strlen(arg);
+    int needs = (in == 0);
+    for (size_t i = 0; i < in; i++) {
+        char c = arg[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '"') {
+            needs = 1;
+            break;
+        }
+    }
+    size_t pos = 0;
+    if (!needs) {
+        if (pos + in >= cap) return 0;
+        memcpy(out + pos, arg, in);
+        pos += in;
+        return pos;
+    }
+    if (pos + 1 >= cap) return 0;
+    out[pos++] = '"';
+    for (size_t i = 0; i < in; ) {
+        size_t backslashes = 0;
+        while (i < in && arg[i] == '\\') { backslashes++; i++; }
+        if (i == in) {
+            for (size_t k = 0; k < backslashes * 2; k++) {
+                if (pos + 1 >= cap) return 0;
+                out[pos++] = '\\';
+            }
+            break;
+        }
+        if (arg[i] == '"') {
+            for (size_t k = 0; k < backslashes * 2 + 1; k++) {
+                if (pos + 1 >= cap) return 0;
+                out[pos++] = '\\';
+            }
+            if (pos + 1 >= cap) return 0;
+            out[pos++] = '"';
+            i++;
+        } else {
+            for (size_t k = 0; k < backslashes; k++) {
+                if (pos + 1 >= cap) return 0;
+                out[pos++] = '\\';
+            }
+            if (pos + 1 >= cap) return 0;
+            out[pos++] = arg[i++];
+        }
+    }
+    if (pos + 1 >= cap) return 0;
+    out[pos++] = '"';
+    return pos;
+}
+
+/* Drain a pipe handle until ReadFile returns 0 or fails. */
+static char *qoz_win32_drain(HANDLE h, int64_t *out_len) {
+    char *buf = NULL;
+    int64_t cap = 0;
+    int64_t n = 0;
+    char chunk[4096];
+    for (;;) {
+        DWORD got = 0;
+        BOOL ok = ReadFile(h, chunk, sizeof(chunk), &got, NULL);
+        if (!ok || got == 0) break;
+        buf = qoz_buf_append(buf, &cap, &n, chunk, (int64_t)got);
+    }
+    *out_len = n;
+    return buf;
+}
+
+/* Spawn a child with optional stdin input. When `in_buf` is NULL
+ * the child inherits an empty stdin handle. Otherwise the buffer
+ * is written and the pipe closed before the parent drains stdout
+ * and stderr. */
+static void qoz_win32_spawn(qoz_string *argv, int64_t n,
+                            const void *in_buf, int64_t in_len,
+                            int64_t *out_exit,
+                            qoz_string *out_stdout,
+                            qoz_string *out_stderr) {
+    /* Build the command line. */
+    size_t cmd_cap = 8192;
+    char *cmd = (char *)malloc(cmd_cap);
+    if (!cmd) return;
+    size_t pos = 0;
+    char tmp[4096];
+    for (int64_t i = 0; i < n; i++) {
+        int64_t alen = argv[i].len;
+        if ((size_t)alen + 1 >= sizeof(tmp)) { free(cmd); return; }
+        if (alen > 0) memcpy(tmp, argv[i].data, (size_t)alen);
+        tmp[alen] = '\0';
+        size_t need = strlen(tmp) * 2 + 4;
+        while (pos + need >= cmd_cap) {
+            cmd_cap *= 2;
+            char *nc = (char *)realloc(cmd, cmd_cap);
+            if (!nc) { free(cmd); return; }
+            cmd = nc;
+        }
+        if (i > 0) cmd[pos++] = ' ';
+        size_t wrote = qoz_win32_quote(tmp, cmd + pos, cmd_cap - pos);
+        if (wrote == 0 && alen != 0) { free(cmd); return; }
+        pos += wrote;
+    }
+    cmd[pos] = '\0';
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE in_r = NULL, in_w = NULL;
+    HANDLE out_r = NULL, out_w = NULL;
+    HANDLE err_r = NULL, err_w = NULL;
+    if (!CreatePipe(&out_r, &out_w, &sa, 0)) { free(cmd); return; }
+    if (!CreatePipe(&err_r, &err_w, &sa, 0)) { CloseHandle(out_r); CloseHandle(out_w); free(cmd); return; }
+    SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
+    if (in_buf != NULL) {
+        if (!CreatePipe(&in_r, &in_w, &sa, 0)) {
+            CloseHandle(out_r); CloseHandle(out_w);
+            CloseHandle(err_r); CloseHandle(err_w);
+            free(cmd);
+            return;
+        }
+        SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
+    }
+
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput  = (in_buf != NULL) ? in_r : GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out_w;
+    si.hStdError  = err_w;
+
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+    free(cmd);
+
+    /* Close the child-side handles in the parent regardless of
+     * spawn outcome. The parent only reads from `*_r` and writes
+     * to `in_w`. */
+    CloseHandle(out_w);
+    CloseHandle(err_w);
+    if (in_r != NULL) CloseHandle(in_r);
+
+    if (!ok) {
+        CloseHandle(out_r); CloseHandle(err_r);
+        if (in_w != NULL) CloseHandle(in_w);
+        return;
+    }
+
+    if (in_w != NULL) {
+        int64_t written = 0;
+        const char *bytes = (const char *)in_buf;
+        while (written < in_len) {
+            DWORD chunk = (in_len - written > 0x1000) ? 0x1000 : (DWORD)(in_len - written);
+            DWORD got = 0;
+            BOOL wok = WriteFile(in_w, bytes + written, chunk, &got, NULL);
+            if (!wok || got == 0) break;
+            written += (int64_t)got;
+        }
+        CloseHandle(in_w);
+    }
+
+    int64_t o_n = 0;
+    int64_t e_n = 0;
+    char *o_buf = qoz_win32_drain(out_r, &o_n);
+    char *e_buf = qoz_win32_drain(err_r, &e_n);
+    CloseHandle(out_r);
+    CloseHandle(err_r);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    *out_stdout = (qoz_string){ o_buf, o_n, o_buf };
+    *out_stderr = (qoz_string){ e_buf, e_n, e_buf };
+    *out_exit = (int64_t)code;
+}
+#endif
+
 void qoz_process_exec(qoz_string *argv, int64_t n,
                       int64_t *out_exit,
                       qoz_string *out_stdout,
@@ -629,6 +889,11 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
     *out_stderr = (qoz_string){ NULL, 0 };
 
     if (n <= 0 || argv == NULL) return;
+
+#ifdef _WIN32
+    qoz_win32_spawn(argv, n, NULL, 0, out_exit, out_stdout, out_stderr);
+    return;
+#else
 
     /* Build a NUL-terminated char** for execvp from the input qoz_string
      * array. Strings inside argv may not be NUL-terminated (they can
@@ -720,6 +985,7 @@ void qoz_process_exec(qoz_string *argv, int64_t n,
     } else {
         *out_exit = -1;
     }
+#endif
 }
 
 /* Variant of qoz_process_exec that pipes `in_buf` of length
@@ -737,6 +1003,10 @@ void qoz_process_exec_input(qoz_string *argv, int64_t n,
 
     if (n <= 0 || argv == NULL) return;
 
+#ifdef _WIN32
+    qoz_win32_spawn(argv, n, in_buf, in_len, out_exit, out_stdout, out_stderr);
+    return;
+#else
     char **cargv = (char **)qoz_alloc((int64_t)((n + 1) * (int64_t)sizeof(char *)));
     for (int64_t i = 0; i < n; i++) {
         int64_t len = argv[i].len;
@@ -841,4 +1111,5 @@ void qoz_process_exec_input(qoz_string *argv, int64_t n,
     } else {
         *out_exit = -1;
     }
+#endif
 }
