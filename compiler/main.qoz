@@ -1075,12 +1075,27 @@ let bin_path_for(c_path: string): string = {
     ""
 }
 
-// Clang flags used for both `build` and `run`. Kept in one place so
-// the compiler binary, the build script, and the bootstrap path
-// agree.
+// Build the C compiler invocation. Honours the `CC` env var so a
+// user can swap one toolchain for another. The default is `gcc`,
+// matching the Makefile. The flag set is the intersection that
+// gcc and clang both accept, with one clang-only diagnostic
+// suppressed when CC resolves to clang. The emitted C is C11
+// conforming, so any C11 frontend that recognises this flag style
+// works.
+let cc_command(): string = {
+    let cc = os.getenv("CC")
+    if len(cc) > 0 { cc } else { "gcc" }
+}
+
+let cc_is_clang(cc: string): bool = {
+    let base = path_basename(cc)
+    strings.eq_raw(base, "clang") || strings.has_suffix(base, "/clang")
+}
+
 let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<string> = {
+    let cc = cc_command()
     var argv: Vec<string> = vec.make()
-    vec.push(&argv, "clang")
+    vec.push(&argv, cc)
     vec.push(&argv, "-std=c11")
     vec.push(&argv, "-pedantic")
     vec.push(&argv, "-O3")
@@ -1090,9 +1105,14 @@ let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<s
     vec.push(&argv, "-Wno-unused-variable")
     vec.push(&argv, "-Wno-unused-but-set-variable")
     vec.push(&argv, "-Wno-unused-const-variable")
-    vec.push(&argv, "-Wno-parentheses-equality")
     vec.push(&argv, "-Wno-unused-value")
     vec.push(&argv, "-Wno-overlength-strings")
+    // `-Wno-parentheses-equality` is a clang-only diagnostic. gcc
+    // does not warn on `if (x == y)` so the flag is unnecessary and
+    // unrecognised there.
+    if cc_is_clang(cc) {
+        vec.push(&argv, "-Wno-parentheses-equality")
+    }
     vec.push(&argv, c_path)
     vec.push(&argv, "-o")
     vec.push(&argv, bin_path)

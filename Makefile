@@ -32,12 +32,23 @@ ifeq ($(OS),Windows_NT)
     EXE := .exe
 endif
 
-CC      := clang
+# Default to gcc. Make pre-seeds CC=cc as a built-in default, so
+# an `?=` here would never fire. Honour an explicit override from
+# the command line or environment by checking origin.
+ifeq ($(origin CC), default)
+    CC := gcc
+endif
 CFLAGS  := -std=c11 -pedantic -O3 -Wall -Werror
 WARN    := -Wno-unused-function -Wno-unused-variable \
            -Wno-unused-but-set-variable -Wno-unused-const-variable \
-           -Wno-parentheses-equality -Wno-unused-value \
-           -Wno-overlength-strings
+           -Wno-unused-value -Wno-overlength-strings
+
+# `-Wno-parentheses-equality` is clang-only. gcc does not warn on
+# `if (x == y)`, so the suppression is unnecessary there and would
+# trigger `unknown warning option`.
+ifneq ($(findstring clang,$(notdir $(CC))),)
+    WARN += -Wno-parentheses-equality
+endif
 
 QOZ       := qoz$(EXE)
 STAGE0    := stage0$(EXE)
