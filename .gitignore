@@ -5,6 +5,12 @@ output
 *.a
 *.dylib
 
+# Vendored third-party libraries live in the source tree and must be
+# tracked even though their built artifacts (.a, .dylib) would
+# otherwise match the patterns above.
+!vendor/**/*.a
+!vendor/**/*.dylib
+
 *.png
 *.ppm
 CLAUDE.md

@@ -490,6 +490,9 @@ let collect_link_flags(file: ast.File): Vec<string> = {
             }
             }
         }
+        // Non-link decls (fn, struct, enum, type-alias, const,
+        // extern, import) do not contribute link flags and are
+        // ignored here.
         | _ -> { }
         }
     }

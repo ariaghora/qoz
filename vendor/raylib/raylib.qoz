@@ -1,0 +1,101 @@
+// Qoz bindings for raylib 5.5.
+//
+// The C side of raylib lives next to this file as `libraylib.a` and
+// `raylib.h`. Programs that import this package must include the
+// link directives below at their entry point (the directives do not
+// propagate through imports yet):
+//
+//     #link_path("vendor/raylib")
+//     #link_library("raylib")
+//     #link_framework("CoreVideo")
+//     #link_framework("IOKit")
+//     #link_framework("Cocoa")
+//     #link_framework("OpenGL")
+//
+// Only a working subset of raylib is exposed. Add functions and
+// types as needed by following the pattern: declare the C struct
+// with the same field layout, then `@link_name` the C symbol and
+// give it a Qoz signature whose parameter types match the C ABI.
+
+// Color: 4 unsigned bytes laid out the same way raylib uses them.
+type Color = {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+let rgba(r: i64, g: i64, b: i64, a: i64): raylib.Color =
+    raylib.Color { r: r as u8, g: g as u8, b: b as u8, a: a as u8 }
+
+let rgb(r: i64, g: i64, b: i64): raylib.Color = rgba(r, g, b, 255)
+
+let WHITE(): raylib.Color = rgb(255, 255, 255)
+let BLACK(): raylib.Color = rgb(0, 0, 0)
+let RED():   raylib.Color = rgb(230, 41, 55)
+let GREEN(): raylib.Color = rgb(0, 228, 48)
+let BLUE():  raylib.Color = rgb(0, 121, 241)
+let RAYWHITE(): raylib.Color = rgb(245, 245, 245)
+
+// Window and frame loop.
+@link_name("InitWindow")
+external let init_window(width: i32, height: i32, title: cstring)
+
+@link_name("CloseWindow")
+external let close_window()
+
+@link_name("WindowShouldClose")
+external let window_should_close(): bool
+
+@link_name("SetTargetFPS")
+external let set_target_fps(fps: i32)
+
+@link_name("BeginDrawing")
+external let begin_drawing()
+
+@link_name("EndDrawing")
+external let end_drawing()
+
+@link_name("ClearBackground")
+external let clear_background(color: raylib.Color)
+
+// Time.
+@link_name("GetFrameTime")
+external let get_frame_time(): f32
+
+@link_name("GetTime")
+external let get_time(): f64
+
+// Basic 2D drawing.
+@link_name("DrawText")
+external let draw_text(text: cstring, x: i32, y: i32, font_size: i32, color: raylib.Color)
+
+@link_name("DrawCircle")
+external let draw_circle(center_x: i32, center_y: i32, radius: f32, color: raylib.Color)
+
+@link_name("DrawRectangle")
+external let draw_rectangle(x: i32, y: i32, width: i32, height: i32, color: raylib.Color)
+
+@link_name("DrawLine")
+external let draw_line(start_x: i32, start_y: i32, end_x: i32, end_y: i32, color: raylib.Color)
+
+// Input.
+@link_name("IsKeyDown")
+external let is_key_down(key: i32): bool
+
+@link_name("IsKeyPressed")
+external let is_key_pressed(key: i32): bool
+
+@link_name("GetMouseX")
+external let get_mouse_x(): i32
+
+@link_name("GetMouseY")
+external let get_mouse_y(): i32
+
+// Key codes used in the example. Full set in raylib.h KeyboardKey.
+let KEY_RIGHT(): i32 = 262
+let KEY_LEFT():  i32 = 263
+let KEY_DOWN():  i32 = 264
+let KEY_UP():    i32 = 265
+let KEY_SPACE(): i32 = 32
+let KEY_ESCAPE(): i32 = 256
