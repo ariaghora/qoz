@@ -2550,6 +2550,13 @@ let emit_cond(e: *Emitter, cond: ast.Expr) = {
 
 let emit_stmt_expr(e: *Emitter, expr: ast.Expr) = {
     match expr {
+    | EBlock(_, _, _) -> {
+        // Bare `{ ... }` at statement position is its own scope.
+        // Reuse the branch-block emitter so defers declared inside
+        // fire at this block's `}`, not at the enclosing
+        // function's exit.
+        emit_branch_as_statement(e, expr)
+    }
     | EIf(_, cond, then_b, else_b) -> {
         push(e, "if ")
         emit_cond(e, cond)
@@ -5859,16 +5866,31 @@ let emit_main(e: *Emitter, ret: ast.TypeExpr, body: ast.Expr) = {
     push(e, "int main(int argc, char **argv) {\n    qoz_set_argv(argc, argv);\n    int qoz_stack_anchor;\n    qoz_init(&qoz_stack_anchor);\n    qoz_frame_push(\"main\");\n    ")
     match body {
     | EBlock(_, stmts, tail) -> {
+        // Collect defers from the body's statements and from the
+        // tail when the tail is itself an `EDefer`. The C `int main`
+        // wrapper has its own shutdown trailer, so the deferred
+        // statements must be emitted before that trailer rather
+        // than relying on the regular function-exit machinery.
+        var defers = collect_defers_in_stmts(stmts)
+        var effective_tail: ast.Expr = tail
+        match tail {
+        | EDefer(_, dbody) -> {
+            vec.push(&defers, dbody)
+            effective_tail = ENil(span_of_expr(tail))
+        }
+        | _ -> { }
+        }
         for s in stmts {
             emit_stmt(e, s)
         }
-        if is_nil_expr(tail) {
+        if is_nil_expr(effective_tail) {
+            emit_defers_reverse(e, defers)
             push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
             return
         }
-        emit_main_tail(e, kind, ret, tail)
+        emit_main_tail(e, kind, ret, effective_tail, defers)
     }
-    | _ -> emit_main_tail(e, kind, ret, body)
+    | _ -> emit_main_tail(e, kind, ret, body, vec.make())
     }
 }
 
@@ -5905,7 +5927,7 @@ let main_return_kind(ret: ast.TypeExpr): MainRetKind = {
     }
 }
 
-let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.Expr) = {
+let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.Expr, defers: Vec<ast.Expr>) = {
     match kind {
     | MainRetUnit -> {
         // For unit-returning main, control-flow tails (for/while/if-as-stmt)
@@ -5921,7 +5943,9 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         | EReturn(_, _) -> {
             // The user's explicit `return` already leaves main. The
             // shutdown trailer is emitted separately by the function
-            // wrapper, so do not duplicate it here.
+            // wrapper, so do not duplicate it here. Defers still fire
+            // before the explicit return.
+            emit_defers_reverse(e, defers)
             emit_expr(e, tail)
             push(e, ";\n")
             return
@@ -5929,6 +5953,7 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         | EFor(_, _, _, _, _) | EWhile(_, _, _) | EAssign(_, _, _, _) | EDefer(_, _) -> {
             let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
+            emit_defers_reverse(e, defers)
             push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
             close_statement_scope(e, saved)
             return
@@ -5938,13 +5963,16 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         if is_unit_if {
             let saved = open_statement_scope(e)
             emit_stmt_expr(e, tail)
+            emit_defers_reverse(e, defers)
             push(e, "\n    qoz_shutdown();\n    return 0;\n}\n")
             close_statement_scope(e, saved)
             return
         }
         let saved = open_statement_scope(e)
         emit_expr(e, tail)
-        push(e, ";\n    qoz_shutdown();\n    return 0;\n}\n")
+        push(e, ";\n")
+        emit_defers_reverse(e, defers)
+        push(e, "    qoz_shutdown();\n    return 0;\n}\n")
         close_statement_scope(e, saved)
     }
     | MainRetInt(ctype) -> {
@@ -5952,7 +5980,9 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         push(e, ctype)
         push(e, " qoz_main_result = ")
         emit_value_with_hint(e, tail, ret)
-        push(e, ";\n    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
+        push(e, ";\n")
+        emit_defers_reverse(e, defers)
+        push(e, "    qoz_shutdown();\n    return (int)qoz_main_result;\n}\n")
         close_statement_scope(e, saved)
     }
     }
