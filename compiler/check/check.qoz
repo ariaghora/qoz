@@ -76,6 +76,12 @@ type TyContext = {
     // Per-expression TypeExpr cache, keyed by the Expr's runtime
     // pointer cast to i64. Populated by synth. Consumed by emit.
     expr_types:   Map<i64, ast.TypeExpr>,
+    // Expected container type for an array or map literal, keyed by the
+    // literal's runtime pointer. Recorded by infer_calls_expr from the
+    // surrounding expected type, so an empty `[]` or `[:]` (whose type
+    // cannot be synthesised from its absent elements) resolves from
+    // context in every position. synth reads it back into expr_types.
+    literal_hints: Map<i64, ast.TypeExpr>,
     // Bidirectional expected-type hints recorded for every
     // expression visited by infer_calls_expr with a non-error
     // expected. Stored as a flat list so the LSP can find the
@@ -109,6 +115,7 @@ let make_ctx(): check.TyContext = TyContext {
     errors:      vec.make(),
     type_params: map.make(),
     expr_types:  map.make(),
+    literal_hints: map.make(),
     expected_hints: vec.make(),
     current_ret_ty: ty.ty_error_(),
 }
@@ -845,6 +852,10 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     | EDefer(_, b)           -> { let _ = synth(tc, env, b); ty.ty_unit_() }
     | ESizeOf(_, _)          -> ty.ty_int_(64, true)
     | EArrayLit(sp, elems)   -> {
+        // A recorded expected type wins; otherwise infer from elements.
+        if let Some(te) = map.get(&tc.literal_hints, expr_id(e)) {
+            return resolve_type(tc, te)
+        }
         if len(elems) == 0 { return ty.ty_error_() }
         let elem_ty = synth(tc, env, elems[0])
         var i: i64 = 1
@@ -862,6 +873,10 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         ty.ty_record_("Vec", args)
     }
     | EMapLit(sp, keys, values) -> {
+        // A recorded expected type wins; otherwise infer from entries.
+        if let Some(te) = map.get(&tc.literal_hints, expr_id(e)) {
+            return resolve_type(tc, te)
+        }
         if len(keys) == 0 { return ty.ty_error_() }
         let key_ty = synth(tc, env, keys[0])
         let val_ty = synth(tc, env, values[0])
@@ -2628,16 +2643,40 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
     | EDefer(sp, v)           -> EDefer(sp, infer_calls_expr(tc, env, v, ty.ty_error_()))
     | ESizeOf(_, _)           -> e
     | EArrayLit(sp, elems)    -> {
+        var elem_expected = ty.ty_error_()
+        if let TyRecord(_, nm, args) = expected {
+            if strings.eq_raw(nm, "Vec") && len(args) >= 1 { elem_expected = args[0] }
+        }
         var ne: Vec<ast.Expr> = vec.make()
-        for el in elems { vec.push(&ne, infer_calls_expr(tc, env, el, ty.ty_error_())) }
-        EArrayLit(sp, ne)
+        for el in elems { vec.push(&ne, infer_calls_expr(tc, env, el, elem_expected)) }
+        let node = EArrayLit(sp, ne)
+        // Record the expected Vec type so emit resolves the element type
+        // from context, including for an empty `[]`.
+        if !ty.ty_is_error(elem_expected) {
+            tc.literal_hints[expr_id(node)] = ty.ty_to_type_expr_at(expected, sp)
+        }
+        node
     }
     | EMapLit(sp, keys, values) -> {
+        var kexp = ty.ty_error_()
+        var vexp = ty.ty_error_()
+        var is_map = false
+        if let TyRecord(_, nm, args) = expected {
+            if strings.eq_raw(nm, "Map") && len(args) >= 2 {
+                kexp = args[0]
+                vexp = args[1]
+                is_map = true
+            }
+        }
         var nk: Vec<ast.Expr> = vec.make()
-        for k in keys { vec.push(&nk, infer_calls_expr(tc, env, k, ty.ty_error_())) }
+        for k in keys { vec.push(&nk, infer_calls_expr(tc, env, k, kexp)) }
         var nv: Vec<ast.Expr> = vec.make()
-        for v in values { vec.push(&nv, infer_calls_expr(tc, env, v, ty.ty_error_())) }
-        EMapLit(sp, nk, nv)
+        for v in values { vec.push(&nv, infer_calls_expr(tc, env, v, vexp)) }
+        let node = EMapLit(sp, nk, nv)
+        // Record the expected Map type so emit resolves key/value types
+        // from context, including for an empty `[:]`.
+        if is_map { tc.literal_hints[expr_id(node)] = ty.ty_to_type_expr_at(expected, sp) }
+        node
     }
     }
 }

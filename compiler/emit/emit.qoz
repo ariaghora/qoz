@@ -397,7 +397,6 @@ let walk_decl_for_types(e: *Emitter, d: ast.Decl) = {
             e.locals = map.make()
             for fp in fn_params { e.locals[fp.name] = fp.ty }
             walk_expr_for_types(e, body)
-            walk_value_for_container_hint(e, ret, body)
         }
     }
     | DExternal(_, _, _, fn_params, ret) -> {
@@ -409,7 +408,6 @@ let walk_decl_for_types(e: *Emitter, d: ast.Decl) = {
     | DConst(_, _, ty, value) -> {
         walk_typeexpr(e, ty)
         walk_expr_for_types(e, value)
-        walk_value_for_container_hint(e, ty, value)
     }
     | _ -> { }
     }
@@ -451,61 +449,31 @@ let literal_typeexpr(ex: ast.Expr): Option<ast.TypeExpr> = {
     }
 }
 
-// Register the container helpers a value needs when its element type
-// comes from context (a binding annotation, a function return type, or a
-// record field type) rather than from the literal's own elements. An
-// empty `[]` or `[:]` carries no element type, so without this its
-// make/push or make/set helpers would never be instantiated and the
-// emitted call would reference a function with no prototype. A value can
-// reach its typed position through a block tail, an if branch, or a
-// match arm, so the hint propagates into those positions.
-let walk_value_for_container_hint(e: *Emitter, hint: ast.TypeExpr, val: ast.Expr) = {
-    if is_unit_typeexpr(hint) { return }
-    match val {
-    | EArrayLit(_, _) -> {
-        match hint {
-        | TENamed(sp, path, args) -> {
-            if len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") && len(args) >= 1 {
-                var vec_args: Vec<ast.TypeExpr> = vec.make()
-                vec.push(&vec_args, args[0])
-                walk_typeexpr(e, TENamed(sp, path, vec_args))
-                register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "make"), vec_args)
-                register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "push"), vec_args)
-            }
+// Register the container helper instantiations a Vec or Map literal
+// needs, given the literal's resolved type from the checker's
+// expr_types. The checker resolves the type in every position (binding,
+// return, argument, record field, constructor argument), including for
+// an empty `[]` or `[:]` whose element type comes only from context, so
+// one registration path covers them all.
+let register_container_lit(e: *Emitter, te: ast.TypeExpr) = {
+    if let TENamed(sp, path, args) = te {
+        if len(path) < 1 { return }
+        let n = path[len(path) - 1]
+        if strings.eq_raw(n, "Vec") && len(args) >= 1 {
+            var vec_args: Vec<ast.TypeExpr> = vec.make()
+            vec.push(&vec_args, args[0])
+            walk_typeexpr(e, TENamed(sp, path, vec_args))
+            register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "make"), vec_args)
+            register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "push"), vec_args)
         }
-        // A non-Vec hint for an array literal is a type error reported
-        // by the checker; nothing to register.
-        | _ -> { }
+        if strings.eq_raw(n, "Map") && len(args) >= 2 {
+            var map_args: Vec<ast.TypeExpr> = vec.make()
+            vec.push(&map_args, args[0])
+            vec.push(&map_args, args[1])
+            walk_typeexpr(e, TENamed(sp, path, map_args))
+            register_fn_instantiation(e, EField(sp, EIdent(sp, "map"), "make"), map_args)
+            register_map_helper(e, "map_set", map_args)
         }
-    }
-    | EMapLit(_, _, _) -> {
-        match hint {
-        | TENamed(sp, path, args) -> {
-            if len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") && len(args) >= 2 {
-                var map_args: Vec<ast.TypeExpr> = vec.make()
-                vec.push(&map_args, args[0])
-                vec.push(&map_args, args[1])
-                walk_typeexpr(e, TENamed(sp, path, map_args))
-                register_fn_instantiation(e, EField(sp, EIdent(sp, "map"), "make"), map_args)
-                register_map_helper(e, "map_set", map_args)
-            }
-        }
-        // A non-Map hint for a map literal is a type error reported by
-        // the checker; nothing to register.
-        | _ -> { }
-        }
-    }
-    | EBlock(_, _, tail) -> walk_value_for_container_hint(e, hint, tail)
-    | EIf(_, _, t, f) -> {
-        walk_value_for_container_hint(e, hint, t)
-        walk_value_for_container_hint(e, hint, f)
-    }
-    | EMatch(_, _, arms) -> {
-        for arm in arms { walk_value_for_container_hint(e, hint, arm.body) }
-    }
-    // Any other value either is not a container literal or carries its
-    // own element types, which the main type walk registers.
-    | _ -> { }
     }
 }
 
@@ -516,7 +484,6 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
             match s {
             | SLet(_, name, ty, val) -> {
                 walk_typeexpr(e, ty)
-                walk_value_for_container_hint(e, ty, val)
                 walk_expr_for_types(e, val)
                 if !is_unit_typeexpr(ty) {
                     e.locals[name] = ty
@@ -524,7 +491,6 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
             }
             | SVar(_, name, ty, val) -> {
                 walk_typeexpr(e, ty)
-                walk_value_for_container_hint(e, ty, val)
                 walk_expr_for_types(e, val)
                 if !is_unit_typeexpr(ty) {
                     e.locals[name] = ty
@@ -538,7 +504,6 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
     | ERecord(_, te, fields) -> {
         walk_typeexpr(e, te)
         for f in fields {
-            walk_value_for_container_hint(e, field_type_hint(e, te, f.name), f.value)
             walk_expr_for_types(e, f.value)
         }
     }
@@ -556,28 +521,6 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
         for ta in type_args { walk_typeexpr(e, ta) }
         for a in args { walk_expr_for_types(e, a) }
         register_fn_instantiation(e, callee, type_args)
-        // Register the container helpers an empty-literal argument needs,
-        // using the callee's declared parameter types as hints.
-        let pkey = match callee {
-        | EIdent(_, nm) -> nm
-        // A package-qualified callee (pkg.fn) keys fn_params by its
-        // loader-renamed name.
-        | _ -> qualified_call_name(e, callee)
-        }
-        if !strings.eq_raw(pkey, "") {
-            match map.get(&e.fn_params, pkey) {
-            | Some(pts) -> {
-                var ai: i64 = 0
-                for a in args {
-                    if ai < len(pts) { walk_value_for_container_hint(e, pts[ai], a) }
-                    ai += 1
-                }
-            }
-            // A callee with no recorded parameter types (closure, builtin)
-            // has no hints to apply.
-            | None -> { }
-            }
-        }
         // Implicit variant-constructor instantiation: `Option.Some(42)`
         // with no explicit type args reaches this point with empty
         // type_args. Walk-time inference uses literal_typeexpr only,
@@ -613,48 +556,17 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
     | EReturn(_, v) -> walk_expr_for_types(e, v)
     | EDefer(_, b) -> walk_expr_for_types(e, b)
     | ETuple(_, elems) -> { for el in elems { walk_expr_for_types(e, el) } }
-    | EArrayLit(sp, elems) -> {
+    | EArrayLit(_, elems) -> {
         for el in elems { walk_expr_for_types(e, el) }
-        if len(elems) > 0 {
-            let elem_te = literal_typeexpr(elems[0])
-            match elem_te {
-            | Some(et) -> {
-                var args: Vec<ast.TypeExpr> = vec.make()
-                vec.push(&args, et)
-                var path: Vec<string> = vec.make()
-                vec.push(&path, "Vec")
-                walk_typeexpr(e, TENamed(sp, path, args))
-                register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "make"), args)
-                register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "push"), args)
-            }
-            | None -> { }
-            }
+        if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
+            register_container_lit(e, te)
         }
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(_, keys, values) -> {
         for k in keys { walk_expr_for_types(e, k) }
         for v in values { walk_expr_for_types(e, v) }
-        if len(keys) > 0 {
-            match literal_typeexpr(keys[0]) {
-            | Some(kt) -> {
-                match literal_typeexpr(values[0]) {
-                | Some(vt) -> {
-                    var args: Vec<ast.TypeExpr> = vec.make()
-                    vec.push(&args, kt)
-                    vec.push(&args, vt)
-                    var path: Vec<string> = vec.make()
-                    vec.push(&path, "Map")
-                    walk_typeexpr(e, TENamed(sp, path, args))
-                    register_fn_instantiation(e, EField(sp, EIdent(sp, "map"), "make"), args)
-                    register_map_helper(e, "map_set", args)
-                }
-                // A non-literal value type is resolved at emit time.
-                | None -> { }
-                }
-            }
-            // A non-literal key type is resolved at emit time.
-            | None -> { }
-            }
+        if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
+            register_container_lit(e, te)
         }
     }
     | EClosure(_, _, _, body) -> walk_expr_for_types(e, body)
@@ -1975,23 +1887,11 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
     | EFor(sp, _, _, _, _)         -> { let _ = emit_die(sp, "for expression in value position; wrap in a block or use a tail expression") }
     | EDefer(sp, _)                -> { let _ = emit_die(sp, "defer cannot appear in value position; use defer as a statement") }
     | ESizeOf(_, te)               -> { let tc = c_type_for(e, te); push(e, `(int64_t)sizeof({tc})`) }
-    | EArrayLit(sp, elems)         -> {
-        // Use the check phase's recorded type for this expression
-        // as the hint, so an empty `[]` whose surrounding context
-        // pinned a Vec<T> annotation still resolves.
-        let recorded = match map.get(&e.expr_types, expr_id(ex)) {
-        | Some(te) -> te
-        | None     -> TEUnit(sp)
-        }
-        emit_array_lit_using(e, sp, elems, recorded)
-    }
-    | EMapLit(sp, keys, values) -> {
-        let recorded = match map.get(&e.expr_types, expr_id(ex)) {
-        | Some(te) -> te
-        | None     -> TEUnit(sp)
-        }
-        emit_map_lit_using(e, sp, keys, values, recorded)
-    }
+    // The checker's recorded type resolves the element types, including
+    // for an empty `[]`/`[:]`. emit_array_lit_with_hint extracts the Vec
+    // element; emit_map_lit_using extracts the Map key/value.
+    | EArrayLit(sp, elems)         -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, ex, TEUnit(sp)))
+    | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, ex, TEUnit(sp)))
     }
 }
 
@@ -5434,6 +5334,21 @@ let hint_is_cstring(hint: ast.TypeExpr): bool = {
     }
 }
 
+// The checker records a Vec or Map literal's resolved type in
+// expr_types for every position, so it is authoritative over a passed
+// hint. Return it when present, otherwise the fallback hint.
+let lit_recorded_hint(e: *Emitter, ex: ast.Expr, fallback: ast.TypeExpr): ast.TypeExpr = {
+    if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
+        if let TENamed(_, path, _) = te {
+            if len(path) >= 1 {
+                let n = path[len(path) - 1]
+                if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return te }
+            }
+        }
+    }
+    fallback
+}
+
 let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     match value {
     | EString(_, raw) -> {
@@ -5463,8 +5378,8 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
     | ECall(_, callee, ta, args) -> emit_call_with_hint(e, callee, ta, args, hint)
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
-    | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, hint)
-    | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, hint)
+    | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, value, hint))
+    | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, value, hint))
     | EField(_, base, name) -> {
         // `Enum.Variant` in value position with a known type hint
         // (e.g. `let a: Option<i32> = Option.None`) emits the mangled
