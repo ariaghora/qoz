@@ -489,7 +489,7 @@ let summary(tc: *check.TyContext) = {
 let resolve_type(tc: *check.TyContext, te: ast.TypeExpr): ty.Ty = {
     match te {
     | TEUnit(_)                  -> ty.ty_unit_()
-    | TEPtr(_, inner)            -> ty.ty_ptr_(resolve_type(tc, inner))
+    | TEPtr(_, inner)            -> ty.ty_ptr_(resolve_type(tc, *inner))
     | TETuple(_, elems)          -> {
         var resolved: Vec<ty.Ty> = []
         for el in elems { vec.push(&resolved, resolve_type(tc, el)) }
@@ -501,7 +501,7 @@ let resolve_type(tc: *check.TyContext, te: ast.TypeExpr): ty.Ty = {
         for p in params {
             vec.push(&resolved, resolve_type(tc, p))
         }
-        ty.ty_fn_(resolved, resolve_type(tc, ret))
+        ty.ty_fn_(resolved, resolve_type(tc, *ret))
     }
     }
 }
@@ -2971,7 +2971,7 @@ let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     | TyNil    -> single_te(sp, "void")
     | TyError  -> single_te(sp, "i64")
     | TyVar(_, n) -> single_te(sp, n)
-    | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
+    | TyPtr(inner) -> TEPtr(sp, new_clone(ty_to_type_expr_at(inner, sp)))
     | TyAdt(_, n, args) | TyRecord(_, n, args) -> {
         var path: Vec<string> = []
         vec.push(&path, n)

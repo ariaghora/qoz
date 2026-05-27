@@ -183,14 +183,14 @@ let ty_to_type_expr_at(t: ty.Ty, sp: ast.Span): ast.TypeExpr = {
     | TyUnit    -> TEUnit(sp)
     | TyNil     -> single_path_te(sp, "nil")
     | TyError   -> single_path_te(sp, "?")
-    | TyPtr(inner) -> TEPtr(sp, ty_to_type_expr_at(inner, sp))
+    | TyPtr(inner) -> TEPtr(sp, new_clone(ty_to_type_expr_at(inner, sp)))
     | TyAdt(home, name, args) -> named_with_args_homed(sp, home, name, args)
     | TyRecord(home, name, args) -> named_with_args_homed(sp, home, name, args)
     | TyCEnum(home, name, _) -> named_with_args_homed(sp, home, name, [])
     | TyFn(fparams, ret) -> {
         var pte: Vec<ast.TypeExpr> = []
         for p in fparams { vec.push(&pte, ty_to_type_expr_at(p, sp)) }
-        TEFn(sp, pte, ty_to_type_expr_at(ret, sp))
+        TEFn(sp, pte, new_clone(ty_to_type_expr_at(ret, sp)))
     }
     | TyTuple(elems) -> {
         var ete: Vec<ast.TypeExpr> = []

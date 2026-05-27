@@ -633,7 +633,7 @@ let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *main.QualifyCtx): ast.TypeEx
         }
         TENamed(sp, path, new_args)
     }
-    | TEPtr(sp, inner) -> TEPtr(sp, qualify_te(inner, pkg, ctx))
+    | TEPtr(sp, inner) -> TEPtr(sp, new_clone(qualify_te(*inner, pkg, ctx)))
     | TETuple(sp, elems) -> {
         var ne: Vec<ast.TypeExpr> = []
         for el in elems { vec.push(&ne, qualify_te(el, pkg, ctx)) }
@@ -642,7 +642,7 @@ let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *main.QualifyCtx): ast.TypeEx
     | TEFn(sp, params, ret) -> {
         var np: Vec<ast.TypeExpr> = []
         for p in params { vec.push(&np, qualify_te(p, pkg, ctx)) }
-        TEFn(sp, np, qualify_te(ret, pkg, ctx))
+        TEFn(sp, np, new_clone(qualify_te(*ret, pkg, ctx)))
     }
     | TEUnit(sp) -> TEUnit(sp)
     }

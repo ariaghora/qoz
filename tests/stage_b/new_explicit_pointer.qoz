@@ -1,8 +1,8 @@
 // expect: 0
 // Phase B: explicit self-referential types. A Tree holds its children
 // behind *Tree pointers, so Tree is non-recursive (a value enum) and
-// the children are heap-allocated with `new`. The tree is built, a
-// garbage collection is forced, then the tree is summed; the `new`
+// the children are heap-allocated with new_clone. The tree is built, a
+// garbage collection is forced, then the tree is summed; the cloned
 // allocations must be traced and survive.
 
 import fmt
@@ -18,7 +18,7 @@ let sum(t: *Tree): i64 =
     }
 
 let build(depth: i64): *Tree =
-    if depth == 0 { new Leaf(1) } else { new Node(build(depth - 1), build(depth - 1)) }
+    if depth == 0 { new_clone(Leaf(1)) } else { new_clone(Node(build(depth - 1), build(depth - 1))) }
 
 let main(): i64 = {
     let t = build(10)

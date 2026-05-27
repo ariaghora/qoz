@@ -91,7 +91,7 @@ let print_te(p: *format.Printer, te: ast.TypeExpr) = {
     }
     | TEPtr(_, inner) -> {
         p_emit(p, "*")
-        print_te(p, inner)
+        print_te(p, *inner)
     }
     | TETuple(_, elems) -> {
         p_emit(p, "(")
@@ -113,7 +113,7 @@ let print_te(p: *format.Printer, te: ast.TypeExpr) = {
             i += 1
         }
         p_emit(p, "): ")
-        print_te(p, ret)
+        print_te(p, *ret)
     }
     }
 }
@@ -677,8 +677,9 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
         }
     }
     | ENew(_, inner) -> {
-        p_emit(p, "new ")
+        p_emit(p, "new_clone(")
         print_expr(p, inner)
+        p_emit(p, ")")
     }
     }
 }

@@ -398,8 +398,11 @@ The diagnostic for an ambiguous bare variant lists every qualified form so one c
 
 All heap memory is owned by the garbage collector. There is no `free`, no allocator parameter, no manual deallocation.
 
-- Algebraic data types are reference types. Every value of an ADT is a heap reference under the hood, allocated by its variant constructor. A variant may carry other ADTs of the same or different type without ceremony: `type Tree<T> = | Leaf | Node(Tree<T>, T, Tree<T>)` works. The user writes `Expr.Add(a, b)`, never `new Expr.Add(...)`.
-- Records are value types. `Point { x: 1.0, y: 2.0 }` is a stack value. Assignment copies. Use `new Point { ... }` to obtain a heap pointer to a record.
+- Algebraic data types are value types by default. A non-recursive ADT is stored inline (a tagged union), built directly by its variant constructor: `Shape.Circle(1.0)` is a value. Assignment copies.
+- A self-referential ADT carries the recursion behind an explicit pointer field. `type Tree<T> = | Leaf | Node(*Tree<T>, T, *Tree<T>)`: the `*Tree<T>` fields make `Tree` finite-size, and each child is heap-allocated. Pointer-vs-value is explicit in the source; there is no hidden boxing.
+- `new_clone(value)` heap-allocates a copy of an existing value and yields a `*T`. It is how a `*T` field is filled with a value that must outlive the current stack frame: `Node(new_clone(left), x, new_clone(right))`. Taking `&local` instead is unsafe, since the local dies with its frame.
+- `new` is reserved for heap construction of a type (`new T(...)`), the counterpart to `new_clone`. (Not yet implemented.)
+- Records are value types. `Point { x: 1.0, y: 2.0 }` is a stack value. Assignment copies. Use `new_clone(Point { ... })` to obtain a heap pointer to a record.
 - Container growth (`Vec.push`, `Map.insert`) calls into the collector.
 - Closures heap-allocate their captured environment.
 - The compiler is permitted to stack-allocate ADT values whose lifetime is provably bounded by their scope, but this is an optimisation. The user model is reference semantics.

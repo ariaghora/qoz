@@ -416,7 +416,7 @@ let walk_decl_for_types(e: *Emitter, d: ast.Decl) = {
 let walk_typeexpr(e: *Emitter, te: ast.TypeExpr) = {
     match te {
     | TEUnit(_) -> { }
-    | TEPtr(_, inner) -> walk_typeexpr(e, inner)
+    | TEPtr(_, inner) -> walk_typeexpr(e, *inner)
     | TETuple(_, elems) -> {
         for el in elems { walk_typeexpr(e, el) }
     }
@@ -432,7 +432,7 @@ let walk_typeexpr(e: *Emitter, te: ast.TypeExpr) = {
     }
     | TEFn(_, params, ret) -> {
         for p in params { walk_typeexpr(e, p) }
-        walk_typeexpr(e, ret)
+        walk_typeexpr(e, *ret)
     }
     }
 }
@@ -613,7 +613,7 @@ let mangle_inst(e: *Emitter, name: string, args: Vec<ast.TypeExpr>): string = {
 let te_show_dbg(te: ast.TypeExpr): string = {
     match te {
     | TEUnit(_)            -> "unit"
-    | TEPtr(_, inner)      -> strings.cat("*", te_show_dbg(inner))
+    | TEPtr(_, inner)      -> strings.cat("*", te_show_dbg(*inner))
     | TETuple(_, _)        -> "tuple"
     | TEFn(_, _, _)        -> "fn"
     | TENamed(_, path, args) -> {
@@ -871,8 +871,8 @@ let render_show_fn(e: *Emitter, mangled: string, te: ast.TypeExpr): string = {
         // Pointer to a printable value: emit a show fn whose `v` is
         // the pointer and whose body forwards to the underlying
         // type's show fn through an automatic dereference.
-        let inner_mangled = mangle_type(e, inner)
-        register_show_needed(e, inner_mangled, inner)
+        let inner_mangled = mangle_type(e, *inner)
+        register_show_needed(e, inner_mangled, *inner)
         var body = `qoz_interp_push_str(b, qoz_show_{inner_mangled}(*v));\n`
         body
     }
@@ -890,7 +890,7 @@ let render_show_fn(e: *Emitter, mangled: string, te: ast.TypeExpr): string = {
 let mangle_type(e: *Emitter, t: ast.TypeExpr): string = {
     match t {
     | TEUnit(_)                  -> "void"
-    | TEPtr(_, inner)            -> strings.cat(mangle_type(e, inner), "_ptr")
+    | TEPtr(_, inner)            -> strings.cat(mangle_type(e, *inner), "_ptr")
     | TETuple(_, elems)          -> {
         var acc = "tuple"
         for el in elems {
@@ -942,7 +942,7 @@ let primitive_c_name(n: string): string = {
 let substitute_type(e: *Emitter, t: ast.TypeExpr, params: Vec<string>, args: Vec<ast.TypeExpr>): ast.TypeExpr = {
     match t {
     | TEUnit(_) -> t
-    | TEPtr(span, inner) -> TEPtr(span, substitute_type(e, inner, params, args))
+    | TEPtr(span, inner) -> TEPtr(span, new_clone(substitute_type(e, *inner, params, args)))
     | TETuple(span, elems) -> {
         var new_elems: Vec<ast.TypeExpr> = []
         for el in elems { vec.push(&new_elems, substitute_type(e, el, params, args)) }
@@ -967,7 +967,7 @@ let substitute_type(e: *Emitter, t: ast.TypeExpr, params: Vec<string>, args: Vec
     | TEFn(span, fparams, ret) -> {
         var new_fparams: Vec<ast.TypeExpr> = []
         for fp in fparams { vec.push(&new_fparams, substitute_type(e, fp, params, args)) }
-        TEFn(span, new_fparams, substitute_type(e, ret, params, args))
+        TEFn(span, new_fparams, new_clone(substitute_type(e, *ret, params, args)))
     }
     }
 }
@@ -1073,7 +1073,7 @@ let substitute_stmt(e: *Emitter, s: ast.Stmt, params: Vec<string>, args: Vec<ast
 let operator_first_param_type_name(te: ast.TypeExpr): string = {
     match te {
     | TEPtr(_, inner) -> {
-        match inner {
+        match *inner {
         | TENamed(_, path, _) -> {
             if len(path) > 0 { return path[len(path) - 1] }
             ""
@@ -1280,10 +1280,10 @@ let register_fn_typedef(e: *Emitter, params: Vec<ast.TypeExpr>, ret: ast.TypeExp
 let c_type_for(e: *Emitter, t: ast.TypeExpr): string = {
     match t {
     | TEUnit(_)                  -> "void"
-    | TEPtr(_, inner)            -> strings.cat(c_type_for(e, inner), "*")
+    | TEPtr(_, inner)            -> strings.cat(c_type_for(e, *inner), "*")
     | TETuple(_, elems)          -> register_tuple_typedef(e, elems)
     | TENamed(_, path, args)     -> c_type_for_named_with_args(e, path, args)
-    | TEFn(_, params, ret)       -> register_fn_typedef(e, params, ret)
+    | TEFn(_, params, ret)       -> register_fn_typedef(e, params, *ret)
     }
 }
 
@@ -1611,27 +1611,28 @@ let new_desc_expr(e: *Emitter, te: ast.TypeExpr): string = {
     "NULL"
 }
 
-// Emit, once per pointee type, a helper that heap-allocates a copy of a
-// value and returns the pointer. A `new` expression lowers to a call to
-// this helper, which keeps it a single expression: emitting it inline
-// with hoisting would evaluate the allocation (and its argument) in the
-// function prologue, running it unconditionally even inside a branch.
-let ensure_new_helper(e: *Emitter, te: ast.TypeExpr) = {
+// Emit, once per value type, a helper that heap-allocates a copy of a
+// value and returns the pointer. A `new_clone` expression lowers to a
+// call to this helper, which keeps it a single expression: emitting it
+// inline with hoisting would evaluate the allocation (and its argument)
+// in the function prologue, running it unconditionally even inside a
+// branch.
+let ensure_new_clone_helper(e: *Emitter, te: ast.TypeExpr) = {
     let key = mangle_type(e, te)
-    if map.contains(&e.byval_helpers_emitted, strings.cat("new_", key)) { return }
-    e.byval_helpers_emitted[strings.cat("new_", key)] = true
+    if map.contains(&e.byval_helpers_emitted, strings.cat("new_clone_", key)) { return }
+    e.byval_helpers_emitted[strings.cat("new_clone_", key)] = true
     let ct = c_type_for(e, te)
     let desc = new_desc_expr(e, te)
-    vec.push(&e.synth_fn_decls, `static {ct}* qoz_new__{key}({ct} v);\n`)
-    vec.push(&e.synth_fn_defs, `static {ct}* qoz_new__{key}({ct} v) {{ {ct}* p = ({ct}*)qoz_gc_alloc(sizeof({ct}), {desc}); *p = v; return p; }}\n`)
+    vec.push(&e.synth_fn_decls, `static {ct}* qoz_new_clone__{key}({ct} v);\n`)
+    vec.push(&e.synth_fn_defs, `static {ct}* qoz_new_clone__{key}({ct} v) {{ {ct}* p = ({ct}*)qoz_gc_alloc(sizeof({ct}), {desc}); *p = v; return p; }}\n`)
 }
 
-// Lower `new <inner>` to a call to the per-type allocation helper.
-let emit_new(e: *Emitter, sp: ast.Span, inner: ast.Expr) = {
+// Lower `new_clone(<inner>)` to a call to the per-type clone helper.
+let emit_new_clone(e: *Emitter, sp: ast.Span, inner: ast.Expr) = {
     let te = infer_value_te(e, inner)
-    ensure_new_helper(e, te)
+    ensure_new_clone_helper(e, te)
     let key = mangle_type(e, te)
-    push(e, `qoz_new__{key}(`)
+    push(e, `qoz_new_clone__{key}(`)
     emit_value_with_hint(e, inner, te)
     push(e, ")")
 }
@@ -1952,7 +1953,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
     // element; emit_map_lit_using extracts the Map key/value.
     | EArrayLit(sp, elems)         -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, ex, TEUnit(sp)))
     | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, ex, TEUnit(sp)))
-    | ENew(sp, inner) -> emit_new(e, sp, inner)
+    | ENew(sp, inner) -> emit_new_clone(e, sp, inner)
     }
 }
 
@@ -2062,14 +2063,14 @@ let infer_base_typeexpr(e: *Emitter, base: ast.Expr): ast.TypeExpr = {
         | UOpDeref -> {
             let inner = infer_base_typeexpr(e, rhs)
             match inner {
-            | TEPtr(_, t) -> t
+            | TEPtr(_, t) -> *t
             | _           -> {
                 let _ = emit_die(sp, "dereference of non-pointer base in EField/EIndex")
                 TEUnit(sp)
             }
             }
         }
-        | UOpAddr -> TEPtr(sp, infer_base_typeexpr(e, rhs))
+        | UOpAddr -> TEPtr(sp, new_clone(infer_base_typeexpr(e, rhs)))
         | _       -> {
             let _ = emit_die(sp, "unary operator does not yield a base ast.TypeExpr")
             TEUnit(sp)
@@ -2082,7 +2083,7 @@ let infer_base_typeexpr(e: *Emitter, base: ast.Expr): ast.TypeExpr = {
     | EIndex(sp, b, _) -> {
         let bte = infer_base_typeexpr(e, b)
         match bte {
-        | TEPtr(_, inner) -> inner
+        | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
             if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
             let _ = emit_die(sp, "indexing into non-Vec/non-pointer base")
@@ -2117,7 +2118,7 @@ let span_of_expr(e: ast.Expr): ast.Span = {
 
 let field_typeexpr_for(e: *Emitter, base_te: ast.TypeExpr, field: string, sp: ast.Span): ast.TypeExpr = {
     let unwrapped = match base_te {
-        | TEPtr(_, inner) -> inner
+        | TEPtr(_, inner) -> *inner
         | _               -> base_te
     }
     match unwrapped {
@@ -2284,7 +2285,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
     | EIndex(sp, base, _) -> {
         let bte = infer_base_typeexpr(e, base)
         match bte {
-        | TEPtr(_, inner) -> inner
+        | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
             if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
             let _ = emit_die(sp, "let-binding value indexed into non-Vec base; cannot determine binding type")
@@ -2320,14 +2321,14 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
     | EString(sp, _) -> single_named_te(sp, "string")
     | EBool(sp, _)   -> single_named_te(sp, "bool")
     | EChar(sp, _)   -> single_named_te(sp, "char")
-    | ENil(sp)       -> TEPtr(sp, single_named_te(sp, "void"))
+    | ENil(sp)       -> TEPtr(sp, new_clone(single_named_te(sp, "void")))
     | EUnary(sp, op, rhs) -> {
         match op {
-        | UOpAddr -> TEPtr(sp, infer_value_te(e, rhs))
+        | UOpAddr -> TEPtr(sp, new_clone(infer_value_te(e, rhs)))
         | UOpDeref -> {
             let inner = infer_value_te(e, rhs)
             match inner {
-            | TEPtr(_, t) -> t
+            | TEPtr(_, t) -> *t
             | _           -> {
                 let _ = emit_die(sp, "let-binding dereferences a non-pointer")
                 TEUnit(sp)
@@ -2375,7 +2376,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
     | EClosure(sp, cps, ret, _) -> {
         var pte: Vec<ast.TypeExpr> = []
         for cp in cps { vec.push(&pte, cp.ty) }
-        TEFn(sp, pte, ret)
+        TEFn(sp, pte, new_clone(ret))
     }
     | ETry(sp, value) -> {
         let inner = infer_value_te(e, value)
@@ -2420,7 +2421,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         vec.push(&path, "Map")
         TENamed(sp, path, args)
     }
-    | ENew(sp, inner) -> TEPtr(sp, infer_value_te(e, inner))
+    | ENew(sp, inner) -> TEPtr(sp, new_clone(infer_value_te(e, inner)))
     // Statement-shape expressions have no value type. They occur in
     // value position when an outer block ends with one. The inferred
     // type is unit and the emitter renders them as statements with a
@@ -2559,7 +2560,7 @@ let unify_te(pattern: ast.TypeExpr, concrete: ast.TypeExpr, env: *Map<string, as
     }
     | TEPtr(_, p_inner) -> {
         match concrete {
-        | TEPtr(_, c_inner) -> unify_te(p_inner, c_inner, env)
+        | TEPtr(_, c_inner) -> unify_te(*p_inner, *c_inner, env)
         | _ -> { }
         }
     }
@@ -2588,7 +2589,7 @@ let call_return_te(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, 
         if strings.eq_raw(name, "__qoz_interp_init") {
             var vp: Vec<string> = []
             vec.push(&vp, "void")
-            return TEPtr(sp, TENamed(sp, vp, []))
+            return TEPtr(sp, new_clone(TENamed(sp, vp, [])))
         }
         if strings.eq_raw(name, "__qoz_interp_finish") {
             return single_named_te(sp, "string")
@@ -3147,11 +3148,11 @@ let base_type_for_walk(e: *Emitter, ex: ast.Expr): ast.TypeExpr = {
         | UOpDeref -> {
             let inner = base_type_for_walk(e, rhs)
             match inner {
-            | TEPtr(_, t) -> t
+            | TEPtr(_, t) -> *t
             | _           -> TEUnit(sp)
             }
         }
-        | UOpAddr -> TEPtr(sp, base_type_for_walk(e, rhs))
+        | UOpAddr -> TEPtr(sp, new_clone(base_type_for_walk(e, rhs)))
         | _       -> TEUnit(sp)
         }
     }
@@ -3163,7 +3164,7 @@ let base_type_for_walk(e: *Emitter, ex: ast.Expr): ast.TypeExpr = {
 // Used in the discovery walk where the result is a hint, not a guarantee.
 let field_typeexpr_for_no_die(e: *Emitter, base_te: ast.TypeExpr, field: string, sp: ast.Span): ast.TypeExpr = {
     let unwrapped = match base_te {
-        | TEPtr(_, inner) -> inner
+        | TEPtr(_, inner) -> *inner
         | _               -> base_te
     }
     match unwrapped {
@@ -3217,11 +3218,11 @@ let register_map_helper(e: *Emitter, name: string, args: Vec<ast.TypeExpr>) = {
 let unwrap_container_te(te: ast.TypeExpr): ast.TypeExpr = {
     match te {
     | TEPtr(_, inner) -> {
-        match inner {
+        match *inner {
         | TENamed(_, path, _) -> {
             if len(path) >= 1 {
                 let n = path[len(path) - 1]
-                if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return inner }
+                if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return *inner }
             }
             te
         }
@@ -3285,7 +3286,7 @@ let lvalue_hint(e: *Emitter, lhs: ast.Expr): ast.TypeExpr = {
     | EIndex(_, base, _) -> {
         let bte = infer_base_typeexpr(e, base)
         match bte {
-        | TEPtr(_, inner) -> inner
+        | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
             if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
             TEUnit(sp)
@@ -5442,7 +5443,7 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
     | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, value, hint))
     | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, value, hint))
-    | ENew(sp, inner) -> emit_new(e, sp, inner)
+    | ENew(sp, inner) -> emit_new_clone(e, sp, inner)
     | EField(_, base, name) -> {
         // `Enum.Variant` in value position with a known type hint
         // (e.g. `let a: Option<i32> = Option.None`) emits the mangled
@@ -5564,7 +5565,7 @@ let emit_ident_with_hint(e: *Emitter, name: string, hint: ast.TypeExpr) = {
         | TEFn(_, fn_ps, fn_ret) -> {
             if map.contains(&e.fn_params, name) {
                 if !map.contains(&e.locals, name) {
-                    let thunk = register_fn_thunk(e, name, fn_ps, fn_ret)
+                    let thunk = register_fn_thunk(e, name, fn_ps, *fn_ret)
                     let clo_t = c_type_for(e, hint)
                     push(e, `(({clo_t}){{ .env = NULL, .fn = {thunk} }})`)
                     return
@@ -5949,7 +5950,7 @@ let vec_element_typeexpr(e: *Emitter, iter: ast.Expr): ast.TypeExpr = {
         if len(args) >= 1 && len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Vec") { return args[0] }
         TEUnit(sp)
     }
-    | TEPtr(_, inner) -> inner
+    | TEPtr(_, inner) -> *inner
     | _ -> TEUnit(span_of_expr(iter))
     }
 }

@@ -138,7 +138,7 @@ let parse_type(p: *Parser): ast.TypeExpr = {
     if is_punct(t, "*") {
         advance(p)
         let inner = parse_type(p)
-        return TEPtr(span, inner)
+        return TEPtr(span, new_clone(inner))
     }
     if is_punct(t, "(") {
         advance(p)
@@ -147,7 +147,7 @@ let parse_type(p: *Parser): ast.TypeExpr = {
             if is_punct(peek(p), "->") {
                 advance(p)
                 let ret = parse_type(p)
-                return TEFn(span, [], ret)
+                return TEFn(span, [], new_clone(ret))
             }
             return TEUnit(span)
         }
@@ -161,7 +161,7 @@ let parse_type(p: *Parser): ast.TypeExpr = {
         if is_punct(peek(p), "->") {
             advance(p)
             let ret = parse_type(p)
-            return TEFn(span, elems, ret)
+            return TEFn(span, elems, new_clone(ret))
         }
         if len(elems) == 1 {
             return elems[0]
@@ -410,10 +410,12 @@ let parse_unary(p: *Parser): ast.Expr = {
         let rhs = parse_unary(p)
         return EUnary(span, UOpDeref, rhs)
     }
-    if is_kw(tok, "new") {
+    if is_kw(tok, "new_clone") {
         advance(p)
-        let rhs = parse_unary(p)
-        return ENew(span, rhs)
+        expect_punct(p, "(")
+        let inner = parse_expr(p)
+        expect_punct(p, ")")
+        return ENew(span, inner)
     }
     parse_postfix(p)
 }
@@ -948,7 +950,7 @@ let interp_block(template: string, args: Vec<ast.Expr>, span: ast.Span): ast.Exp
     var void_path: Vec<string> = []
     vec.push(&void_path, "void")
     let void_te: ast.TypeExpr = TENamed(span, void_path, [])
-    let sb_te: ast.TypeExpr   = TEPtr(span, void_te)
+    let sb_te: ast.TypeExpr   = TEPtr(span, new_clone(void_te))
 
     let init_call: ast.Expr = builtin_call(span, "__qoz_interp_init", [])
 

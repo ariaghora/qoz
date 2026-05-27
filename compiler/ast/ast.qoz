@@ -58,10 +58,10 @@ type AssignOp =
 
 type TypeExpr =
     | TENamed(ast.Span, Vec<string>, Vec<ast.TypeExpr>)
-    | TEPtr(ast.Span, ast.TypeExpr)
+    | TEPtr(ast.Span, *ast.TypeExpr)
     | TETuple(ast.Span, Vec<ast.TypeExpr>)
     | TEUnit(ast.Span)
-    | TEFn(ast.Span, Vec<ast.TypeExpr>, ast.TypeExpr)
+    | TEFn(ast.Span, Vec<ast.TypeExpr>, *ast.TypeExpr)
 
 type Pattern =
     | PatWild(ast.Span)
@@ -121,10 +121,11 @@ type Expr =
     // Map literal: parallel keys and values. `[:]` is the empty map
     // (both vectors empty); `[k: v, ...]` carries entries.
     | EMapLit(ast.Span, Vec<ast.Expr>, Vec<ast.Expr>)
-    // Heap allocation: `new <expr>` evaluates the inner expression and
+    // Heap clone: `new_clone(<expr>)` evaluates the inner expression and
     // copies the result into a fresh heap cell, yielding a `*T`. Used to
     // build self-referential values whose `*T` fields must outlive the
-    // current stack frame.
+    // current stack frame. (`new` is reserved for future type
+    // construction; this node is the value-clone form.)
     | ENew(ast.Span, ast.Expr)
 
 type Stmt =

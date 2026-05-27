@@ -203,6 +203,7 @@ let build_keywords(): Map<string, bool> = {
     m["external"] = true
     m["as"]       = true
     m["new"]      = true
+    m["new_clone"] = true
     m["true"]     = true
     m["false"]    = true
     m["nil"]      = true
