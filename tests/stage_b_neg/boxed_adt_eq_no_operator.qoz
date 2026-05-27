@@ -1,0 +1,14 @@
+// Negative: a boxed (recursive) ADT is a heap pointer, so comparing two
+// of them with == would test pointer identity, which the language does
+// not promise. Without an @operator("==") overload the comparison is
+// rejected.
+
+type Expr =
+    | Num(i64)
+    | Add(Expr, Expr)
+
+let main(): i64 = {
+    let a = Add(Num(1), Num(2))
+    let b = Num(3)
+    if a == b { 0 } else { 1 }
+}

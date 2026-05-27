@@ -1,0 +1,47 @@
+// expect: 0
+// A boxed (recursive) ADT carries no auto-derived structural eq/hash,
+// but an @operator("==") and @operator("hash") overload make it usable
+// with ==, !=, and as a map key. Expr is recursive through Add, so it
+// is boxed. The operators compare and hash by evaluated value, so two
+// structurally different trees with the same value are equal.
+
+import fmt
+import map
+
+type Expr =
+    | Num(i64)
+    | Add(Expr, Expr)
+
+let eval(e: Expr): i64 =
+    match e {
+    | Num(n)    -> n
+    | Add(l, r) -> eval(l) + eval(r)
+    }
+
+@operator("==")
+let expr_eq(a: *Expr, b: *Expr): bool = eval(*a) == eval(*b)
+
+@operator("hash")
+let expr_hash(p: *Expr): u64 = eval(*p) as u64
+
+let main(): i64 = {
+    let a = Add(Num(1), Num(2))
+    let b = Add(Num(2), Num(1))
+    let c = Num(5)
+    var bad: i64 = 0
+    if !(a == b) { bad += 1 }
+    if a == c   { bad += 1 }
+    if a != b   { bad += 1 }
+    if !(a != c) { bad += 1 }
+
+    var m: Map<Expr, i64> = map.make()
+    m[a] = 100
+    m[c] = 500
+    // b has the same evaluated value as a, so it hits a's entry.
+    match map.get(&m, b) {
+    | Some(v) -> { if v != 100 { bad += 1 } }
+    | None    -> { bad += 1 }
+    }
+    fmt.println(`bad={bad}`)
+    bad
+}

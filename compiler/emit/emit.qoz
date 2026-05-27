@@ -3205,8 +3205,30 @@ let emit_index(e: *Emitter, base: ast.Expr, idx: ast.Expr) = {
 // Built-in `hash(x)` dispatches by the operand's static type.
 let emit_hash_builtin(e: *Emitter, arg: ast.Expr) = {
     let ct = infer_expr_ctype(e, arg)
+    let arg_te = infer_value_te(e, arg)
+    // An @operator("hash") overload takes precedence, so a type can
+    // supply its own hash. This is the escape hatch a boxed ADT needs
+    // to be usable as a map key or set element.
+    let tname = operator_first_param_type_name(arg_te)
+    if !strings.eq_raw(tname, "") {
+        if let Some(fn_name) = map.get(&e.op_dispatch, strings.cat("hash::", tname)) {
+            let at = c_type_for(e, arg_te)
+            let ret_te = match map.get(&e.fn_returns, fn_name) {
+            | Some(t) -> t
+            | None    -> single_named_te(span_of_expr(arg), "u64")
+            }
+            ensure_unary_byval_dispatch_helper(e, fn_name, at, c_type_for(e, ret_te))
+            push(e, `_qoz_byval_{fn_name}(`); emit_expr(e, arg); push(e, ")")
+            return
+        }
+    }
     if strings.eq_raw(ct, "qoz_string") {
         push(e, "qoz_string_hash("); emit_expr(e, arg); push(e, ")")
+        return
+    }
+    let vname = value_enum_name_of_ctype(e, ct)
+    if !strings.eq_raw(vname, "") {
+        push(e, `qoz_hash_{vname}(`); emit_expr(e, arg); push(e, ")")
         return
     }
     let record_name = record_struct_name_of_ctype(e, ct)
@@ -3216,6 +3238,11 @@ let emit_hash_builtin(e: *Emitter, arg: ast.Expr) = {
         push(e, ")")
         return
     }
+    if is_boxed_adt_te(e, arg_te) {
+        let _ = emit_die(span_of_expr(arg), `hashing boxed ADT '{tname}' needs an @operator("hash") overload; a recursive ADT has no structural hash`)
+        return
+    }
+    // Scalars and raw pointers fold their bit pattern directly.
     push(e, "(uint64_t)("); emit_expr(e, arg); push(e, ")")
 }
 
@@ -3626,6 +3653,24 @@ let record_struct_name_of_ctype(e: *Emitter, ct: string): string = {
     name
 }
 
+// True when the type is a boxed (recursive) ADT: declared as an enum
+// but not represented by value, so the C value is a heap pointer.
+// Comparing or hashing one would otherwise use pointer identity. A raw
+// pointer type (TEPtr) is not a boxed ADT.
+let is_boxed_adt_te(e: *Emitter, te: ast.TypeExpr): bool = {
+    match te {
+    | TENamed(_, path, args) -> {
+        if len(path) == 0 { return false }
+        let n = path[len(path) - 1]
+        if !map.contains(&e.is_enum, n) { return false }
+        let key = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+        !map.contains(&e.value_enums, key)
+    }
+    // TEPtr, TETuple, TEUnit, and TEFn are not declared ADTs.
+    | _ -> false
+    }
+}
+
 let emit_binary(e: *Emitter, op: ast.BinaryOp, lhs: ast.Expr, rhs: ast.Expr) = {
     let lct = infer_expr_ctype(e, lhs)
     if strings.eq_raw(lct, "qoz_string") {
@@ -3723,6 +3768,42 @@ let emit_binary(e: *Emitter, op: ast.BinaryOp, lhs: ast.Expr, rhs: ast.Expr) = {
         }
         | _ -> { }
         }
+    }
+    // A boxed (recursive) ADT is a heap pointer. The language does not
+    // promise pointer-identity comparison, so `==` and `!=` require an
+    // @operator("==") overload; `!=` derives by negation. A comparison
+    // against nil stays a raw null check.
+    match op {
+    | BOpEq | BOpNe -> {
+        if !is_nil_expr(lhs) && !is_nil_expr(rhs) {
+            let lte = infer_value_te(e, lhs)
+            if is_boxed_adt_te(e, lte) {
+                let tname = operator_first_param_type_name(lte)
+                if let Some(fn_name) = map.get(&e.op_dispatch, strings.cat("==::", tname)) {
+                    let ct = c_type_for(e, lte)
+                    let ret_te = match map.get(&e.fn_returns, fn_name) {
+                    | Some(t) -> t
+                    | None    -> single_named_te(span_of_expr(lhs), "bool")
+                    }
+                    ensure_byval_dispatch_helper(e, fn_name, ct, c_type_for(e, ret_te))
+                    match op {
+                    | BOpNe -> push(e, "!")
+                    // BOpEq is the only other operator reaching this
+                    // arm, and it needs no negation prefix.
+                    | _ -> { }
+                    }
+                    push(e, `_qoz_byval_{fn_name}(`); emit_expr(e, lhs); push(e, ", "); emit_expr(e, rhs); push(e, ")")
+                    return
+                }
+                let _ = emit_die(span_of_expr(lhs), `comparing boxed ADT '{tname}' with '{binary_op_text(op)}' needs an @operator("==") overload; a recursive ADT is not compared structurally`)
+                return
+            }
+        }
+    }
+    // Every other operator (ordering, arithmetic, logical, bitwise) and
+    // the nil and non-boxed cases fall through to the generic lowering
+    // below.
+    | _ -> { }
     }
     match op {
     | BOpRange | BOpRangeInclusive -> {
