@@ -791,7 +791,7 @@ type OuterPos = { line: i64, col: i64 }
 // reconstructed. `span` locates the opening delimiter of the
 // backtick literal in the outer file. The first byte of `body` sits
 // one column past that delimiter.
-let body_offset_to_outer(body: string, offset: i64, span: ast.Span): parse.OuterPos = {
+let body_offset_to_outer(body: string, offset: i64, span: ast.Span): OuterPos = {
     var line: i64 = span.line
     var col:  i64 = span.col + 1
     var i: i64 = 0
@@ -805,7 +805,7 @@ let body_offset_to_outer(body: string, offset: i64, span: ast.Span): parse.Outer
         }
         i += 1
     }
-    parse.OuterPos { line: line, col: col }
+    OuterPos { line: line, col: col }
 }
 
 // Translate one source byte from a backtick-string body into the bytes
@@ -1892,7 +1892,7 @@ type ParseOutput = {
     errors: Vec<string>,
 }
 
-let run(tokens: Vec<tokenize.Token>, file: string): parse.ParseOutput = {
+let run(tokens: Vec<tokenize.Token>, file: string): ParseOutput = {
     var p = make_parser(tokens, file)
     var decls: Vec<ast.Decl> = []
     var running = true

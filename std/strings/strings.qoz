@@ -230,7 +230,7 @@ let replace_all(s: string, needle: string, replacement: string): string = {
     if total < nn { return s }
     let sd = string_data(s) as *u8
     let nd = string_data(needle) as *u8
-    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    var sb: Strbuf = Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     sb_init(&sb)
     var i: i64 = 0
     var run_start: i64 = 0

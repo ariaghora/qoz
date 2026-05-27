@@ -72,7 +72,7 @@ type TyContext = {
     // written in, regardless of which fn / synth context the
     // resolution happens to fire from.
     file_pkgs:     Map<string, string>,
-    errors:       Vec<check.TypeError>,
+    errors:       Vec<TypeError>,
     type_params:  Map<string, bool>,
     // Bidirectional expected-type hints recorded for every
     // expression visited by infer_calls_expr with a non-error
@@ -80,14 +80,14 @@ type TyContext = {
     // innermost expression at a cursor position with a single
     // pass. The checker itself does not consume this after the
     // rewrite pass.
-    expected_hints: Vec<check.ExpectedHint>,
+    expected_hints: Vec<ExpectedHint>,
     // Return type of the function currently being checked. Used by
     // EReturn synth and by the tail-type check at end of body.
     // TyError means no surrounding function (top-level expression).
     current_ret_ty: ty.Ty,
 }
 
-let make_ctx(): check.TyContext = TyContext {
+let make_ctx(): TyContext = TyContext {
     enums:       [:],
     structs:     [:],
     aliases:     [:],
@@ -110,8 +110,8 @@ let make_ctx(): check.TyContext = TyContext {
     current_ret_ty: ty.ty_error_(),
 }
 
-let record_error(tc: *check.TyContext, span: ast.Span, msg: string) = {
-    vec.push(&tc.errors, check.TypeError { span: span, message: msg })
+let record_error(tc: *TyContext, span: ast.Span, msg: string) = {
+    vec.push(&tc.errors, TypeError { span: span, message: msg })
 }
 
 // Compose the registry key used by `tc.enums`, `tc.structs`, and
@@ -124,7 +124,7 @@ let type_key(home: string, name: string): string = {
 // Pick the matching home for a bare short type name. Returns the
 // use-site package if it declares the name, otherwise the prelude
 // ("") if it does, otherwise the first registered home.
-let pick_type_home(tc: *check.TyContext, name: string, use_site: string): string = {
+let pick_type_home(tc: *TyContext, name: string, use_site: string): string = {
     match map.get(&tc.type_homes, name) {
     | None         -> ""
     | Some(homes)  -> {
@@ -143,7 +143,7 @@ let pick_type_home(tc: *check.TyContext, name: string, use_site: string): string
 }
 
 // True when at least one home declares this short name as an enum.
-let has_enum_short(tc: *check.TyContext, name: string): bool = {
+let has_enum_short(tc: *TyContext, name: string): bool = {
     match map.get(&tc.type_homes, name) {
     | None        -> false
     | Some(homes) -> {
@@ -158,7 +158,7 @@ let has_enum_short(tc: *check.TyContext, name: string): bool = {
 // Similarly for structs and aliases. The reverse lookups are bare
 // "does any package have this name?" queries, used in spots like
 // is_qualified_variant_field where the home is not yet known.
-let has_struct_short(tc: *check.TyContext, name: string): bool = {
+let has_struct_short(tc: *TyContext, name: string): bool = {
     match map.get(&tc.type_homes, name) {
     | None        -> false
     | Some(homes) -> {
@@ -170,7 +170,7 @@ let has_struct_short(tc: *check.TyContext, name: string): bool = {
     }
 }
 
-let has_alias_short(tc: *check.TyContext, name: string): bool = {
+let has_alias_short(tc: *TyContext, name: string): bool = {
     match map.get(&tc.type_homes, name) {
     | None        -> false
     | Some(homes) -> {
@@ -183,15 +183,15 @@ let has_alias_short(tc: *check.TyContext, name: string): bool = {
 }
 
 // Find an enum / struct / alias declaration by (home, name).
-let find_enum(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+let find_enum(tc: *TyContext, home: string, name: string): Option<ast.Decl> = {
     map.get(&tc.enums, type_key(home, name))
 }
 
-let find_struct(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+let find_struct(tc: *TyContext, home: string, name: string): Option<ast.Decl> = {
     map.get(&tc.structs, type_key(home, name))
 }
 
-let find_alias(tc: *check.TyContext, home: string, name: string): Option<ast.Decl> = {
+let find_alias(tc: *TyContext, home: string, name: string): Option<ast.Decl> = {
     map.get(&tc.aliases, type_key(home, name))
 }
 
@@ -200,7 +200,7 @@ let find_alias(tc: *check.TyContext, home: string, name: string): Option<ast.Dec
 // that have not yet been threaded with home context. When the same
 // short name appears in two packages, the first registered one
 // wins, which matches the pre-refactor behaviour for those sites.
-let find_enum_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+let find_enum_short(tc: *TyContext, name: string): Option<ast.Decl> = {
     match map.get(&tc.type_homes, name) {
     | None        -> None
     | Some(homes) -> {
@@ -215,7 +215,7 @@ let find_enum_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
     }
 }
 
-let find_struct_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+let find_struct_short(tc: *TyContext, name: string): Option<ast.Decl> = {
     match map.get(&tc.type_homes, name) {
     | None        -> None
     | Some(homes) -> {
@@ -232,7 +232,7 @@ let find_struct_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
 
 // Append `home` to the list of homes recorded for `name`, if not
 // already present.
-let record_type_home(tc: *check.TyContext, name: string, home: string) = {
+let record_type_home(tc: *TyContext, name: string, home: string) = {
     var homes: Vec<string> = match map.get(&tc.type_homes, name) {
     | Some(v) -> v
     | None    -> []
@@ -245,14 +245,14 @@ let record_type_home(tc: *check.TyContext, name: string, home: string) = {
     }
 }
 
-let home_of_file(tc: *check.TyContext, file: string): string = {
+let home_of_file(tc: *TyContext, file: string): string = {
     match map.get(&tc.file_pkgs, file) {
     | Some(h) -> h
     | None    -> ""
     }
 }
 
-let register_decl(tc: *check.TyContext, d: ast.Decl) = {
+let register_decl(tc: *TyContext, d: ast.Decl) = {
     match d {
     | DImport(_, path, alias)         -> {
         var name = alias
@@ -339,13 +339,13 @@ let register_decl(tc: *check.TyContext, d: ast.Decl) = {
     }
 }
 
-let type_name_collides(tc: *check.TyContext, name: string): bool = {
+let type_name_collides(tc: *TyContext, name: string): bool = {
     has_enum_short(tc, name) ||
     has_struct_short(tc, name) ||
     has_alias_short(tc, name)
 }
 
-let register_file(tc: *check.TyContext, f: ast.File) = {
+let register_file(tc: *TyContext, f: ast.File) = {
     // Prelude packages are always in scope regardless of whether the
     // user's source contains an `import` for them. Register their
     // names so qualified calls (`vec.push`, `map.insert`) resolve
@@ -417,7 +417,7 @@ let caret_pad(line: string, col: i64): string = {
     strings.cat(s, "^")
 }
 
-let report(tc: *check.TyContext) = {
+let report(tc: *TyContext) = {
     var cache = src_cache_make()
     // The checker walks the program twice (once during infer_calls,
     // once during check_fn_bodies). The same diagnostic may be
@@ -459,7 +459,7 @@ let i64_to_string_local(v: i64): string = {
     s
 }
 
-let summary(tc: *check.TyContext) = {
+let summary(tc: *TyContext) = {
     fmt.println(`enums:    {len(tc.enums)}`)
     fmt.println(`structs:  {len(tc.structs)}`)
     fmt.println(`aliases:  {len(tc.aliases)}`)
@@ -471,7 +471,7 @@ let summary(tc: *check.TyContext) = {
 
 // --- Type resolution ---
 
-let resolve_type(tc: *check.TyContext, te: ast.TypeExpr): ty.Ty = {
+let resolve_type(tc: *TyContext, te: ast.TypeExpr): ty.Ty = {
     match te {
     | TEUnit(_)                  -> ty.ty_unit_()
     | TEPtr(_, inner)            -> ty.ty_ptr_(resolve_type(tc, *inner))
@@ -491,15 +491,14 @@ let resolve_type(tc: *check.TyContext, te: ast.TypeExpr): ty.Ty = {
     }
 }
 
-let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args: Vec<ast.TypeExpr>): ty.Ty = {
+let resolve_named(tc: *TyContext, span: ast.Span, path: Vec<string>, args: Vec<ast.TypeExpr>): ty.Ty = {
     if len(path) == 2 {
         let pkg  = path[0]
         let name = path[1]
         // Qualified access: pick the home that matches the qualifier
         // when one of the registered homes is exactly `pkg`. An
         // empty home (prelude or the user's entry package) is
-        // accessible under any qualifier, matching how the entry
-        // file refers to its own types as `main.<Name>`.
+        // accessible under any qualifier.
         var resolved_home = pkg
         var qualifier_ok = false
         match map.get(&tc.type_homes, name) {
@@ -579,7 +578,7 @@ let resolve_named(tc: *check.TyContext, span: ast.Span, path: Vec<string>, args:
     resolve_named_short(tc, span, "", name, args)
 }
 
-let resolve_named_short(tc: *check.TyContext, span: ast.Span, home: string, name: string, args: Vec<ast.TypeExpr>): ty.Ty = {
+let resolve_named_short(tc: *TyContext, span: ast.Span, home: string, name: string, args: Vec<ast.TypeExpr>): ty.Ty = {
     if map.contains(&tc.type_params, name) {
         return ty.ty_var_(name)
     }
@@ -696,7 +695,7 @@ let env_has(env: *Env, name: string): bool = {
 // Walks expected_hints and returns the hint whose span starts
 // closest to but not after `(line, col)` in `file`. Returns
 // None when no hint precedes the cursor.
-let expected_at_cursor(tc: *check.TyContext, file: string, line: i64, col: i64): Option<ty.Ty> = {
+let expected_at_cursor(tc: *TyContext, file: string, line: i64, col: i64): Option<ty.Ty> = {
     var best_line: i64 = -1
     var best_col: i64 = -1
     var found = false
@@ -721,11 +720,11 @@ let expected_at_cursor(tc: *check.TyContext, file: string, line: i64, col: i64):
     if found { Some(result) } else { None }
 }
 
-let synth(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
+let synth(tc: *TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     synth_inner(tc, env, e)
 }
 
-let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
+let synth_inner(tc: *TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     match e {
     | EInt(_, _)             -> ty.ty_int_untyped()
     | EFloat(_, _)           -> ty.ty_float_untyped()
@@ -912,7 +911,7 @@ let is_lvalue_shape(e: ast.Expr): bool = {
     }
 }
 
-let is_lvalue(tc: *check.TyContext, env: *Env, e: ast.Expr): bool = {
+let is_lvalue(tc: *TyContext, env: *Env, e: ast.Expr): bool = {
     if !is_lvalue_shape(e) { return false }
     match e {
     | EField(_, base, _) | EIndex(_, base, _) -> {
@@ -935,7 +934,7 @@ let is_lvalue(tc: *check.TyContext, env: *Env, e: ast.Expr): bool = {
 // unassignable shape, and if the rhs type cannot flow into the lhs
 // type. Returns unit. The assignment expression itself produces no
 // value.
-let check_assign(tc: *check.TyContext, env: *Env, sp: ast.Span, lhs: ast.Expr, rhs: ast.Expr): ty.Ty = {
+let check_assign(tc: *TyContext, env: *Env, sp: ast.Span, lhs: ast.Expr, rhs: ast.Expr): ty.Ty = {
     if !is_lvalue(tc, env, lhs) {
         record_error(tc, sp, "left-hand side of `=` is not assignable")
     }
@@ -963,7 +962,7 @@ let check_assign(tc: *check.TyContext, env: *Env, sp: ast.Span, lhs: ast.Expr, r
     ty.ty_unit_()
 }
 
-let synth_unary(tc: *check.TyContext, env: *Env, sp: ast.Span, op: ast.UnaryOp, rhs: ast.Expr): ty.Ty = {
+let synth_unary(tc: *TyContext, env: *Env, sp: ast.Span, op: ast.UnaryOp, rhs: ast.Expr): ty.Ty = {
     let t = synth(tc, env, rhs)
     if ty.ty_is_error(t) { return ty.ty_error_() }
     match op {
@@ -999,7 +998,7 @@ let synth_unary(tc: *check.TyContext, env: *Env, sp: ast.Span, op: ast.UnaryOp, 
 // string for entry/prelude declarations), None when no such
 // enum exists. The Option wrapper distinguishes "registered at
 // prelude" from "not found".
-let c_enum_home_short(tc: *check.TyContext, name: string): Option<string> = {
+let c_enum_home_short(tc: *TyContext, name: string): Option<string> = {
     match map.get(&tc.type_homes, name) {
     | None        -> None
     | Some(homes) -> {
@@ -1011,7 +1010,7 @@ let c_enum_home_short(tc: *check.TyContext, name: string): Option<string> = {
     }
 }
 
-let find_c_enum_decl_short(tc: *check.TyContext, name: string): Option<ast.Decl> = {
+let find_c_enum_decl_short(tc: *TyContext, name: string): Option<ast.Decl> = {
     if let Some(h) = c_enum_home_short(tc, name) {
         return map.get(&tc.c_enums, type_key(h, name))
     }
@@ -1035,7 +1034,7 @@ let c_enum_has_variant(d: ast.Decl, variant: string): bool = {
 // base is either a bare identifier (the enum's renamed name in
 // the same package) or `pkg.EnumShort`, where the qualify pass
 // has renamed the registered enum to `<pkg>_<EnumShort>`.
-let c_enum_variant_ref(tc: *check.TyContext, base: ast.Expr, name: string): Option<ty.Ty> = {
+let c_enum_variant_ref(tc: *TyContext, base: ast.Expr, name: string): Option<ty.Ty> = {
     let base_name = match base {
     | EIdent(_, n) -> n
     | EField(_, inner, enum_short) -> {
@@ -1063,7 +1062,7 @@ let c_enum_variant_ref(tc: *check.TyContext, base: ast.Expr, name: string): Opti
     None
 }
 
-let synth_field(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, name: string): ty.Ty = {
+let synth_field(tc: *TyContext, env: *Env, sp: ast.Span, base: ast.Expr, name: string): ty.Ty = {
     if is_qualified_variant_field(tc, base, name) {
         return synth_variant_ctor(tc, name)
     }
@@ -1125,7 +1124,7 @@ let synth_field(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, n
 // enum and the field name is one of its variants. Lets the bare
 // variant constructor path handle the synth, identical in shape to
 // what `Variant` alone produces.
-let is_qualified_variant_field(tc: *check.TyContext, base: ast.Expr, name: string): bool = {
+let is_qualified_variant_field(tc: *TyContext, base: ast.Expr, name: string): bool = {
     match base {
     | EIdent(_, base_name) -> {
         if !has_enum_short(tc, base_name) { return false }
@@ -1138,7 +1137,7 @@ let is_qualified_variant_field(tc: *check.TyContext, base: ast.Expr, name: strin
     }
 }
 
-let field_type_of(tc: *check.TyContext, bt: ty.Ty, name: string): ty.Ty = {
+let field_type_of(tc: *TyContext, bt: ty.Ty, name: string): ty.Ty = {
     match bt {
     | TyPtr(inner) -> field_type_of(tc, *inner, name)
     | TyRecord(home, struct_name, tyargs) -> lookup_field(tc, home, struct_name, tyargs, name)
@@ -1154,7 +1153,7 @@ let field_type_of(tc: *check.TyContext, bt: ty.Ty, name: string): ty.Ty = {
     }
 }
 
-let lookup_field(tc: *check.TyContext, home: string, struct_name: string, tyargs: Vec<ty.Ty>, field: string): ty.Ty = {
+let lookup_field(tc: *TyContext, home: string, struct_name: string, tyargs: Vec<ty.Ty>, field: string): ty.Ty = {
     match find_struct(tc, home, struct_name) {
     | Some(d) -> {
         match d {
@@ -1176,7 +1175,7 @@ let lookup_field(tc: *check.TyContext, home: string, struct_name: string, tyargs
     }
 }
 
-let resolve_type_with_subst(tc: *check.TyContext, te: ast.TypeExpr, params: Vec<string>, args: Vec<ty.Ty>): ty.Ty = {
+let resolve_type_with_subst(tc: *TyContext, te: ast.TypeExpr, params: Vec<string>, args: Vec<ty.Ty>): ty.Ty = {
     let saved = tc.type_params
     set_type_params(tc, params)
     let raw = resolve_type(tc, te)
@@ -1221,7 +1220,7 @@ let apply_subst(t: ty.Ty, params: Vec<string>, args: Vec<ty.Ty>): ty.Ty = {
 // an integer index), `Vec<T>` (integer index, returns T), and
 // `Map<K, V>` (key must be assignable to K, returns V). Any other
 // base, and any non-matching index type, raises a diagnostic.
-let synth_index(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, idx: ast.Expr): ty.Ty = {
+let synth_index(tc: *TyContext, env: *Env, sp: ast.Span, base: ast.Expr, idx: ast.Expr): ty.Ty = {
     let bt = synth(tc, env, base)
     let it = synth(tc, env, idx)
     if ty.ty_is_error(bt) || ty.ty_is_error(it) { return ty.ty_error_() }
@@ -1343,7 +1342,7 @@ let can_show_ty(t: ty.Ty): bool = {
     }
 }
 
-let resolve_callee_fn(tc: *check.TyContext, callee: ast.Expr): string = {
+let resolve_callee_fn(tc: *TyContext, callee: ast.Expr): string = {
     match callee {
     | EIdent(_, name) -> name
     | EField(_, base, method) -> {
@@ -1370,7 +1369,7 @@ let resolve_callee_fn(tc: *check.TyContext, callee: ast.Expr): string = {
     }
 }
 
-let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>): ty.Ty = {
+let synth_call_full(tc: *TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>): ty.Ty = {
     let fn_name: string = resolve_callee_fn(tc, callee)
     // size_of is parsed as ESizeOf directly, so it never reaches this
     // path. len and hash are bare-name primitives. len accepts a
@@ -1475,7 +1474,7 @@ let synth_call_full(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.E
 // them. The unification matches each declared field's TypeExpr (which
 // may name a tparam) against the synthesised value type and accumulates
 // bindings.
-let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): ty.Ty = {
+let synth_record(tc: *TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): ty.Ty = {
     let bare_resolved = resolve_type(tc, te)
     let struct_name = record_name_of(bare_resolved)
     if strings.eq_raw(struct_name, "") { return bare_resolved }
@@ -1519,7 +1518,7 @@ let synth_record(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr
 // Reports unknown field names. Does not enforce completeness because
 // partial initialisation is part of the language (the user-controlled
 // option to leave fields default-initialised).
-let validate_record_fields(tc: *check.TyContext, sp: ast.Span, home: string, struct_name: string, fields: Vec<ast.RecordFieldLit>) = {
+let validate_record_fields(tc: *TyContext, sp: ast.Span, home: string, struct_name: string, fields: Vec<ast.RecordFieldLit>) = {
     match find_struct(tc, home, struct_name) {
     | Some(d) -> {
         match d {
@@ -1547,7 +1546,7 @@ let validate_record_fields(tc: *check.TyContext, sp: ast.Span, home: string, str
 // by synth_record. When the annotation already pins the args (or the
 // struct has no tparams), the original te is returned unchanged so the
 // AST node identity does not flip.
-let inferred_record_te(tc: *check.TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): ast.TypeExpr = {
+let inferred_record_te(tc: *TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): ast.TypeExpr = {
     let orig_path = te_path_segments(te)
     let struct_name = if len(orig_path) >= 1 { orig_path[len(orig_path) - 1] } else { "" }
     if strings.eq_raw(struct_name, "") { return te }
@@ -1592,7 +1591,7 @@ let ty_record_args(t: ty.Ty): Vec<ty.Ty> = {
 // annotation (te is TEUnit) since the value's type is used as the
 // binding's type. Skips when either side is an error so that a
 // single mismatch does not cascade.
-let check_binding_compat(tc: *check.TyContext, sp: ast.Span, te: ast.TypeExpr, bound: ty.Ty, vt: ty.Ty) = {
+let check_binding_compat(tc: *TyContext, sp: ast.Span, te: ast.TypeExpr, bound: ty.Ty, vt: ty.Ty) = {
     // No annotation = nothing to check. The binding's type is the
     // value's type by definition.
     if let TEUnit(_) = te { return }
@@ -1610,7 +1609,7 @@ let annotation_pins_type_args(te: ast.TypeExpr, tparams: Vec<string>): bool = {
     }
 }
 
-let struct_tparams(tc: *check.TyContext, home: string, name: string): Vec<string> = {
+let struct_tparams(tc: *TyContext, home: string, name: string): Vec<string> = {
     let empty: Vec<string> = []
     match find_struct(tc, home, name) {
     | Some(d) -> {
@@ -1623,7 +1622,7 @@ let struct_tparams(tc: *check.TyContext, home: string, name: string): Vec<string
     }
 }
 
-let struct_field_typeexpr(tc: *check.TyContext, home: string, name: string, field: string): Option<ast.TypeExpr> = {
+let struct_field_typeexpr(tc: *TyContext, home: string, name: string, field: string): Option<ast.TypeExpr> = {
     match find_struct(tc, home, name) {
     | Some(d) -> {
         match d {
@@ -1647,7 +1646,7 @@ let struct_field_typeexpr(tc: *check.TyContext, home: string, name: string, fiel
 // `Enum::Variant` path expression. Two segments: the enum name and a
 // variant of that enum. The result is the variant constructor type
 // produced by synth_variant_ctor. Any other shape is reported.
-let synth_path(tc: *check.TyContext, sp: ast.Span, segs: Vec<string>): ty.Ty = {
+let synth_path(tc: *TyContext, sp: ast.Span, segs: Vec<string>): ty.Ty = {
     if len(segs) != 2 {
         record_error(tc, sp, "path expression must have exactly two segments (Enum::Variant)")
         return ty.ty_error_()
@@ -1673,7 +1672,7 @@ let synth_path(tc: *check.TyContext, sp: ast.Span, segs: Vec<string>): ty.Ty = {
     }
 }
 
-let synth_variant_ctor(tc: *check.TyContext, name: string): ty.Ty = {
+let synth_variant_ctor(tc: *TyContext, name: string): ty.Ty = {
     synth_variant_ctor_with_args(tc, name, [])
 }
 
@@ -1701,7 +1700,7 @@ let explicit_enum_from_callee(callee: ast.Expr): string = {
 // parameters. `Option.Some(42)` returns `Option<i64>` rather than the
 // open `Option<T>`. Falls back to the open form when no args are
 // available or unification leaves a tparam unbound.
-let synth_variant_ctor_with_args(tc: *check.TyContext, name: string, arg_tys: Vec<ty.Ty>): ty.Ty = {
+let synth_variant_ctor_with_args(tc: *TyContext, name: string, arg_tys: Vec<ty.Ty>): ty.Ty = {
     synth_variant_ctor_with_args_in(tc, name, variant_enum_name(tc, name), arg_tys)
 }
 
@@ -1709,7 +1708,7 @@ let synth_variant_ctor_with_args(tc: *check.TyContext, name: string, arg_tys: Ve
 // argument is the one chosen by qualified-call resolution. For the
 // unqualified path the caller passes variant_enum_name(tc, name) as
 // the default.
-let synth_variant_ctor_with_args_in(tc: *check.TyContext, name: string, enum_name: string, arg_tys: Vec<ty.Ty>): ty.Ty = {
+let synth_variant_ctor_with_args_in(tc: *TyContext, name: string, enum_name: string, arg_tys: Vec<ty.Ty>): ty.Ty = {
     if strings.eq_raw(enum_name, "") { return ty.ty_error_() }
     let variant_pos = variant_positional_types(tc, enum_name, name)
     // Arity check. A diagnostic-bearing site that has a span (the
@@ -1765,14 +1764,14 @@ let record_home_of(t: ty.Ty): string = {
     }
 }
 
-let variant_enum_name(tc: *check.TyContext, variant: string): string = {
+let variant_enum_name(tc: *TyContext, variant: string): string = {
     match map.get(&tc.variant_of, variant) {
     | Some(en) -> en
     | None     -> ""
     }
 }
 
-let enum_tparams(tc: *check.TyContext, enum_name: string): Vec<string> = {
+let enum_tparams(tc: *TyContext, enum_name: string): Vec<string> = {
     let empty: Vec<string> = []
     match find_enum_short(tc, enum_name) {
     | Some(d) -> {
@@ -1785,7 +1784,7 @@ let enum_tparams(tc: *check.TyContext, enum_name: string): Vec<string> = {
     }
 }
 
-let variant_positional_types(tc: *check.TyContext, enum_name: string, variant: string): Vec<ast.TypeExpr> = {
+let variant_positional_types(tc: *TyContext, enum_name: string, variant: string): Vec<ast.TypeExpr> = {
     let empty: Vec<ast.TypeExpr> = []
     match find_enum_short(tc, enum_name) {
     | Some(d) -> {
@@ -1813,7 +1812,7 @@ let variant_positional_types(tc: *check.TyContext, enum_name: string, variant: s
     }
 }
 
-let synth_call_with_decl(tc: *check.TyContext, sp: ast.Span, d: ast.Decl, type_args: Vec<ast.TypeExpr>, arg_tys: Vec<ty.Ty>): ty.Ty = {
+let synth_call_with_decl(tc: *TyContext, sp: ast.Span, d: ast.Decl, type_args: Vec<ast.TypeExpr>, arg_tys: Vec<ty.Ty>): ty.Ty = {
     match d {
     | DFn(_, fn_name, tparams, params, ret, _, _) -> {
         if len(arg_tys) != len(params) {
@@ -1981,7 +1980,7 @@ let is_ty_error(t: ty.Ty): bool =
     | _       -> false
     }
 
-let synth_ident(tc: *check.TyContext, env: *Env, span: ast.Span, name: string): ty.Ty = {
+let synth_ident(tc: *TyContext, env: *Env, span: ast.Span, name: string): ty.Ty = {
     if env_has(env, name) {
         return env_lookup(env, name)
     }
@@ -2036,7 +2035,7 @@ let synth_ident(tc: *check.TyContext, env: *Env, span: ast.Span, name: string): 
 // Compute the value type of a function or extern decl as a `TyFn`.
 // Used when a function is referenced bare (as a first-class value)
 // rather than called.
-let fn_decl_value_type(tc: *check.TyContext, d: ast.Decl): ty.Ty = {
+let fn_decl_value_type(tc: *TyContext, d: ast.Decl): ty.Ty = {
     match d {
     | DFn(_, _, _, params, ret, _, _) | DExternal(_, _, _, params, ret) -> {
         var pts: Vec<ty.Ty> = []
@@ -2052,7 +2051,7 @@ let fn_decl_value_type(tc: *check.TyContext, d: ast.Decl): ty.Ty = {
 // span pointing at the operator's expression. A propagated `TyError`
 // on either side short-circuits without raising a new diagnostic so
 // downstream noise stays low.
-let synth_binary(tc: *check.TyContext, env: *Env, sp: ast.Span, op: ast.BinaryOp, l: ast.Expr, r: ast.Expr): ty.Ty = {
+let synth_binary(tc: *TyContext, env: *Env, sp: ast.Span, op: ast.BinaryOp, l: ast.Expr, r: ast.Expr): ty.Ty = {
     let lt = synth(tc, env, l)
     let rt = synth(tc, env, r)
     if ty.ty_is_error(lt) || ty.ty_is_error(rt) { return binary_result_default(op) }
@@ -2109,7 +2108,7 @@ let binary_result_default(op: ast.BinaryOp): ty.Ty = {
 }
 
 
-let synth_block(tc: *check.TyContext, env: *Env, stmts: Vec<ast.Stmt>, tail: ast.Expr): ty.Ty = {
+let synth_block(tc: *TyContext, env: *Env, stmts: Vec<ast.Stmt>, tail: ast.Expr): ty.Ty = {
     for s in stmts {
         match s {
         | SLet(sp, name, te, val)  -> {
@@ -2144,7 +2143,7 @@ let synth_block(tc: *check.TyContext, env: *Env, stmts: Vec<ast.Stmt>, tail: ast
 // if-without-else (parser-produced nil else) is treated as a
 // statement-shaped construct: the value is whatever the then-branch
 // produces, with nil flowing in cleanly.
-let synth_if(tc: *check.TyContext, env: *Env, sp: ast.Span, c: ast.Expr, t: ast.Expr, f: ast.Expr): ty.Ty = {
+let synth_if(tc: *TyContext, env: *Env, sp: ast.Span, c: ast.Expr, t: ast.Expr, f: ast.Expr): ty.Ty = {
     let ct = synth(tc, env, c)
     if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
         record_error(tc, sp, `if condition must be bool, got {ty.ty_show(ct)}`)
@@ -2163,7 +2162,7 @@ let synth_if(tc: *check.TyContext, env: *Env, sp: ast.Span, c: ast.Expr, t: ast.
     tt
 }
 
-let synth_match(tc: *check.TyContext, env: *Env, sp: ast.Span, scrut: ast.Expr, arms: Vec<ast.MatchArm>): ty.Ty = {
+let synth_match(tc: *TyContext, env: *Env, sp: ast.Span, scrut: ast.Expr, arms: Vec<ast.MatchArm>): ty.Ty = {
     let scrut_ty = synth(tc, env, scrut)
     var result: ty.Ty = ty.ty_unit_()
     var first = true
@@ -2189,7 +2188,7 @@ let synth_match(tc: *check.TyContext, env: *Env, sp: ast.Span, scrut: ast.Expr, 
     result
 }
 
-let check_match_exhaustiveness(tc: *check.TyContext, scrut: ast.Expr, scrut_ty: ty.Ty, arms: Vec<ast.MatchArm>) = {
+let check_match_exhaustiveness(tc: *TyContext, scrut: ast.Expr, scrut_ty: ty.Ty, arms: Vec<ast.MatchArm>) = {
     // Bool scrutinees: every match must cover both true and false (or
     // contain a catch-all). The check is light because bool has a
     // fixed two-element value set.
@@ -2270,7 +2269,7 @@ let enum_name_of_ty(t: ty.Ty): string = {
     }
 }
 
-let check_bool_exhaustiveness(tc: *check.TyContext, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
+let check_bool_exhaustiveness(tc: *TyContext, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
     var has_true  = false
     var has_false = false
     var has_catch = false
@@ -2384,7 +2383,7 @@ let env_truncate(env: *Env, n: i64) = {
     env.bindings.len = n
 }
 
-let bind_pattern(tc: *check.TyContext, env: *Env, pat: ast.Pattern, scrut: ty.Ty) = {
+let bind_pattern(tc: *TyContext, env: *Env, pat: ast.Pattern, scrut: ty.Ty) = {
     match pat {
     | PatWild(_) -> { }
     | PatLitInt(sp, _) -> {
@@ -2416,7 +2415,7 @@ let bind_pattern(tc: *check.TyContext, env: *Env, pat: ast.Pattern, scrut: ty.Ty
     }
 }
 
-let bind_variant_pattern(tc: *check.TyContext, env: *Env, sp: ast.Span, path: Vec<string>, sub_pats: Vec<ast.Pattern>, scrut: ty.Ty) = {
+let bind_variant_pattern(tc: *TyContext, env: *Env, sp: ast.Span, path: Vec<string>, sub_pats: Vec<ast.Pattern>, scrut: ty.Ty) = {
     if len(path) < 1 { return }
     let variant = path[len(path) - 1]
     match map.get(&tc.variant_of, variant) {
@@ -2480,7 +2479,7 @@ let bind_variant_pattern(tc: *check.TyContext, env: *Env, sp: ast.Span, path: Ve
 }
 
 // Returns a new File with type-args filled in at every generic call site.
-let infer_calls(tc: *check.TyContext, f: ast.File): ast.File = {
+let infer_calls(tc: *TyContext, f: ast.File): ast.File = {
     var new_decls: Vec<ast.Decl> = []
     for d in f.decls {
         vec.push(&new_decls, infer_calls_decl(tc, d))
@@ -2488,7 +2487,7 @@ let infer_calls(tc: *check.TyContext, f: ast.File): ast.File = {
     ast.File { path: f.path, decls: new_decls }
 }
 
-let infer_calls_decl(tc: *check.TyContext, d: ast.Decl): ast.Decl = {
+let infer_calls_decl(tc: *TyContext, d: ast.Decl): ast.Decl = {
     match d {
     | DFn(sp, name, tparams, params, ret, body, attr) -> {
         set_type_params(tc, tparams)
@@ -2534,7 +2533,7 @@ let denormalize_enum_name(renamed: string): string = {
     renamed
 }
 
-let pick_c_enum_home(tc: *check.TyContext, name: string, expected: ty.Ty): Option<string> = {
+let pick_c_enum_home(tc: *TyContext, name: string, expected: ty.Ty): Option<string> = {
     if let Some(homes) = map.get(&tc.c_variant_homes, name) {
         if let TyCEnum(_, enum_name, _) = expected {
             for h in homes { if strings.eq_raw(h, enum_name) { return Some(h) } }
@@ -2544,9 +2543,9 @@ let pick_c_enum_home(tc: *check.TyContext, name: string, expected: ty.Ty): Optio
     None
 }
 
-let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): ast.Expr = {
+let infer_calls_expr(tc: *TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): ast.Expr = {
     if !ty.ty_is_error(expected) {
-        vec.push(&tc.expected_hints, check.ExpectedHint { span: ast.span_of_expr(e), ty: expected })
+        vec.push(&tc.expected_hints, ExpectedHint { span: ast.span_of_expr(e), ty: expected })
     }
     match e {
     | EInt(_, _)              -> e
@@ -2689,7 +2688,7 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
     }
 }
 
-let infer_calls_stmt(tc: *check.TyContext, env: *Env, s: ast.Stmt): ast.Stmt = {
+let infer_calls_stmt(tc: *TyContext, env: *Env, s: ast.Stmt): ast.Stmt = {
     match s {
     | SLet(sp, name, te, val) -> {
         let annotated = resolve_type(tc, te)
@@ -2709,7 +2708,7 @@ let infer_calls_stmt(tc: *check.TyContext, env: *Env, s: ast.Stmt): ast.Stmt = {
     }
 }
 
-let pick_record_type(tc: *check.TyContext, te: ast.TypeExpr, expected: ty.Ty): ast.TypeExpr = {
+let pick_record_type(tc: *TyContext, te: ast.TypeExpr, expected: ty.Ty): ast.TypeExpr = {
     match te {
     | TENamed(sp, path, args) -> {
         if len(args) > 0 { return te }
@@ -2730,7 +2729,7 @@ let pick_record_type(tc: *check.TyContext, te: ast.TypeExpr, expected: ty.Ty): a
     }
 }
 
-let record_field_hint(tc: *check.TyContext, te: ast.TypeExpr, field_name: string): ty.Ty = {
+let record_field_hint(tc: *TyContext, te: ast.TypeExpr, field_name: string): ty.Ty = {
     match te {
     | TENamed(sp, path, args) -> {
         if len(path) < 1 { return ty.ty_error_() }
@@ -2772,7 +2771,7 @@ let record_field_hint(tc: *check.TyContext, te: ast.TypeExpr, field_name: string
     }
 }
 
-let collect_arg_hints(tc: *check.TyContext, callee: ast.Expr, n: i64, out: *Vec<ty.Ty>) = {
+let collect_arg_hints(tc: *TyContext, callee: ast.Expr, n: i64, out: *Vec<ty.Ty>) = {
     let name = resolve_callee_fn(tc, callee)
     if !strings.eq_raw(name, "") {
         match map.get(&tc.fns, name) {
@@ -2811,7 +2810,7 @@ let collect_arg_hints(tc: *check.TyContext, callee: ast.Expr, n: i64, out: *Vec<
 }
 
 
-let fill_fn_param_hints(tc: *check.TyContext, d: ast.Decl, out: *Vec<ty.Ty>) = {
+let fill_fn_param_hints(tc: *TyContext, d: ast.Decl, out: *Vec<ty.Ty>) = {
     match d {
     | DFn(_, _, tparams, params, _, _, _) -> {
         let saved = tc.type_params
@@ -2830,7 +2829,7 @@ let fill_fn_param_hints(tc: *check.TyContext, d: ast.Decl, out: *Vec<ty.Ty>) = {
     }
 }
 
-let fill_variant_pos_hints(tc: *check.TyContext, d: ast.Decl, variant_name: string, out: *Vec<ty.Ty>) = {
+let fill_variant_pos_hints(tc: *TyContext, d: ast.Decl, variant_name: string, out: *Vec<ty.Ty>) = {
     match d {
     | DEnum(_, _, tparams, variants) -> {
         let saved = tc.type_params
@@ -2866,7 +2865,7 @@ let is_ty_unit_or_error(t: ty.Ty): bool = {
 // of the candidates, that enum wins. When the hint is open or
 // unrelated, the call site is ambiguous and the caller reports an
 // error with the candidate list.
-let pick_variant_home(tc: *check.TyContext, homes: Vec<string>, expected: ty.Ty, sp: ast.Span): string = {
+let pick_variant_home(tc: *TyContext, homes: Vec<string>, expected: ty.Ty, sp: ast.Span): string = {
     // The expected type pins the enum when it is a concrete ADT.
     match expected {
     | TyAdt(_, name, _) -> {
@@ -2991,7 +2990,7 @@ let single_te(sp: ast.Span, name: string): ast.TypeExpr = {
 // success and None when the dispatch cannot be performed (in which
 // case rewrite_call falls through and the user gets the standard
 // "undefined name" diagnostic).
-let rewrite_container_builtin(tc: *check.TyContext, env: *Env, sp: ast.Span, name: string, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): Option<ast.Expr> = {
+let rewrite_container_builtin(tc: *TyContext, env: *Env, sp: ast.Span, name: string, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): Option<ast.Expr> = {
     if len(args) == 0 {
         record_error(tc, sp, `'{name}' needs a container as its first argument`)
         return Some(ECall(sp, new_clone(EIdent(sp, name)), type_args, args))
@@ -3035,7 +3034,7 @@ let match_builtin_pkg(name: string, is_vec: bool, is_map: bool): string = {
     ""
 }
 
-let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): ast.Expr = {
+let rewrite_call(tc: *TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): ast.Expr = {
     // The interpolation desugar emits every slot as a call to
     // __qoz_interp_push_str. Once the slot's value type is known,
     // retarget the call to the matching typed push intrinsic so the
@@ -3275,7 +3274,7 @@ let stmt_has_return(s: ast.Stmt): bool = {
     }
 }
 
-let check_fn_bodies(tc: *check.TyContext, f: ast.File) = {
+let check_fn_bodies(tc: *TyContext, f: ast.File) = {
     for d in f.decls {
         match d {
         | DFn(sp, name, tparams, params, ret, body, _) -> {
@@ -3329,16 +3328,16 @@ let check_fn_bodies(tc: *check.TyContext, f: ast.File) = {
 
 // --- Symbol kind sanity check ---
 
-let set_type_params(tc: *check.TyContext, params: Vec<string>) = {
+let set_type_params(tc: *TyContext, params: Vec<string>) = {
     tc.type_params = [:]
     for p in params { tc.type_params[p] = true }
 }
 
-let clear_type_params(tc: *check.TyContext) = {
+let clear_type_params(tc: *TyContext) = {
     tc.type_params = [:]
 }
 
-let validate_signatures(tc: *check.TyContext, f: ast.File) = {
+let validate_signatures(tc: *TyContext, f: ast.File) = {
     for d in f.decls {
         match d {
         | DFn(_, name, tparams, params, ret, _, _) -> {
@@ -3407,7 +3406,7 @@ let validate_signatures(tc: *check.TyContext, f: ast.File) = {
 // A value type cannot contain itself: the inline C struct would be
 // infinite. Recursion must pass through a pointer (`*T`), a Vec, or a
 // Map, all of which hold their contents behind a heap indirection.
-let check_value_recursion(tc: *check.TyContext, f: ast.File) = {
+let check_value_recursion(tc: *TyContext, f: ast.File) = {
     let recs = recur.value_recursive_adts(f)
     for d in f.decls {
         match d {

@@ -19,7 +19,7 @@ type TokenKind =
     | TokEOF
 
 type Token = {
-    kind: tokenize.TokenKind,
+    kind: TokenKind,
     text: string,
     line: i64,
     col:  i64,
@@ -31,15 +31,15 @@ type CommentKind =
     | CommentBlock
 
 type Comment = {
-    kind: tokenize.CommentKind,
+    kind: CommentKind,
     text: string,
     line: i64,
     col:  i64,
 }
 
 type TokenizeResult = {
-    tokens:   Vec<tokenize.Token>,
-    comments: Vec<tokenize.Comment>,
+    tokens:   Vec<Token>,
+    comments: Vec<Comment>,
 }
 
 type Lexer = {
@@ -47,7 +47,7 @@ type Lexer = {
     pos:      i64,
     line:     i64,
     col:      i64,
-    comments: Vec<tokenize.Comment>,
+    comments: Vec<Comment>,
 }
 
 let make_lexer(src: string): Lexer = Lexer { src: src, pos: 0, line: 1, col: 1, comments: [] }
@@ -60,8 +60,8 @@ let make_lexer(src: string): Lexer = Lexer { src: src, pos: 0, line: 1, col: 1, 
 // substring.
 let make_lexer_at(src: string, line: i64, col: i64): Lexer = Lexer { src: src, pos: 0, line: line, col: col, comments: [] }
 
-let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = {
-    var raw: Vec<tokenize.Token> = []
+let run_at(src: string, start_line: i64, start_col: i64): Vec<Token> = {
+    var raw: Vec<Token> = []
     var l = make_lexer_at(src, start_line, start_col)
     let kw = build_keywords()
     var running = true
@@ -72,7 +72,7 @@ let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = 
         | _      -> vec.push(&raw, t)
         }
     }
-    var out: Vec<tokenize.Token> = []
+    var out: Vec<Token> = []
     var paren_depth: i64 = 0
     var i: i64 = 0
     while i < len(raw) {
@@ -80,7 +80,7 @@ let run_at(src: string, start_line: i64, start_col: i64): Vec<tokenize.Token> = 
         if i > 0 && paren_depth == 0 {
             let prev = raw[i - 1]
             if cur.line > prev.line && is_stmt_ender(prev) && !is_line_continuation(cur) {
-                vec.push(&out, tokenize.Token { kind: TokPunct, text: ";", line: prev.line, col: prev.col })
+                vec.push(&out, Token { kind: TokPunct, text: ";", line: prev.line, col: prev.col })
             }
         }
         vec.push(&out, cur)
@@ -210,10 +210,10 @@ let build_keywords(): Map<string, bool> = {
     m
 }
 
-let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
+let lex_one(l: *Lexer, kw: *Map<string, bool>): Token = {
     skip_whitespace_and_comments(l)
     if l.pos >= len(l.src) {
-        return tokenize.Token { kind: TokEOF, text: "", line: l.line, col: l.col }
+        return Token { kind: TokEOF, text: "", line: l.line, col: l.col }
     }
     let start_pos = l.pos
     let start_line = l.line
@@ -231,7 +231,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
                     lex_advance(l)
                 }
                 if l.pos == body_start { lex_die(l, "hex literal `0x` has no digits") }
-                return tokenize.Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+                return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
             if n == 98 || n == 66 {
                 lex_advance(l); lex_advance(l)
@@ -240,7 +240,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
                     lex_advance(l)
                 }
                 if l.pos == body_start { lex_die(l, "binary literal `0b` has no digits") }
-                return tokenize.Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+                return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
             if n == 111 || n == 79 {
                 lex_advance(l); lex_advance(l)
@@ -249,7 +249,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
                     lex_advance(l)
                 }
                 if l.pos == body_start { lex_die(l, "octal literal `0o` has no digits") }
-                return tokenize.Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+                return Token { kind: TokInt, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
             }
         }
         var is_float = false
@@ -275,8 +275,8 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
             }
             if l.pos == exp_start { lex_die(l, "float exponent has no digits") }
         }
-        let kind: tokenize.TokenKind = if is_float { TokFloat } else { TokInt }
-        return tokenize.Token { kind: kind, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        let kind: TokenKind = if is_float { TokFloat } else { TokInt }
+        return Token { kind: kind, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     if c == 39 {
@@ -290,7 +290,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
         if l.pos < len(l.src) && lex_at(l) == 39 {
             lex_advance(l)
         }
-        return tokenize.Token { kind: TokChar, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokChar, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     if is_alpha(c) {
@@ -298,11 +298,11 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
             lex_advance(l)
         }
         let word = strings.slice(l.src, start_pos, l.pos)
-        var k: tokenize.TokenKind = TokIdent
+        var k: TokenKind = TokIdent
         if is_keyword(kw, word) {
             k = TokKeyword
         }
-        return tokenize.Token { kind: k, text: word, line: start_line, col: start_col }
+        return Token { kind: k, text: word, line: start_line, col: start_col }
     }
 
     if c == 34 {
@@ -317,7 +317,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
             lex_die(l, "unterminated string literal")
         }
         lex_advance(l)
-        return tokenize.Token { kind: TokString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     // Backtick-delimited interpolated string. `{name}` is replaced
@@ -335,7 +335,7 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
             lex_die(l, "unterminated backtick string literal")
         }
         lex_advance(l)
-        return tokenize.Token { kind: TokInterpString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokInterpString, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     if is_punct(c) {
@@ -371,14 +371,14 @@ let lex_one(l: *Lexer, kw: *Map<string, bool>): tokenize.Token = {
                 }
             }
         }
-        return tokenize.Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+        return Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
     }
 
     lex_advance(l)
-    return tokenize.Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
+    return Token { kind: TokPunct, text: strings.slice(l.src, start_pos, l.pos), line: start_line, col: start_col }
 }
 
-let is_stmt_ender(t: tokenize.Token): bool = {
+let is_stmt_ender(t: Token): bool = {
     match t.kind {
     | TokIdent | TokInt | TokFloat | TokString | TokInterpString | TokChar -> true
     | TokKeyword -> {
@@ -405,7 +405,7 @@ let is_stmt_ender(t: tokenize.Token): bool = {
 // are intentionally omitted because they are also the unary deref and
 // address-of operators. Treating them as continuations would turn a
 // new-line `*buf = nb` into the multiplication `(prev) * buf`.
-let is_line_continuation(t: tokenize.Token): bool = {
+let is_line_continuation(t: Token): bool = {
     match t.kind {
     | TokKeyword -> {
         if strings.eq_raw(t.text, "else") { return true }
@@ -457,16 +457,16 @@ let is_line_continuation(t: tokenize.Token): bool = {
 // Variant that returns both the post-ASI token stream and the
 // comment list captured by the lexer. The formatter consumes the
 // comment list; every other caller uses the bare `run` wrapper.
-let run_with_comments(src: string): tokenize.TokenizeResult = {
+let run_with_comments(src: string): TokenizeResult = {
     var l = make_lexer(src)
     let toks = run_lexer_pass(&l)
     TokenizeResult { tokens: toks, comments: l.comments }
 }
 
-let run(src: string): Vec<tokenize.Token> = run_with_comments(src).tokens
+let run(src: string): Vec<Token> = run_with_comments(src).tokens
 
-let run_lexer_pass(l: *Lexer): Vec<tokenize.Token> = {
-    var raw: Vec<tokenize.Token> = []
+let run_lexer_pass(l: *Lexer): Vec<Token> = {
+    var raw: Vec<Token> = []
     let kw = build_keywords()
     var running = true
     while running {
@@ -480,7 +480,7 @@ let run_lexer_pass(l: *Lexer): Vec<tokenize.Token> = {
     // previous token can end a statement and the next token is not a
     // continuation. Suppress inside `(` and `[` so multi-line argument
     // lists, generic type lists, and array literals are unaffected.
-    var out: Vec<tokenize.Token> = []
+    var out: Vec<Token> = []
     var paren_depth: i64 = 0
     var i: i64 = 0
     while i < len(raw) {
@@ -488,7 +488,7 @@ let run_lexer_pass(l: *Lexer): Vec<tokenize.Token> = {
         if i > 0 && paren_depth == 0 {
             let prev = raw[i - 1]
             if cur.line > prev.line && is_stmt_ender(prev) && !is_line_continuation(cur) {
-                vec.push(&out, tokenize.Token { kind: TokPunct, text: ";", line: prev.line, col: prev.col })
+                vec.push(&out, Token { kind: TokPunct, text: ";", line: prev.line, col: prev.col })
             }
         }
         vec.push(&out, cur)

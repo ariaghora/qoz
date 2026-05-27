@@ -309,7 +309,7 @@ let read_with_override(path: string, overrides: *Map<string, string>): Option<st
 // argument lists the source paths that seed the compilation unit. The
 // second is the path used to identify the resulting `File` (its
 // `path` field is read by downstream phases for diagnostic anchoring).
-let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ctx: main.CompileCtx, overrides: *Map<string, string>): Loaded = {
+let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ctx: CompileCtx, overrides: *Map<string, string>): Loaded = {
     var queue: Vec<Pending> = []
     var visited: Map<string, bool> = [:]
     var aggregated_decls: Vec<ast.Decl> = []
@@ -357,6 +357,7 @@ let load_all_entries(entries: Vec<string>, primary: string, qoz_root: string, ct
     }
     let qctx = make_qualify_ctx(aggregated_decls, file_pkgs)
     let qualified_decls = qualify_decls(aggregated_decls, &qctx)
+    for msg in qctx.errors { vec.push(&load_errors, msg) }
     let qualified_homes = rebuild_type_homes(qualified_decls, file_pkgs)
     Loaded { file: ast.File { path: primary, decls: qualified_decls }, sources: sources, type_homes: qualified_homes, fn_homes: fn_homes, file_pkgs: file_pkgs, errors: load_errors }
 }
@@ -379,7 +380,7 @@ let rebuild_type_homes(decls: Vec<ast.Decl>, file_pkgs: Map<string, string>): Ma
     out
 }
 
-let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, Vec<string>>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, load_errors: *Vec<string>, overrides: *Map<string, string>, qoz_root: string, ctx: main.CompileCtx) = {
+let process_one(cur: Pending, queue: *Vec<Pending>, visited: *Map<string, bool>, aggregated_decls: *Vec<ast.Decl>, sources: *Vec<string>, type_homes: *Map<string, Vec<string>>, fn_homes: *Map<string, string>, file_pkgs: *Map<string, string>, dir_local_fns: *Map<string, Map<string, bool>>, load_errors: *Vec<string>, overrides: *Map<string, string>, qoz_root: string, ctx: CompileCtx) = {
     var src: string = ""
     var have_src = false
     match read_with_override(cur.path, overrides) {
@@ -478,9 +479,12 @@ type QualifyCtx = {
     // types (Vec, Option, ...) keep their bare name.
     type_pkgs: Map<string, Map<string, bool>>,
     file_pkgs: Map<string, string>,
+    // Diagnostics raised while qualifying, e.g. a type qualified with
+    // its own package. Merged into the loader's error list.
+    errors:    Vec<string>,
 }
 
-let make_qualify_ctx(decls: Vec<ast.Decl>, file_pkgs: Map<string, string>): main.QualifyCtx = {
+let make_qualify_ctx(decls: Vec<ast.Decl>, file_pkgs: Map<string, string>): QualifyCtx = {
     var type_pkgs: Map<string, Map<string, bool>> = [:]
     for d in decls {
         let sp = decl_span(d)
@@ -500,7 +504,7 @@ let make_qualify_ctx(decls: Vec<ast.Decl>, file_pkgs: Map<string, string>): main
             }
         }
     }
-    main.QualifyCtx { type_pkgs: type_pkgs, file_pkgs: file_pkgs }
+    QualifyCtx { type_pkgs: type_pkgs, file_pkgs: file_pkgs, errors: [] }
 }
 
 // Return the source span of any declaration. Every Decl variant
@@ -532,7 +536,7 @@ let type_decl_name(d: ast.Decl): string = {
     }
 }
 
-let is_local_type(name: string, pkg: string, ctx: *main.QualifyCtx): bool = {
+let is_local_type(name: string, pkg: string, ctx: *QualifyCtx): bool = {
     if strings.eq_raw(pkg, "") { return false }
     match map.get(&ctx.type_pkgs, name) {
     | None    -> false
@@ -544,7 +548,7 @@ let qualified_type_name(pkg: string, name: string): string = {
     strings.cat(strings.cat(pkg, "_"), name)
 }
 
-let qualify_decls(decls: Vec<ast.Decl>, ctx: *main.QualifyCtx): Vec<ast.Decl> = {
+let qualify_decls(decls: Vec<ast.Decl>, ctx: *QualifyCtx): Vec<ast.Decl> = {
     var out: Vec<ast.Decl> = []
     for d in decls {
         let sp = decl_span(d)
@@ -557,7 +561,7 @@ let qualify_decls(decls: Vec<ast.Decl>, ctx: *main.QualifyCtx): Vec<ast.Decl> = 
     out
 }
 
-let qualify_decl(d: ast.Decl, pkg: string, ctx: *main.QualifyCtx): ast.Decl = {
+let qualify_decl(d: ast.Decl, pkg: string, ctx: *QualifyCtx): ast.Decl = {
     match d {
     | DStruct(sp, n, tps, fields) -> {
         let new_name = if !strings.eq_raw(pkg, "") { qualified_type_name(pkg, n) } else { n }
@@ -604,7 +608,7 @@ let qualify_decl(d: ast.Decl, pkg: string, ctx: *main.QualifyCtx): ast.Decl = {
     }
 }
 
-let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *main.QualifyCtx): ast.TypeExpr = {
+let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *QualifyCtx): ast.TypeExpr = {
     match te {
     | TENamed(sp, path, args) -> {
         var new_args: Vec<ast.TypeExpr> = []
@@ -621,6 +625,11 @@ let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *main.QualifyCtx): ast.TypeEx
         if len(path) == 2 {
             let qpkg = path[0]
             let qname = path[1]
+            // A file refers to its own package's types by their bare
+            // name. Qualifying with the enclosing package is redundant.
+            if !strings.eq_raw(pkg, "") && strings.eq_raw(qpkg, pkg) {
+                vec.push(&ctx.errors, `{sp.file}:{sp.line}:{sp.col}: '{qpkg}.{qname}' qualifies a type with its own package. Write '{qname}' without the '{qpkg}.' prefix`)
+            }
             if is_local_type(qname, qpkg, ctx) {
                 // Keep the qualifier so resolve_named accepts the
                 // access. Only the last segment is renamed.
@@ -648,7 +657,7 @@ let qualify_te(te: ast.TypeExpr, pkg: string, ctx: *main.QualifyCtx): ast.TypeEx
     }
 }
 
-let qualify_expr(e: ast.Expr, pkg: string, ctx: *main.QualifyCtx): ast.Expr = {
+let qualify_expr(e: ast.Expr, pkg: string, ctx: *QualifyCtx): ast.Expr = {
     match e {
     | EInt(_, _)              -> e
     | EFloat(_, _)            -> e
@@ -733,7 +742,7 @@ let qualify_expr(e: ast.Expr, pkg: string, ctx: *main.QualifyCtx): ast.Expr = {
     }
 }
 
-let qualify_stmt(s: ast.Stmt, pkg: string, ctx: *main.QualifyCtx): ast.Stmt = {
+let qualify_stmt(s: ast.Stmt, pkg: string, ctx: *QualifyCtx): ast.Stmt = {
     match s {
     | SLet(sp, name, te, val) -> SLet(sp, name, qualify_te(te, pkg, ctx), qualify_expr(val, pkg, ctx))
     | SVar(sp, name, te, val) -> SVar(sp, name, qualify_te(te, pkg, ctx), qualify_expr(val, pkg, ctx))
@@ -798,7 +807,7 @@ type CV =
     | CVBool(bool)
     | CVError(string)
 
-let cv_str_eq(a: main.CV, b: main.CV): bool = {
+let cv_str_eq(a: CV, b: CV): bool = {
     match a {
     | CVString(sa) -> {
         match b { | CVString(sb) -> strings.eq_raw(sa, sb) | _ -> false }
@@ -813,11 +822,11 @@ let cv_str_eq(a: main.CV, b: main.CV): bool = {
     }
 }
 
-let cv_truthy(v: main.CV): bool = {
+let cv_truthy(v: CV): bool = {
     match v { | CVBool(b) -> b | _ -> false }
 }
 
-let eval_const(e: ast.Expr, ctx: main.CompileCtx): main.CV = {
+let eval_const(e: ast.Expr, ctx: CompileCtx): CV = {
     match e {
     | EBool(_, b)   -> CVBool(b)
     | EInt(_, text) -> CVInt(strings.parse_int(text))
@@ -862,7 +871,7 @@ let eval_const(e: ast.Expr, ctx: main.CompileCtx): main.CV = {
 // Walk a decl list, replacing every DCompileIf with the decls of
 // the first arm whose condition is true (or the else branch if
 // none match). Recurses so nested #if blocks expand cleanly.
-let expand_compile_ifs(decls: Vec<ast.Decl>, ctx: main.CompileCtx): Vec<ast.Decl> = {
+let expand_compile_ifs(decls: Vec<ast.Decl>, ctx: CompileCtx): Vec<ast.Decl> = {
     var out: Vec<ast.Decl> = []
     for d in decls {
         match d {
@@ -895,7 +904,7 @@ let expand_compile_ifs(decls: Vec<ast.Decl>, ctx: main.CompileCtx): Vec<ast.Decl
     out
 }
 
-let make_compile_ctx(qoz_root: string): main.CompileCtx = main.CompileCtx {
+let make_compile_ctx(qoz_root: string): CompileCtx = CompileCtx {
     target_os:           target_os_raw(),
     target_arch:         target_arch_raw(),
     target_pointer_size: target_pointer_size_raw(),
@@ -1044,7 +1053,7 @@ let resolve_link_path(name: string, qoz_root: string): string = {
     strings.cat(strings.cat(qoz_root, "/"), name)
 }
 
-let cmd_build(path: string, qoz_root: string): main.BuildResult = {
+let cmd_build(path: string, qoz_root: string): BuildResult = {
     let paths = resolve_entry_paths(path)
     let ctx = make_compile_ctx(qoz_root)
     let overrides: Map<string, string> = [:]
@@ -1083,7 +1092,7 @@ let cmd_build(path: string, qoz_root: string): main.BuildResult = {
         fmt.println(`could not write {out_path}`)
         os.exit(1)
     }
-    main.BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred, qoz_root) }
+    BuildResult { c_path: out_path, link_flags: collect_link_flags(inferred, qoz_root) }
 }
 
 // Derive the executable path from a C output path. The generated

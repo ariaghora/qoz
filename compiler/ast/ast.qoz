@@ -18,7 +18,7 @@ type Span = {
     end_line: i64,
 }
 
-let make_span(file: string, line: i64, col: i64): ast.Span = ast.Span { file: file, line: line, col: col, end_line: line }
+let make_span(file: string, line: i64, col: i64): Span = Span { file: file, line: line, col: col, end_line: line }
 
 type UnaryOp =
     | UOpNeg
@@ -57,95 +57,95 @@ type AssignOp =
     | AOpModSet
 
 type TypeExpr =
-    | TENamed(ast.Span, Vec<string>, Vec<ast.TypeExpr>)
-    | TEPtr(ast.Span, *ast.TypeExpr)
-    | TETuple(ast.Span, Vec<ast.TypeExpr>)
-    | TEUnit(ast.Span)
-    | TEFn(ast.Span, Vec<ast.TypeExpr>, *ast.TypeExpr)
+    | TENamed(Span, Vec<string>, Vec<TypeExpr>)
+    | TEPtr(Span, *TypeExpr)
+    | TETuple(Span, Vec<TypeExpr>)
+    | TEUnit(Span)
+    | TEFn(Span, Vec<TypeExpr>, *TypeExpr)
 
 type Pattern =
-    | PatWild(ast.Span)
-    | PatBind(ast.Span, string)
-    | PatLitInt(ast.Span, string)
-    | PatLitString(ast.Span, string)
-    | PatLitBool(ast.Span, bool)
-    | PatVariant(ast.Span, Vec<string>, Vec<ast.Pattern>)
-    | PatTuple(ast.Span, Vec<ast.Pattern>)
+    | PatWild(Span)
+    | PatBind(Span, string)
+    | PatLitInt(Span, string)
+    | PatLitString(Span, string)
+    | PatLitBool(Span, bool)
+    | PatVariant(Span, Vec<string>, Vec<Pattern>)
+    | PatTuple(Span, Vec<Pattern>)
 
 type ClosureParam = {
     name: string,
-    ty:   ast.TypeExpr,
+    ty:   TypeExpr,
 }
 
 type RecordFieldLit = {
     name:  string,
-    value: ast.Expr,
+    value: Expr,
 }
 
 type MatchArm = {
-    pat:       ast.Pattern,
-    body:      ast.Expr,
+    pat:       Pattern,
+    body:      Expr,
     has_guard: bool,
-    guard:     ast.Expr,
+    guard:     Expr,
 }
 
 type Expr =
-    | EInt(ast.Span, string)
-    | EFloat(ast.Span, string)
-    | EString(ast.Span, string)
-    | EChar(ast.Span, string)
-    | EBool(ast.Span, bool)
-    | ENil(ast.Span)
-    | EIdent(ast.Span, string)
-    | EPath(ast.Span, Vec<string>)
-    | EUnary(ast.Span, ast.UnaryOp, *ast.Expr)
-    | EBinary(ast.Span, ast.BinaryOp, *ast.Expr, *ast.Expr)
-    | EAssign(ast.Span, ast.AssignOp, *ast.Expr, *ast.Expr)
-    | ECall(ast.Span, *ast.Expr, Vec<ast.TypeExpr>, Vec<ast.Expr>)
-    | EField(ast.Span, *ast.Expr, string)
-    | EIndex(ast.Span, *ast.Expr, *ast.Expr)
-    | ECast(ast.Span, *ast.Expr, ast.TypeExpr)
-    | ETry(ast.Span, *ast.Expr)
-    | ETuple(ast.Span, Vec<ast.Expr>)
-    | ERecord(ast.Span, ast.TypeExpr, Vec<ast.RecordFieldLit>)
-    | EClosure(ast.Span, Vec<ast.ClosureParam>, ast.TypeExpr, *ast.Expr)
-    | EBlock(ast.Span, Vec<ast.Stmt>, *ast.Expr)
-    | EIf(ast.Span, *ast.Expr, *ast.Expr, *ast.Expr)
-    | EMatch(ast.Span, *ast.Expr, Vec<ast.MatchArm>)
-    | EWhile(ast.Span, *ast.Expr, *ast.Expr)
-    | EFor(ast.Span, string, string, *ast.Expr, *ast.Expr)
-    | EReturn(ast.Span, *ast.Expr)
-    | EDefer(ast.Span, *ast.Expr)
-    | ESizeOf(ast.Span, ast.TypeExpr)
+    | EInt(Span, string)
+    | EFloat(Span, string)
+    | EString(Span, string)
+    | EChar(Span, string)
+    | EBool(Span, bool)
+    | ENil(Span)
+    | EIdent(Span, string)
+    | EPath(Span, Vec<string>)
+    | EUnary(Span, UnaryOp, *Expr)
+    | EBinary(Span, BinaryOp, *Expr, *Expr)
+    | EAssign(Span, AssignOp, *Expr, *Expr)
+    | ECall(Span, *Expr, Vec<TypeExpr>, Vec<Expr>)
+    | EField(Span, *Expr, string)
+    | EIndex(Span, *Expr, *Expr)
+    | ECast(Span, *Expr, TypeExpr)
+    | ETry(Span, *Expr)
+    | ETuple(Span, Vec<Expr>)
+    | ERecord(Span, TypeExpr, Vec<RecordFieldLit>)
+    | EClosure(Span, Vec<ClosureParam>, TypeExpr, *Expr)
+    | EBlock(Span, Vec<Stmt>, *Expr)
+    | EIf(Span, *Expr, *Expr, *Expr)
+    | EMatch(Span, *Expr, Vec<MatchArm>)
+    | EWhile(Span, *Expr, *Expr)
+    | EFor(Span, string, string, *Expr, *Expr)
+    | EReturn(Span, *Expr)
+    | EDefer(Span, *Expr)
+    | ESizeOf(Span, TypeExpr)
     // The trailing TypeExpr is the resolved container type the checker
     // fills in (Vec<T>). It is TEUnit when the type is not yet known, in
     // which case emit infers the element type from the contents. An empty
     // `[]` carries its type only through this field.
-    | EArrayLit(ast.Span, Vec<ast.Expr>, ast.TypeExpr)
+    | EArrayLit(Span, Vec<Expr>, TypeExpr)
     // Map literal: parallel keys and values. `[:]` is the empty map
     // (both vectors empty); `[k: v, ...]` carries entries. The trailing
     // TypeExpr is the resolved Map<K, V> type, TEUnit when unknown.
-    | EMapLit(ast.Span, Vec<ast.Expr>, Vec<ast.Expr>, ast.TypeExpr)
+    | EMapLit(Span, Vec<Expr>, Vec<Expr>, TypeExpr)
     // Heap clone: `new_clone(<expr>)` evaluates the inner expression and
     // copies the result into a fresh heap cell, yielding a `*T`. Used to
     // build self-referential values whose `*T` fields must outlive the
     // current stack frame. (`new` is reserved for future type
     // construction; this node is the value-clone form.)
-    | ENew(ast.Span, *ast.Expr)
+    | ENew(Span, *Expr)
 
 type Stmt =
-    | SLet(ast.Span, string, ast.TypeExpr, ast.Expr)
-    | SVar(ast.Span, string, ast.TypeExpr, ast.Expr)
-    | SExpr(ast.Span, ast.Expr)
+    | SLet(Span, string, TypeExpr, Expr)
+    | SVar(Span, string, TypeExpr, Expr)
+    | SExpr(Span, Expr)
 
 type FnParam = {
     name: string,
-    ty:   ast.TypeExpr,
+    ty:   TypeExpr,
 }
 
 type StructField = {
     name: string,
-    ty:   ast.TypeExpr,
+    ty:   TypeExpr,
 }
 
 type VariantPayloadKind =
@@ -154,11 +154,11 @@ type VariantPayloadKind =
     | VPKNamed
 
 type VariantDecl = {
-    span:  ast.Span,
+    span:  Span,
     name:  string,
-    kind:  ast.VariantPayloadKind,
-    pos:   Vec<ast.TypeExpr>,
-    named: Vec<ast.StructField>,
+    kind:  VariantPayloadKind,
+    pos:   Vec<TypeExpr>,
+    named: Vec<StructField>,
 }
 
 type LinkKind =
@@ -167,40 +167,40 @@ type LinkKind =
     | LinkPath
 
 type Attribute = {
-    span:       ast.Span,
+    span:       Span,
     name:       string,
     string_arg: string,
     has_arg:    bool,
 }
 
 type CompileIfArm = {
-    cond:  ast.Expr,
-    decls: Vec<ast.Decl>,
+    cond:  Expr,
+    decls: Vec<Decl>,
 }
 
 type Decl =
-    | DImport(ast.Span, Vec<string>, string)
-    | DFn(ast.Span, string, Vec<string>, Vec<ast.FnParam>, ast.TypeExpr, ast.Expr, string)
-    | DStruct(ast.Span, string, Vec<string>, Vec<ast.StructField>)
-    | DEnum(ast.Span, string, Vec<string>, Vec<ast.VariantDecl>)
+    | DImport(Span, Vec<string>, string)
+    | DFn(Span, string, Vec<string>, Vec<FnParam>, TypeExpr, Expr, string)
+    | DStruct(Span, string, Vec<string>, Vec<StructField>)
+    | DEnum(Span, string, Vec<string>, Vec<VariantDecl>)
     // C-style integer enum: `type Name: <prim> = A | B | C`. Each
     // variant is a named integer constant of the underlying type.
     // Payload-less by design. At runtime the value is the
     // underlying primitive; the typed distinction exists only at
     // compile time so call sites cannot mix enum kinds or feed
     // raw integers in.
-    | DCEnum(ast.Span, string, ast.TypeExpr, Vec<string>)
-    | DTypeAlias(ast.Span, string, Vec<string>, ast.TypeExpr)
-    | DConst(ast.Span, string, ast.TypeExpr, ast.Expr)
-    | DExternal(ast.Span, string, string, Vec<ast.FnParam>, ast.TypeExpr)
-    | DLink(ast.Span, ast.LinkKind, string)
-    | DCompileIf(ast.Span, Vec<ast.CompileIfArm>, Vec<ast.Decl>)
+    | DCEnum(Span, string, TypeExpr, Vec<string>)
+    | DTypeAlias(Span, string, Vec<string>, TypeExpr)
+    | DConst(Span, string, TypeExpr, Expr)
+    | DExternal(Span, string, string, Vec<FnParam>, TypeExpr)
+    | DLink(Span, LinkKind, string)
+    | DCompileIf(Span, Vec<CompileIfArm>, Vec<Decl>)
 
 type File = {
     path:  string,
-    decls: Vec<ast.Decl>,
+    decls: Vec<Decl>,
 }
-let span_of_expr(e: ast.Expr): ast.Span = {
+let span_of_expr(e: Expr): Span = {
     match e {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)

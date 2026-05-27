@@ -67,7 +67,7 @@ let byval_heads(te: ast.TypeExpr, params: Vec<string>, out: *Vec<string>) = {
     }
 }
 
-let lookup_type_decl(t: *recur.Tables, name: string): Option<ast.Decl> = {
+let lookup_type_decl(t: *Tables, name: string): Option<ast.Decl> = {
     match map.get(&t.enums, name) {
     | Some(d) -> Some(d)
     | None    -> map.get(&t.structs, name)
@@ -76,7 +76,7 @@ let lookup_type_decl(t: *recur.Tables, name: string): Option<ast.Decl> = {
 
 // By-value successor type names of a declared enum or struct,
 // with the declaration's own type parameters treated as leaves.
-let type_byval_succs(t: *recur.Tables, name: string): Vec<string> = {
+let type_byval_succs(t: *Tables, name: string): Vec<string> = {
     var out: Vec<string> = []
     match lookup_type_decl(t, name) {
     | Some(d) -> {
@@ -105,7 +105,7 @@ let type_byval_succs(t: *recur.Tables, name: string): Vec<string> = {
 // edges, or when the walk hits a name with no enum/struct
 // declaration (an alias or undeclared type), whose finiteness
 // cannot be proven, so the conservative answer is "recursive".
-let adt_reaches(t: *recur.Tables, target: string, current: string, visited: *Map<string, bool>): bool = {
+let adt_reaches(t: *Tables, target: string, current: string, visited: *Map<string, bool>): bool = {
     if map.contains(visited, current) { return false }
     visited[current] = true
     match lookup_type_decl(t, current) {
@@ -119,7 +119,7 @@ let adt_reaches(t: *recur.Tables, target: string, current: string, visited: *Map
     false
 }
 
-let build_tables(f: ast.File): recur.Tables = {
+let build_tables(f: ast.File): Tables = {
     var enums:   Map<string, ast.Decl> = [:]
     var structs: Map<string, ast.Decl> = [:]
     for d in f.decls {
@@ -154,7 +154,7 @@ let recursive_adts(f: ast.File): Map<string, bool> = {
 // "recursive". This is the predicate for REJECTING a value type that
 // contains itself; the conservative `adt_reaches` is for choosing a
 // representation, where over-approximation is safe.
-let adt_reaches_strict(t: *recur.Tables, target: string, current: string, visited: *Map<string, bool>): bool = {
+let adt_reaches_strict(t: *Tables, target: string, current: string, visited: *Map<string, bool>): bool = {
     if map.contains(visited, current) { return false }
     visited[current] = true
     match lookup_type_decl(t, current) {

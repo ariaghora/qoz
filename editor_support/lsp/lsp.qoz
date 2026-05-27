@@ -237,8 +237,8 @@ let initialize_result(): json.Json = {
 // stdin for its content during the load, so cross-package type
 // errors surface against the unsaved version. Diagnostics arrive
 // on stdout as `file:line:col: message`, one per line.
-let check_buffer(uri: string, text: string): Vec<lsp.Diagnostic> = {
-    var diags: Vec<lsp.Diagnostic> = vec.make()
+let check_buffer(uri: string, text: string): Vec<Diagnostic> = {
+    var diags: Vec<Diagnostic> = vec.make()
     let path = file_path_of_uri(uri)
     if strings.eq_raw(path, "") { return diags }
     var argv: Vec<string> = vec.make()
@@ -272,7 +272,7 @@ let last_index_of_byte(s: string, b: i64): i64 = {
 // Diagnostic. Lines that do not match the format are skipped. Only
 // diagnostics whose file matches `expected_path` are kept, because
 // diagnostics anchored at other files have nowhere to publish.
-let parse_diagnostic_line(line: string, expected_path: string): Option<lsp.Diagnostic> = {
+let parse_diagnostic_line(line: string, expected_path: string): Option<Diagnostic> = {
     if !strings.has_prefix(line, strings.cat(expected_path, ":")) { return None }
     let rest = strings.slice(line, len(expected_path) + 1, len(line))
     let c1 = index_of_byte(rest, 58)
@@ -287,7 +287,7 @@ let parse_diagnostic_line(line: string, expected_path: string): Option<lsp.Diagn
     let c_n = strings.parse_int(col_s)
     let l0  = if l_n > 0 { l_n - 1 } else { 0 }
     let c0  = if c_n > 0 { c_n - 1 } else { 0 }
-    Some(lsp.Diagnostic { line: l0, col: c0, end_col: c0 + 1, message: msg })
+    Some(Diagnostic { line: l0, col: c0, end_col: c0 + 1, message: msg })
 }
 
 let index_of_byte(s: string, b: i64): i64 = {
@@ -367,7 +367,7 @@ let position(line: i64, character: i64): json.Json = {
     Obj(m)
 }
 
-let diagnostic_to_json(d: lsp.Diagnostic): json.Json = {
+let diagnostic_to_json(d: Diagnostic): json.Json = {
     var range: Map<string, json.Json> = map.make()
     range["start"] = position(d.line, d.col)
     range["end"]   = position(d.line, d.end_col)
@@ -499,7 +499,7 @@ type CrossPkgHit = {
 // the explicit alias on `import ... as alias`. Returns None when
 // the import is unknown, the package directory cannot be found,
 // or no declaration in the package is named `name`.
-let find_cross_package_definition(text: string, alias: string, name: string): Option<lsp.CrossPkgHit> = {
+let find_cross_package_definition(text: string, alias: string, name: string): Option<CrossPkgHit> = {
     if strings.eq_raw(alias, "") || strings.eq_raw(name, "") { return None }
     let imports = imports_of_buffer(text)
     var ipath: Vec<string> = vec.make()
@@ -521,7 +521,7 @@ let find_cross_package_definition(text: string, alias: string, name: string): Op
             let tokens = tokenize.run(src)
             let parsed = parse.run(tokens, fpath)
             match decl_named_in_file(parsed.file, name) {
-            | Some(sp) -> return Some(lsp.CrossPkgHit { file: fpath, span: sp })
+            | Some(sp) -> return Some(CrossPkgHit { file: fpath, span: sp })
             | None     -> { }
             }
         }
@@ -544,8 +544,8 @@ type QualifierPath = {
     prefix:   string,
 }
 
-let list_pkg_decls(dir: string): Vec<lsp.PkgDecl> = {
-    var out: Vec<lsp.PkgDecl> = vec.make()
+let list_pkg_decls(dir: string): Vec<PkgDecl> = {
+    var out: Vec<PkgDecl> = vec.make()
     let files = list_pkg_files(dir)
     for fpath in files {
         let src = fs.read_file(fpath)
@@ -555,21 +555,21 @@ let list_pkg_decls(dir: string): Vec<lsp.PkgDecl> = {
             for d in parsed.file.decls {
                 match d {
                 | DFn(sp, n, _, _, _, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_FUNCTION(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
                     })
                 }
                 | DExternal(sp, n, _, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_FUNCTION(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
                     })
                 }
                 | DStruct(sp, n, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_STRUCT(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
@@ -577,34 +577,34 @@ let list_pkg_decls(dir: string): Vec<lsp.PkgDecl> = {
                 }
                 | DEnum(sp, n, _, vs) -> {
                     let d_doc = doc_comment_above(src, sp.line)
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_ENUM(),
                         detail: nth_line_of(src, sp.line),
                         doc:    d_doc,
                     })
                     for v in vs {
-                        vec.push(&out, lsp.PkgDecl {
+                        vec.push(&out, PkgDecl {
                             name: v.name, kind: KIND_FIELD(),
                             detail: "", doc: "",
                         })
                     }
                 }
                 | DTypeAlias(sp, n, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_STRUCT(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
                     })
                 }
                 | DConst(sp, n, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_CONSTANT(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
                     })
                 }
                 | DCEnum(sp, n, _, _) -> {
-                    vec.push(&out, lsp.PkgDecl {
+                    vec.push(&out, PkgDecl {
                         name: n, kind: KIND_ENUM(),
                         detail: nth_line_of(src, sp.line),
                         doc:    doc_comment_above(src, sp.line),
@@ -1080,7 +1080,7 @@ let package_member_completions(text: string, alias: string, prefix: string): jso
 // `(["rl", "CameraProjection"], "Or")`. For `rl.fo<cursor>`,
 // returns `(["rl"], "fo")`. The path is empty when the cursor
 // does not sit after a dotted identifier sequence.
-let qualifier_path_at(text: string, line: i64, col: i64): lsp.QualifierPath = {
+let qualifier_path_at(text: string, line: i64, col: i64): QualifierPath = {
     let offset = byte_offset_of(text, line, col)
     let empty: Vec<string> = vec.make()
     if offset < 0 { return QualifierPath { segments: empty, prefix: "" } }
@@ -1374,7 +1374,7 @@ let qoz_keywords(): Vec<string> = {
     v
 }
 
-let publish_diagnostics(uri: string, diags: Vec<lsp.Diagnostic>): json.Json = {
+let publish_diagnostics(uri: string, diags: Vec<Diagnostic>): json.Json = {
     var arr: Vec<json.Json> = vec.make()
     for d in diags { vec.push(&arr, diagnostic_to_json(d)) }
     var params: Map<string, json.Json> = map.make()

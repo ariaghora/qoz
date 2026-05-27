@@ -26,13 +26,13 @@ external let string_alias(buf: *void, n: i64): string
 
 /// Initialise an existing Strbuf to the empty state. Required
 /// before the first `sb_append`.
-let sb_init(b: *strings.Strbuf) = {
+let sb_init(b: *Strbuf) = {
     b.buf = nil as *u8
     b.len = 0
     b.cap = 0
 }
 
-let sb_grow(b: *strings.Strbuf, needed: i64) = {
+let sb_grow(b: *Strbuf, needed: i64) = {
     var new_cap: i64 = if b.cap == 0 { 64 } else { b.cap }
     while new_cap < b.len + needed { new_cap = new_cap * 2 }
     b.buf = mem.realloc(b.buf as *void, new_cap) as *u8
@@ -41,7 +41,7 @@ let sb_grow(b: *strings.Strbuf, needed: i64) = {
 
 /// Append every byte of `s` to the buffer, growing capacity as
 /// needed.
-let sb_append(b: *strings.Strbuf, s: string) = {
+let sb_append(b: *Strbuf, s: string) = {
     let n: i64 = len(s)
     if n <= 0 { return }
     if b.len + n > b.cap { sb_grow(b, n) }
@@ -51,11 +51,11 @@ let sb_append(b: *strings.Strbuf, s: string) = {
 }
 
 /// Current byte length of the buffer.
-let sb_len(b: *strings.Strbuf): i64 = b.len
+let sb_len(b: *Strbuf): i64 = b.len
 
 /// Shrink the buffer to `new_len`. Out-of-range values are
 /// ignored. The backing storage is retained.
-let sb_truncate(b: *strings.Strbuf, new_len: i64) = {
+let sb_truncate(b: *Strbuf, new_len: i64) = {
     if new_len < 0 { return }
     if new_len > b.len { return }
     b.len = new_len
@@ -64,13 +64,13 @@ let sb_truncate(b: *strings.Strbuf, new_len: i64) = {
 /// Hand the accumulated bytes back as an immutable `string`. The
 /// returned value shares the buffer storage; do not mutate the
 /// Strbuf after calling.
-let sb_finish(b: *strings.Strbuf): string = string_alias(b.buf as *void, b.len)
+let sb_finish(b: *Strbuf): string = string_alias(b.buf as *void, b.len)
 
 /// Append `v` rendered as a decimal integer.
-let sb_append_i64(b: *strings.Strbuf, v: i64) = sb_append(b, i64_to_string(v))
+let sb_append_i64(b: *Strbuf, v: i64) = sb_append(b, i64_to_string(v))
 
 /// Append `v` as `"true"` or `"false"`.
-let sb_append_bool(b: *strings.Strbuf, v: bool) = {
+let sb_append_bool(b: *Strbuf, v: bool) = {
     if v { sb_append(b, "true") } else { sb_append(b, "false") }
 }
 
@@ -78,12 +78,12 @@ let sb_append_bool(b: *strings.Strbuf, v: bool) = {
 external let sb_append_f64_raw(b: *void, v: f64)
 
 /// Append `v` using snprintf's `%g` formatting.
-let sb_append_f64(b: *strings.Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
+let sb_append_f64(b: *Strbuf, v: f64) = sb_append_f64_raw(b as *void, v)
 
 /// Copy bytes `[from, to)` out of the buffer into a fresh
 /// independent string. Later appends and truncates do not affect
 /// the returned value.
-let sb_slice_copy(b: *strings.Strbuf, from: i64, to: i64): string = {
+let sb_slice_copy(b: *Strbuf, from: i64, to: i64): string = {
     var lo = from
     var hi = to
     if lo < 0 { lo = 0 }

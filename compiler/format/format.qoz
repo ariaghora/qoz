@@ -35,13 +35,13 @@ type Printer = {
     last_line: i64,
 }
 
-let make_printer(comments: Vec<tokenize.Comment>): format.Printer = {
+let make_printer(comments: Vec<tokenize.Comment>): Printer = {
     var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
     strings.sb_init(&sb)
     Printer { out: sb, indent: 0, col: 0, comments: comments, cmt_idx: 0, last_line: 0 }
 }
 
-let p_emit(p: *format.Printer, s: string) = {
+let p_emit(p: *Printer, s: string) = {
     let n = len(s)
     if n == 0 { return }
     if p.col == 0 && p.indent > 0 {
@@ -57,19 +57,19 @@ let p_emit(p: *format.Printer, s: string) = {
     p.col += n
 }
 
-let p_newline(p: *format.Printer) = {
+let p_newline(p: *Printer) = {
     strings.sb_append(&p.out, "\n")
     p.col = 0
 }
 
-let p_indent_in(p: *format.Printer) = { p.indent += 1 }
-let p_indent_out(p: *format.Printer) = { p.indent -= 1 }
+let p_indent_in(p: *Printer) = { p.indent += 1 }
+let p_indent_out(p: *Printer) = { p.indent -= 1 }
 
-let p_finish(p: *format.Printer): string = strings.sb_finish(&p.out)
+let p_finish(p: *Printer): string = strings.sb_finish(&p.out)
 
 // --- TypeExpr ---
 
-let print_te(p: *format.Printer, te: ast.TypeExpr) = {
+let print_te(p: *Printer, te: ast.TypeExpr) = {
     match te {
     | TENamed(_, path, args) -> {
         var first = true
@@ -125,7 +125,7 @@ let print_te(p: *format.Printer, te: ast.TypeExpr) = {
 // precedes the first comment of the group; this helper only
 // emits the comments themselves so callers stay in charge of the
 // gap rule.
-let p_emit_leading_comments(p: *format.Printer, next_line: i64) = {
+let p_emit_leading_comments(p: *Printer, next_line: i64) = {
     while p.cmt_idx < len(p.comments) {
         let c = p.comments[p.cmt_idx]
         if c.line >= next_line { return }
@@ -139,7 +139,7 @@ let p_emit_leading_comments(p: *format.Printer, next_line: i64) = {
 // Emit a comment trailing on the same line as a node ending at
 // `node_line`. Returns true when one was emitted (caller does not
 // add its own newline).
-let p_emit_trailing_comment(p: *format.Printer, node_line: i64): bool = {
+let p_emit_trailing_comment(p: *Printer, node_line: i64): bool = {
     if p.cmt_idx < len(p.comments) {
         let c = p.comments[p.cmt_idx]
         if c.line == node_line {
@@ -155,13 +155,13 @@ let p_emit_trailing_comment(p: *format.Printer, node_line: i64): bool = {
 // Track that the printer just finished emitting a node ending on
 // `line`. Used so leading-comment emission can preserve blank
 // lines between top-level decls.
-let p_mark_line(p: *format.Printer, line: i64) = {
+let p_mark_line(p: *Printer, line: i64) = {
     if line > p.last_line { p.last_line = line }
 }
 
 // --- Decl printers (skeleton subset) ---
 
-let print_import(p: *format.Printer, path: Vec<string>, alias: string) = {
+let print_import(p: *Printer, path: Vec<string>, alias: string) = {
     p_emit(p, "import ")
     var i: i64 = 0
     for seg in path {
@@ -175,7 +175,7 @@ let print_import(p: *format.Printer, path: Vec<string>, alias: string) = {
     }
 }
 
-let print_link(p: *format.Printer, kind: ast.LinkKind, target: string) = {
+let print_link(p: *Printer, kind: ast.LinkKind, target: string) = {
     p_emit(p, "#link_")
     match kind {
     | LinkLibrary   -> p_emit(p, "library")
@@ -187,7 +187,7 @@ let print_link(p: *format.Printer, kind: ast.LinkKind, target: string) = {
     p_emit(p, "\"")
 }
 
-let print_type_alias(p: *format.Printer, name: string, tparams: Vec<string>, target: ast.TypeExpr) = {
+let print_type_alias(p: *Printer, name: string, tparams: Vec<string>, target: ast.TypeExpr) = {
     p_emit(p, "type ")
     p_emit(p, name)
     print_type_params(p, tparams)
@@ -195,7 +195,7 @@ let print_type_alias(p: *format.Printer, name: string, tparams: Vec<string>, tar
     print_te(p, target)
 }
 
-let print_type_params(p: *format.Printer, tparams: Vec<string>) = {
+let print_type_params(p: *Printer, tparams: Vec<string>) = {
     if len(tparams) > 0 {
         p_emit(p, "<")
         var i: i64 = 0
@@ -208,7 +208,7 @@ let print_type_params(p: *format.Printer, tparams: Vec<string>) = {
     }
 }
 
-let print_struct(p: *format.Printer, name: string, tparams: Vec<string>, fields: Vec<ast.StructField>) = {
+let print_struct(p: *Printer, name: string, tparams: Vec<string>, fields: Vec<ast.StructField>) = {
     p_emit(p, "type ")
     p_emit(p, name)
     print_type_params(p, tparams)
@@ -244,7 +244,7 @@ let struct_field_align(fields: Vec<ast.StructField>): i64 = {
     m
 }
 
-let print_c_enum(p: *format.Printer, name: string, underlying: ast.TypeExpr, variants: Vec<string>) = {
+let print_c_enum(p: *Printer, name: string, underlying: ast.TypeExpr, variants: Vec<string>) = {
     p_emit(p, "type ")
     p_emit(p, name)
     p_emit(p, ": ")
@@ -260,7 +260,7 @@ let print_c_enum(p: *format.Printer, name: string, underlying: ast.TypeExpr, var
 
 // --- File driver ---
 
-let print_decl(p: *format.Printer, d: ast.Decl) = {
+let print_decl(p: *Printer, d: ast.Decl) = {
     match d {
     | DImport(_, path, alias)           -> print_import(p, path, alias)
     | DStruct(_, n, tps, fs)            -> print_struct(p, n, tps, fs)
@@ -275,7 +275,7 @@ let print_decl(p: *format.Printer, d: ast.Decl) = {
     }
 }
 
-let print_compile_if(p: *format.Printer, arms: Vec<ast.CompileIfArm>, defaults: Vec<ast.Decl>) = {
+let print_compile_if(p: *Printer, arms: Vec<ast.CompileIfArm>, defaults: Vec<ast.Decl>) = {
     var i: i64 = 0
     for arm in arms {
         p_emit(p, if i == 0 { "#if " } else { "#elif " })
@@ -298,7 +298,7 @@ let print_compile_if(p: *format.Printer, arms: Vec<ast.CompileIfArm>, defaults: 
     p_emit(p, "#endif")
 }
 
-let print_file(p: *format.Printer, f: ast.File) = {
+let print_file(p: *Printer, f: ast.File) = {
     var prev_span_line: i64 = 0
     var i: i64 = 0
     for d in f.decls {
@@ -330,7 +330,7 @@ let print_file(p: *format.Printer, f: ast.File) = {
 // Look-ahead: the line of the first thing we will emit for the
 // next decl. Earlier comments come before the decl, so they push
 // the effective start line back. Used by the blank-line gap rule.
-let first_emission_line(p: *format.Printer, decl_line: i64): i64 = {
+let first_emission_line(p: *Printer, decl_line: i64): i64 = {
     if p.cmt_idx < len(p.comments) {
         let c = p.comments[p.cmt_idx]
         if c.line < decl_line { return c.line }
@@ -402,7 +402,7 @@ let assign_op_text(op: ast.AssignOp): string = {
 
 // --- Patterns ---
 
-let print_pattern(p: *format.Printer, pat: ast.Pattern) = {
+let print_pattern(p: *Printer, pat: ast.Pattern) = {
     match pat {
     | PatWild(_)             -> p_emit(p, "_")
     | PatBind(_, n)          -> p_emit(p, n)
@@ -442,7 +442,7 @@ let print_pattern(p: *format.Printer, pat: ast.Pattern) = {
 
 // --- Statements ---
 
-let print_stmt(p: *format.Printer, s: ast.Stmt) = {
+let print_stmt(p: *Printer, s: ast.Stmt) = {
     match s {
     | SLet(_, name, te, val) -> {
         p_emit(p, "let ")
@@ -497,7 +497,7 @@ let no_newlines(s: string): bool = {
     true
 }
 
-let print_expr(p: *format.Printer, e: ast.Expr) = {
+let print_expr(p: *Printer, e: ast.Expr) = {
     match e {
     | EInt(_, t)       -> p_emit(p, t)
     | EFloat(_, t)     -> p_emit(p, t)
@@ -712,7 +712,7 @@ let is_unit_block(e: ast.Expr): bool = {
     }
 }
 
-let print_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
+let print_block(p: *Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
     if try_print_interp_block(p, stmts, tail) { return }
     if len(stmts) == 0 && is_unit_expr(tail) {
         p_emit(p, "{ }")
@@ -780,7 +780,7 @@ let stmt_span(s: ast.Stmt): ast.Span = {
 // Preserves blank lines between source-adjacent stmts by checking
 // the gap against the previous stmt's line, and ensures comments
 // appear on their own indented lines.
-let p_emit_leading_comments_in_block(p: *format.Printer, next_line: i64, prev_line: i64) = {
+let p_emit_leading_comments_in_block(p: *Printer, next_line: i64, prev_line: i64) = {
     while p.cmt_idx < len(p.comments) {
         let c = p.comments[p.cmt_idx]
         if c.line >= next_line { return }
@@ -796,7 +796,7 @@ let p_emit_leading_comments_in_block(p: *format.Printer, next_line: i64, prev_li
 // and reconstruct the original `` `...` `` template. Returns true
 // when the block matches the pattern. False leaves the caller to
 // print the block as a regular expression.
-let try_print_interp_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr): bool = {
+let try_print_interp_block(p: *Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr): bool = {
     if len(stmts) < 1 { return false }
     var sb_name = ""
     match stmts[0] {
@@ -807,7 +807,7 @@ let try_print_interp_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.E
     | _ -> return false
     }
     if !is_builtin_call_on(tail, "__qoz_interp_finish", sb_name) { return false }
-    var parts: Vec<format.InterpPart> = []
+    var parts: Vec<InterpPart> = []
     var i: i64 = 1
     while i < len(stmts) {
         match stmts[i] {
@@ -815,8 +815,8 @@ let try_print_interp_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.E
             match extract_push_arg(e, sb_name) {
             | Some(arg) -> {
                 match arg {
-                | EString(_, raw) -> vec.push(&parts, format.InterpPart { lit: true, lit_text: strip_string_quotes(raw), expr: arg })
-                | _               -> vec.push(&parts, format.InterpPart { lit: false, lit_text: "", expr: arg })
+                | EString(_, raw) -> vec.push(&parts, InterpPart { lit: true, lit_text: strip_string_quotes(raw), expr: arg })
+                | _               -> vec.push(&parts, InterpPart { lit: false, lit_text: "", expr: arg })
                 }
             }
             | None -> return false
@@ -906,7 +906,7 @@ let strip_string_quotes(s: string): string = {
     s
 }
 
-let print_match(p: *format.Printer, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
+let print_match(p: *Printer, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = {
     p_emit(p, "match ")
     print_expr(p, scrut)
     p_emit(p, " {")
@@ -925,7 +925,7 @@ let print_match(p: *format.Printer, scrut: ast.Expr, arms: Vec<ast.MatchArm>) = 
     p_emit(p, "}")
 }
 
-let print_record(p: *format.Printer, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>) = {
+let print_record(p: *Printer, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>) = {
     print_te(p, te)
     p_emit(p, " {")
     if len(fields) == 0 { p_emit(p, "}"); return }
@@ -982,7 +982,7 @@ let record_field_align(fields: Vec<ast.RecordFieldLit>): i64 = {
     m
 }
 
-let print_extern(p: *format.Printer, name: string, sym: string, params: Vec<ast.FnParam>, ret: ast.TypeExpr) = {
+let print_extern(p: *Printer, name: string, sym: string, params: Vec<ast.FnParam>, ret: ast.TypeExpr) = {
     p_emit(p, "external(\"")
     p_emit(p, sym)
     p_emit(p, "\") ")
@@ -1000,7 +1000,7 @@ let print_extern(p: *format.Printer, name: string, sym: string, params: Vec<ast.
     print_te(p, ret)
 }
 
-let print_const(p: *format.Printer, name: string, te: ast.TypeExpr, val: ast.Expr) = {
+let print_const(p: *Printer, name: string, te: ast.TypeExpr, val: ast.Expr) = {
     p_emit(p, "let ")
     p_emit(p, name)
     if !is_unit_te(te) {
@@ -1011,7 +1011,7 @@ let print_const(p: *format.Printer, name: string, te: ast.TypeExpr, val: ast.Exp
     print_expr(p, val)
 }
 
-let print_fn(p: *format.Printer, name: string, tparams: Vec<string>, params: Vec<ast.FnParam>, ret: ast.TypeExpr, body: ast.Expr, attr: string) = {
+let print_fn(p: *Printer, name: string, tparams: Vec<string>, params: Vec<ast.FnParam>, ret: ast.TypeExpr, body: ast.Expr, attr: string) = {
     if !strings.eq_raw(attr, "") {
         p_emit(p, "#")
         p_emit(p, attr)
@@ -1038,7 +1038,7 @@ let print_fn(p: *format.Printer, name: string, tparams: Vec<string>, params: Vec
     print_expr(p, body)
 }
 
-let print_enum(p: *format.Printer, name: string, tparams: Vec<string>, variants: Vec<ast.VariantDecl>) = {
+let print_enum(p: *Printer, name: string, tparams: Vec<string>, variants: Vec<ast.VariantDecl>) = {
     p_emit(p, "type ")
     p_emit(p, name)
     print_type_params(p, tparams)

@@ -59,7 +59,7 @@ external let process_exec_input_raw(argv: *string, n: i64,
 /// with the stdout and stderr it produced. The first element of
 /// `argv` is the program; the rest are its arguments. Very large
 /// output streams sit fully in memory.
-let process_exec(argv: Vec<string>): os.ProcessResult = {
+let process_exec(argv: Vec<string>): ProcessResult = {
     var exit_code: i64 = 0
     var so: string = ""
     var se: string = ""
@@ -69,7 +69,7 @@ let process_exec(argv: Vec<string>): os.ProcessResult = {
 
 /// Variant of `process_exec` that pipes `stdin_text` to the
 /// child's stdin then closes the pipe so the child sees EOF.
-let process_exec_input(argv: Vec<string>, stdin_text: string): os.ProcessResult = {
+let process_exec_input(argv: Vec<string>, stdin_text: string): ProcessResult = {
     var exit_code: i64 = 0
     var so: string = ""
     var se: string = ""
