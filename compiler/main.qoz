@@ -1386,6 +1386,14 @@ let main() = {
         } }
         cmd_fmt(target, from_stdin)
         os.exit(0)
+    } else { if strings.eq_raw(first, "debug-recursive") {
+        let target = args[2]
+        let paths = resolve_entry_paths(target)
+        let ctx = make_compile_ctx(qoz_root)
+        var overrides: Map<string, string> = map.make()
+        let loaded = load_all_entries(paths.entries, paths.primary, qoz_root, ctx, &overrides)
+        fmt.print(emit.debug_recursive_enums(loaded.file))
+        os.exit(0)
     } else { if strings.eq_raw(first, "expected-at") {
         // `qoz expected-at [--stdin] <path> <line> <col>` prints
         // the qualified C-enum name expected at the cursor, plus
@@ -1464,5 +1472,5 @@ let main() = {
         let built = cmd_build(first, qoz_root)
         fmt.println(`wrote {built.c_path}`)
         os.exit(0)
-    } } } } } }
+    } } } } } } }
 }

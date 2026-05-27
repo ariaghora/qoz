@@ -1197,6 +1197,22 @@ let synth_index(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, i
     let bt = synth(tc, env, base)
     let it = synth(tc, env, idx)
     if ty.ty_is_error(bt) || ty.ty_is_error(it) { return ty.ty_error_() }
+    // Vec and Map index the same whether the receiver is a value
+    // or a pointer; unwrap_container_ty peels one `*`, so a
+    // `*Vec<T>` / `*Map<K, V>` indexes like its value form.
+    let info = unwrap_container_ty(bt)
+    if strings.eq_raw(info.kind, "Vec") && len(info.args) >= 1 {
+        if !ty.ty_is_int(it) {
+            record_error(tc, sp, `Vec index must be an integer, got {ty.ty_show(it)}`)
+        }
+        return info.args[0]
+    }
+    if strings.eq_raw(info.kind, "Map") && len(info.args) >= 2 {
+        if !ty.ty_assignable(info.args[0], it) {
+            record_error(tc, sp, `Map key has type {ty.ty_show(info.args[0])}; cannot use index of type {ty.ty_show(it)}`)
+        }
+        return info.args[1]
+    }
     match bt {
     | TyString -> {
         if !ty.ty_is_int(it) {
@@ -1209,22 +1225,6 @@ let synth_index(tc: *check.TyContext, env: *Env, sp: ast.Span, base: ast.Expr, i
             record_error(tc, sp, `pointer index must be an integer, got {ty.ty_show(it)}`)
         }
         inner
-    }
-    | TyRecord(_, name, args) -> {
-        if strings.eq_raw(name, "Vec") && len(args) >= 1 {
-            if !ty.ty_is_int(it) {
-                record_error(tc, sp, `Vec index must be an integer, got {ty.ty_show(it)}`)
-            }
-            return args[0]
-        }
-        if strings.eq_raw(name, "Map") && len(args) >= 2 {
-            if !ty.ty_assignable(args[0], it) {
-                record_error(tc, sp, `Map key has type {ty.ty_show(args[0])}; cannot use index of type {ty.ty_show(it)}`)
-            }
-            return args[1]
-        }
-        record_error(tc, sp, `cannot index value of type {ty.ty_show(bt)}`)
-        ty.ty_error_()
     }
     | _ -> {
         record_error(tc, sp, `cannot index value of type {ty.ty_show(bt)}`)

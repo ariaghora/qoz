@@ -1,0 +1,147 @@
+// Recursion analysis over ADT and record definitions. Determines
+// which ADTs would be infinite-size if represented inline (by
+// value), so they must stay heap-boxed; every other ADT is
+// eligible to be emitted as a value struct.
+//
+// The analysis operates on the merged whole-program File, because
+// a payload may reference a type declared in another package. It
+// depends only on `ast`, so emit, check, and the language server
+// can all share one implementation.
+//
+// Boxing is the safe default: a type is marked recursive if it
+// can reach itself through a by-value containment chain, OR if
+// that chain passes through a name that cannot be proven finite
+// (an alias or undeclared type). A false positive keeps a type
+// boxed (correct, less efficient); a false negative would emit an
+// infinite C struct, so the conservative bias is intentional.
+//
+// By-value edges: variant payloads, struct fields, tuple
+// elements, and the generic arguments of a non-breaker head.
+// Cycle-breakers (finite regardless of contents): `*T`, `Vec`,
+// `Map`, function types, primitives, `string`, `cstring`,
+// `unit`, `void`.
+
+import vec
+import map
+import strings
+import compiler/ast
+
+type Tables = {
+    enums:   Map<string, ast.Decl>,
+    structs: Map<string, ast.Decl>,
+}
+
+let is_finite_leaf_type(head: string): bool = {
+    if strings.eq_raw(head, "i8")  || strings.eq_raw(head, "i16") { return true }
+    if strings.eq_raw(head, "i32") || strings.eq_raw(head, "i64") { return true }
+    if strings.eq_raw(head, "u8")  || strings.eq_raw(head, "u16") { return true }
+    if strings.eq_raw(head, "u32") || strings.eq_raw(head, "u64") { return true }
+    if strings.eq_raw(head, "f32") || strings.eq_raw(head, "f64") { return true }
+    if strings.eq_raw(head, "bool") || strings.eq_raw(head, "char") { return true }
+    if strings.eq_raw(head, "string") || strings.eq_raw(head, "cstring") { return true }
+    if strings.eq_raw(head, "unit") || strings.eq_raw(head, "void") { return true }
+    false
+}
+
+// Collect the non-leaf, non-param by-value head names contained
+// in `te`. These are the edges the recursion walk follows.
+// `params` are the enclosing type's parameters, opaque leaves.
+let byval_heads(te: ast.TypeExpr, params: Vec<string>, out: *Vec<string>) = {
+    match te {
+    | TENamed(_, path, args) -> {
+        if len(path) == 0 { return }
+        let head = path[len(path) - 1]
+        // Vec and Map hold their contents behind an internal heap
+        // pointer, so they break a by-value cycle and their
+        // arguments contribute no inline containment.
+        if strings.eq_raw(head, "Vec") || strings.eq_raw(head, "Map") { return }
+        var is_param = false
+        for p in params { if strings.eq_raw(p, head) { is_param = true } }
+        if !is_param && !is_finite_leaf_type(head) { vec.push(out, head) }
+        for a in args { byval_heads(a, params, out) }
+    }
+    | TEPtr(_, _)    -> { }
+    | TETuple(_, es) -> { for x in es { byval_heads(x, params, out) } }
+    | TEUnit(_)      -> { }
+    | TEFn(_, _, _)  -> { }
+    }
+}
+
+let lookup_type_decl(t: *recur.Tables, name: string): Option<ast.Decl> = {
+    match map.get(&t.enums, name) {
+    | Some(d) -> Some(d)
+    | None    -> map.get(&t.structs, name)
+    }
+}
+
+// By-value successor type names of a declared enum or struct,
+// with the declaration's own type parameters treated as leaves.
+let type_byval_succs(t: *recur.Tables, name: string): Vec<string> = {
+    var out: Vec<string> = vec.make()
+    match lookup_type_decl(t, name) {
+    | Some(d) -> {
+        match d {
+        | DEnum(_, _, tparams, variants) -> {
+            for v in variants {
+                for pt in v.pos { byval_heads(pt, tparams, &out) }
+                for sf in v.named { byval_heads(sf.ty, tparams, &out) }
+            }
+        }
+        | DStruct(_, _, tparams, fields) -> {
+            for f in fields { byval_heads(f.ty, tparams, &out) }
+        }
+        // Only enums and structs hold by-value payloads.
+        | _ -> { }
+        }
+    }
+    | None -> { }
+    }
+    out
+}
+
+// True when `target` is reachable from `current` through by-value
+// edges, or when the walk hits a name with no enum/struct
+// declaration (an alias or undeclared type), whose finiteness
+// cannot be proven, so the conservative answer is "recursive".
+let adt_reaches(t: *recur.Tables, target: string, current: string, visited: *Map<string, bool>): bool = {
+    if map.contains(visited, current) { return false }
+    visited[current] = true
+    match lookup_type_decl(t, current) {
+    | None    -> return true
+    | Some(_) -> { }
+    }
+    for s in type_byval_succs(t, current) {
+        if strings.eq_raw(s, target) { return true }
+        if adt_reaches(t, target, s, visited) { return true }
+    }
+    false
+}
+
+let build_tables(f: ast.File): recur.Tables = {
+    var enums:   Map<string, ast.Decl> = map.make()
+    var structs: Map<string, ast.Decl> = map.make()
+    for d in f.decls {
+        match d {
+        | DEnum(_, n, _, _)   -> map.set(&enums, n, d)
+        | DStruct(_, n, _, _) -> map.set(&structs, n, d)
+        // Aliases, C-enums, functions, externs, links, imports,
+        // and compile-ifs carry no by-value ADT containment that
+        // the recursion graph follows.
+        | _ -> { }
+        }
+    }
+    Tables { enums: enums, structs: structs }
+}
+
+// Names of every ADT in `f` that must remain heap-boxed.
+let recursive_adts(f: ast.File): Map<string, bool> = {
+    var t = build_tables(f)
+    var result: Map<string, bool> = map.make()
+    for name in map.sorted_keys(&t.enums) {
+        var visited: Map<string, bool> = map.make()
+        if adt_reaches(&t, name, name, &visited) {
+            result[name] = true
+        }
+    }
+    result
+}

@@ -6,6 +6,7 @@ import strings
 import vec
 import map
 import compiler/ast
+import compiler/recur
 
 type Instantiation = {
     name:    string,         // base type name, e.g. "Vec"
@@ -3038,18 +3039,51 @@ let register_map_helper(e: *Emitter, name: string, args: Vec<ast.TypeExpr>) = {
 }
 
 // m[k] = v on a Map dispatches to qoz_map_set__<K>__<V>.
+// Peel a single pointer layer when it wraps a Vec or Map, so
+// indexing a `*Vec` / `*Map` is treated as indexing the container.
+// A pointer to a scalar is left as-is for raw pointer indexing.
+let unwrap_container_te(te: ast.TypeExpr): ast.TypeExpr = {
+    match te {
+    | TEPtr(_, inner) -> {
+        match inner {
+        | TENamed(_, path, _) -> {
+            if len(path) >= 1 {
+                let n = path[len(path) - 1]
+                if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return inner }
+            }
+            te
+        }
+        | _ -> te
+        }
+    }
+    | _ -> te
+    }
+}
+
+// Emit a container receiver for a builtin that takes `*Container`.
+// When the base is already a pointer, pass it through; otherwise
+// take its address.
+let emit_container_receiver(e: *Emitter, base: ast.Expr) = {
+    if strings.eq_raw(field_access_op(e, base), "->") {
+        emit_expr(e, base)
+    } else {
+        push(e, "&")
+        emit_expr(e, base)
+    }
+}
+
 let emit_assign(e: *Emitter, lhs: ast.Expr, rhs: ast.Expr) = {
     match lhs {
     | EIndex(_, base, idx) -> {
-        let te = infer_base_typeexpr(e, base)
+        let te = unwrap_container_te(infer_base_typeexpr(e, base))
         match te {
         | TENamed(_, path, args) -> {
             if len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") && len(args) == 2 {
                 register_map_helper(e, "map_set", args)
                 let k_m = mangle_type(e, args[0])
                 let v_m = mangle_type(e, args[1])
-                push(e, `qoz_map_set__{k_m}__{v_m}(&`)
-                emit_expr(e, base)
+                push(e, `qoz_map_set__{k_m}__{v_m}(`)
+                emit_container_receiver(e, base)
                 push(e, ", ")
                 emit_expr(e, idx)
                 push(e, ", ")
@@ -3988,6 +4022,28 @@ let strip_runtime_includes(src: string): string = {
     out = strings.replace_all(out, "#include \"gc.h\"\n", "")
     out = strings.replace_all(out, "#include \"qoz_runtime.h\"\n", "")
     out
+}
+
+// Temporary: classify every ADT as recursive (boxed) or value.
+// Used to validate the recursion detector before it drives emit.
+let debug_recursive_enums(f: ast.File): string = {
+    let rec = recur.recursive_adts(f)
+    var sb: strings.Strbuf = strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 }
+    strings.sb_init(&sb)
+    for d in f.decls {
+        match d {
+        | DEnum(_, name, _, _) -> {
+            strings.sb_append(&sb, name)
+            if map.contains(&rec, name) {
+                strings.sb_append(&sb, ": boxed (recursive)\n")
+            } else {
+                strings.sb_append(&sb, ": value\n")
+            }
+        }
+        | _ -> { }
+        }
+    }
+    strings.sb_finish(&sb)
 }
 
 let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
