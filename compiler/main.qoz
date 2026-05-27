@@ -193,18 +193,18 @@ let rewrite_ident_refs(e: ast.Expr, pkg: string, local_fns: Map<string, bool>): 
         e
     }
     | EPath(_, _)             -> e
-    | EUnary(sp, op, rhs)     -> EUnary(sp, op, rewrite_ident_refs(rhs, pkg, local_fns))
-    | EBinary(sp, op, l, r)   -> EBinary(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
-    | EAssign(sp, op, l, r)   -> EAssign(sp, op, rewrite_ident_refs(l, pkg, local_fns), rewrite_ident_refs(r, pkg, local_fns))
+    | EUnary(sp, op, rhs)     -> EUnary(sp, op, new_clone(rewrite_ident_refs(*rhs, pkg, local_fns)))
+    | EBinary(sp, op, l, r)   -> EBinary(sp, op, new_clone(rewrite_ident_refs(*l, pkg, local_fns)), new_clone(rewrite_ident_refs(*r, pkg, local_fns)))
+    | EAssign(sp, op, l, r)   -> EAssign(sp, op, new_clone(rewrite_ident_refs(*l, pkg, local_fns)), new_clone(rewrite_ident_refs(*r, pkg, local_fns)))
     | ECall(sp, callee, ta, args) -> {
         var na: Vec<ast.Expr> = []
         for a in args { vec.push(&na, rewrite_ident_refs(a, pkg, local_fns)) }
-        ECall(sp, rewrite_ident_refs(callee, pkg, local_fns), ta, na)
+        ECall(sp, new_clone(rewrite_ident_refs(*callee, pkg, local_fns)), ta, na)
     }
-    | EField(sp, base, name)  -> EField(sp, rewrite_ident_refs(base, pkg, local_fns), name)
-    | EIndex(sp, base, idx)   -> EIndex(sp, rewrite_ident_refs(base, pkg, local_fns), rewrite_ident_refs(idx, pkg, local_fns))
-    | ECast(sp, value, t)     -> ECast(sp, rewrite_ident_refs(value, pkg, local_fns), t)
-    | ETry(sp, v)             -> ETry(sp, rewrite_ident_refs(v, pkg, local_fns))
+    | EField(sp, base, name)  -> EField(sp, new_clone(rewrite_ident_refs(*base, pkg, local_fns)), name)
+    | EIndex(sp, base, idx)   -> EIndex(sp, new_clone(rewrite_ident_refs(*base, pkg, local_fns)), new_clone(rewrite_ident_refs(*idx, pkg, local_fns)))
+    | ECast(sp, value, t)     -> ECast(sp, new_clone(rewrite_ident_refs(*value, pkg, local_fns)), t)
+    | ETry(sp, v)             -> ETry(sp, new_clone(rewrite_ident_refs(*v, pkg, local_fns)))
     | ETuple(sp, elems)       -> {
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
@@ -215,36 +215,36 @@ let rewrite_ident_refs(e: ast.Expr, pkg: string, local_fns: Map<string, bool>): 
         for f in fields { vec.push(&nf, ast.RecordFieldLit { name: f.name, value: rewrite_ident_refs(f.value, pkg, local_fns) }) }
         ERecord(sp, te, nf)
     }
-    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, rewrite_ident_refs(body, pkg, local_fns))
+    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, new_clone(rewrite_ident_refs(*body, pkg, local_fns)))
     | EBlock(sp, stmts, tail) -> {
         var ns: Vec<ast.Stmt> = []
         for s in stmts { vec.push(&ns, rewrite_ident_refs_stmt(s, pkg, local_fns)) }
-        EBlock(sp, ns, rewrite_ident_refs(tail, pkg, local_fns))
+        EBlock(sp, ns, new_clone(rewrite_ident_refs(*tail, pkg, local_fns)))
     }
-    | EIf(sp, c, t, f) -> EIf(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(t, pkg, local_fns), rewrite_ident_refs(f, pkg, local_fns))
+    | EIf(sp, c, t, f) -> EIf(sp, new_clone(rewrite_ident_refs(*c, pkg, local_fns)), new_clone(rewrite_ident_refs(*t, pkg, local_fns)), new_clone(rewrite_ident_refs(*f, pkg, local_fns)))
     | EMatch(sp, scrut, arms) -> {
         var na: Vec<ast.MatchArm> = []
         for a in arms { vec.push(&na, ast.MatchArm { pat: a.pat, body: rewrite_ident_refs(a.body, pkg, local_fns), has_guard: a.has_guard, guard: a.guard }) }
-        EMatch(sp, rewrite_ident_refs(scrut, pkg, local_fns), na)
+        EMatch(sp, new_clone(rewrite_ident_refs(*scrut, pkg, local_fns)), na)
     }
-    | EWhile(sp, c, b) -> EWhile(sp, rewrite_ident_refs(c, pkg, local_fns), rewrite_ident_refs(b, pkg, local_fns))
-    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, rewrite_ident_refs(it, pkg, local_fns), rewrite_ident_refs(body, pkg, local_fns))
-    | EReturn(sp, v)          -> EReturn(sp, rewrite_ident_refs(v, pkg, local_fns))
-    | EDefer(sp, v)           -> EDefer(sp, rewrite_ident_refs(v, pkg, local_fns))
+    | EWhile(sp, c, b) -> EWhile(sp, new_clone(rewrite_ident_refs(*c, pkg, local_fns)), new_clone(rewrite_ident_refs(*b, pkg, local_fns)))
+    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, new_clone(rewrite_ident_refs(*it, pkg, local_fns)), new_clone(rewrite_ident_refs(*body, pkg, local_fns)))
+    | EReturn(sp, v)          -> EReturn(sp, new_clone(rewrite_ident_refs(*v, pkg, local_fns)))
+    | EDefer(sp, v)           -> EDefer(sp, new_clone(rewrite_ident_refs(*v, pkg, local_fns)))
     | ESizeOf(_, _)           -> e
-    | EArrayLit(sp, elems)    -> {
+    | EArrayLit(sp, elems, lit_te)    -> {
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, rewrite_ident_refs(el, pkg, local_fns)) }
-        EArrayLit(sp, ne)
+        EArrayLit(sp, ne, lit_te)
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(sp, keys, values, lit_te) -> {
         var nk: Vec<ast.Expr> = []
         for k in keys { vec.push(&nk, rewrite_ident_refs(k, pkg, local_fns)) }
         var nv: Vec<ast.Expr> = []
         for v in values { vec.push(&nv, rewrite_ident_refs(v, pkg, local_fns)) }
-        EMapLit(sp, nk, nv)
+        EMapLit(sp, nk, nv, lit_te)
     }
-    | ENew(sp, inner) -> ENew(sp, rewrite_ident_refs(inner, pkg, local_fns))
+    | ENew(sp, inner) -> ENew(sp, new_clone(rewrite_ident_refs(*inner, pkg, local_fns)))
     }
 }
 
@@ -663,20 +663,20 @@ let qualify_expr(e: ast.Expr, pkg: string, ctx: *main.QualifyCtx): ast.Expr = {
         e
     }
     | EPath(_, _) -> e
-    | EUnary(sp, op, rhs)     -> EUnary(sp, op, qualify_expr(rhs, pkg, ctx))
-    | EBinary(sp, op, l, r)   -> EBinary(sp, op, qualify_expr(l, pkg, ctx), qualify_expr(r, pkg, ctx))
-    | EAssign(sp, op, l, r)   -> EAssign(sp, op, qualify_expr(l, pkg, ctx), qualify_expr(r, pkg, ctx))
+    | EUnary(sp, op, rhs)     -> EUnary(sp, op, new_clone(qualify_expr(*rhs, pkg, ctx)))
+    | EBinary(sp, op, l, r)   -> EBinary(sp, op, new_clone(qualify_expr(*l, pkg, ctx)), new_clone(qualify_expr(*r, pkg, ctx)))
+    | EAssign(sp, op, l, r)   -> EAssign(sp, op, new_clone(qualify_expr(*l, pkg, ctx)), new_clone(qualify_expr(*r, pkg, ctx)))
     | ECall(sp, callee, ta, args) -> {
         var na: Vec<ast.Expr> = []
         for a in args { vec.push(&na, qualify_expr(a, pkg, ctx)) }
         var nta: Vec<ast.TypeExpr> = []
         for t in ta { vec.push(&nta, qualify_te(t, pkg, ctx)) }
-        ECall(sp, qualify_expr(callee, pkg, ctx), nta, na)
+        ECall(sp, new_clone(qualify_expr(*callee, pkg, ctx)), nta, na)
     }
-    | EField(sp, base, name)  -> EField(sp, qualify_expr(base, pkg, ctx), name)
-    | EIndex(sp, base, idx)   -> EIndex(sp, qualify_expr(base, pkg, ctx), qualify_expr(idx, pkg, ctx))
-    | ECast(sp, value, t)     -> ECast(sp, qualify_expr(value, pkg, ctx), qualify_te(t, pkg, ctx))
-    | ETry(sp, v)             -> ETry(sp, qualify_expr(v, pkg, ctx))
+    | EField(sp, base, name)  -> EField(sp, new_clone(qualify_expr(*base, pkg, ctx)), name)
+    | EIndex(sp, base, idx)   -> EIndex(sp, new_clone(qualify_expr(*base, pkg, ctx)), new_clone(qualify_expr(*idx, pkg, ctx)))
+    | ECast(sp, value, t)     -> ECast(sp, new_clone(qualify_expr(*value, pkg, ctx)), qualify_te(t, pkg, ctx))
+    | ETry(sp, v)             -> ETry(sp, new_clone(qualify_expr(*v, pkg, ctx)))
     | ETuple(sp, elems) -> {
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, qualify_expr(el, pkg, ctx)) }
@@ -692,14 +692,14 @@ let qualify_expr(e: ast.Expr, pkg: string, ctx: *main.QualifyCtx): ast.Expr = {
     | EClosure(sp, cps, ret, body) -> {
         var ncps: Vec<ast.ClosureParam> = []
         for c in cps { vec.push(&ncps, ast.ClosureParam { name: c.name, ty: qualify_te(c.ty, pkg, ctx) }) }
-        EClosure(sp, ncps, qualify_te(ret, pkg, ctx), qualify_expr(body, pkg, ctx))
+        EClosure(sp, ncps, qualify_te(ret, pkg, ctx), new_clone(qualify_expr(*body, pkg, ctx)))
     }
     | EBlock(sp, stmts, tail) -> {
         var ns: Vec<ast.Stmt> = []
         for s in stmts { vec.push(&ns, qualify_stmt(s, pkg, ctx)) }
-        EBlock(sp, ns, qualify_expr(tail, pkg, ctx))
+        EBlock(sp, ns, new_clone(qualify_expr(*tail, pkg, ctx)))
     }
-    | EIf(sp, c, t, f) -> EIf(sp, qualify_expr(c, pkg, ctx), qualify_expr(t, pkg, ctx), qualify_expr(f, pkg, ctx))
+    | EIf(sp, c, t, f) -> EIf(sp, new_clone(qualify_expr(*c, pkg, ctx)), new_clone(qualify_expr(*t, pkg, ctx)), new_clone(qualify_expr(*f, pkg, ctx)))
     | EMatch(sp, scrut, arms) -> {
         var na: Vec<ast.MatchArm> = []
         for a in arms {
@@ -710,26 +710,26 @@ let qualify_expr(e: ast.Expr, pkg: string, ctx: *main.QualifyCtx): ast.Expr = {
                 guard:     qualify_expr(a.guard, pkg, ctx),
             })
         }
-        EMatch(sp, qualify_expr(scrut, pkg, ctx), na)
+        EMatch(sp, new_clone(qualify_expr(*scrut, pkg, ctx)), na)
     }
-    | EWhile(sp, c, b) -> EWhile(sp, qualify_expr(c, pkg, ctx), qualify_expr(b, pkg, ctx))
-    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, qualify_expr(it, pkg, ctx), qualify_expr(body, pkg, ctx))
-    | EReturn(sp, v)          -> EReturn(sp, qualify_expr(v, pkg, ctx))
-    | EDefer(sp, v)           -> EDefer(sp, qualify_expr(v, pkg, ctx))
+    | EWhile(sp, c, b) -> EWhile(sp, new_clone(qualify_expr(*c, pkg, ctx)), new_clone(qualify_expr(*b, pkg, ctx)))
+    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, new_clone(qualify_expr(*it, pkg, ctx)), new_clone(qualify_expr(*body, pkg, ctx)))
+    | EReturn(sp, v)          -> EReturn(sp, new_clone(qualify_expr(*v, pkg, ctx)))
+    | EDefer(sp, v)           -> EDefer(sp, new_clone(qualify_expr(*v, pkg, ctx)))
     | ESizeOf(sp, t)          -> ESizeOf(sp, qualify_te(t, pkg, ctx))
-    | EArrayLit(sp, elems) -> {
+    | EArrayLit(sp, elems, lit_te) -> {
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, qualify_expr(el, pkg, ctx)) }
-        EArrayLit(sp, ne)
+        EArrayLit(sp, ne, qualify_te(lit_te, pkg, ctx))
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(sp, keys, values, lit_te) -> {
         var nk: Vec<ast.Expr> = []
         for k in keys { vec.push(&nk, qualify_expr(k, pkg, ctx)) }
         var nv: Vec<ast.Expr> = []
         for v in values { vec.push(&nv, qualify_expr(v, pkg, ctx)) }
-        EMapLit(sp, nk, nv)
+        EMapLit(sp, nk, nv, qualify_te(lit_te, pkg, ctx))
     }
-    | ENew(sp, inner) -> ENew(sp, qualify_expr(inner, pkg, ctx))
+    | ENew(sp, inner) -> ENew(sp, new_clone(qualify_expr(*inner, pkg, ctx)))
     }
 }
 
@@ -838,8 +838,8 @@ let eval_const(e: ast.Expr, ctx: main.CompileCtx): main.CV = {
         CVError(strings.cat("unknown compile-time constant: ", name))
     }
     | EBinary(_, op, l, r) -> {
-        let lv = eval_const(l, ctx)
-        let rv = eval_const(r, ctx)
+        let lv = eval_const(*l, ctx)
+        let rv = eval_const(*r, ctx)
         match op {
         | BOpEq -> CVBool(cv_str_eq(lv, rv))
         | BOpNe -> CVBool(!cv_str_eq(lv, rv))
@@ -849,7 +849,7 @@ let eval_const(e: ast.Expr, ctx: main.CompileCtx): main.CV = {
         }
     }
     | EUnary(_, op, x) -> {
-        let v = eval_const(x, ctx)
+        let v = eval_const(*x, ctx)
         match op {
         | UOpNot -> CVBool(!cv_truthy(v))
         | _ -> CVError("only `!` is allowed as a unary operator in #if conditions")
@@ -1075,7 +1075,7 @@ let cmd_build(path: string, qoz_root: string): main.BuildResult = {
     if len(tc.errors) > 0 {
         os.exit(1)
     }
-    let c_source = emit.emit_program(inferred, tc.expr_types)
+    let c_source = emit.emit_program(inferred)
     let _keep_alive = loaded.sources
     let out_path = paths.c_path
     let ok = fs.write_file(out_path, c_source)

@@ -98,35 +98,40 @@ type Expr =
     | ENil(ast.Span)
     | EIdent(ast.Span, string)
     | EPath(ast.Span, Vec<string>)
-    | EUnary(ast.Span, ast.UnaryOp, ast.Expr)
-    | EBinary(ast.Span, ast.BinaryOp, ast.Expr, ast.Expr)
-    | EAssign(ast.Span, ast.AssignOp, ast.Expr, ast.Expr)
-    | ECall(ast.Span, ast.Expr, Vec<ast.TypeExpr>, Vec<ast.Expr>)
-    | EField(ast.Span, ast.Expr, string)
-    | EIndex(ast.Span, ast.Expr, ast.Expr)
-    | ECast(ast.Span, ast.Expr, ast.TypeExpr)
-    | ETry(ast.Span, ast.Expr)
+    | EUnary(ast.Span, ast.UnaryOp, *ast.Expr)
+    | EBinary(ast.Span, ast.BinaryOp, *ast.Expr, *ast.Expr)
+    | EAssign(ast.Span, ast.AssignOp, *ast.Expr, *ast.Expr)
+    | ECall(ast.Span, *ast.Expr, Vec<ast.TypeExpr>, Vec<ast.Expr>)
+    | EField(ast.Span, *ast.Expr, string)
+    | EIndex(ast.Span, *ast.Expr, *ast.Expr)
+    | ECast(ast.Span, *ast.Expr, ast.TypeExpr)
+    | ETry(ast.Span, *ast.Expr)
     | ETuple(ast.Span, Vec<ast.Expr>)
     | ERecord(ast.Span, ast.TypeExpr, Vec<ast.RecordFieldLit>)
-    | EClosure(ast.Span, Vec<ast.ClosureParam>, ast.TypeExpr, ast.Expr)
-    | EBlock(ast.Span, Vec<ast.Stmt>, ast.Expr)
-    | EIf(ast.Span, ast.Expr, ast.Expr, ast.Expr)
-    | EMatch(ast.Span, ast.Expr, Vec<ast.MatchArm>)
-    | EWhile(ast.Span, ast.Expr, ast.Expr)
-    | EFor(ast.Span, string, string, ast.Expr, ast.Expr)
-    | EReturn(ast.Span, ast.Expr)
-    | EDefer(ast.Span, ast.Expr)
+    | EClosure(ast.Span, Vec<ast.ClosureParam>, ast.TypeExpr, *ast.Expr)
+    | EBlock(ast.Span, Vec<ast.Stmt>, *ast.Expr)
+    | EIf(ast.Span, *ast.Expr, *ast.Expr, *ast.Expr)
+    | EMatch(ast.Span, *ast.Expr, Vec<ast.MatchArm>)
+    | EWhile(ast.Span, *ast.Expr, *ast.Expr)
+    | EFor(ast.Span, string, string, *ast.Expr, *ast.Expr)
+    | EReturn(ast.Span, *ast.Expr)
+    | EDefer(ast.Span, *ast.Expr)
     | ESizeOf(ast.Span, ast.TypeExpr)
-    | EArrayLit(ast.Span, Vec<ast.Expr>)
+    // The trailing TypeExpr is the resolved container type the checker
+    // fills in (Vec<T>). It is TEUnit when the type is not yet known, in
+    // which case emit infers the element type from the contents. An empty
+    // `[]` carries its type only through this field.
+    | EArrayLit(ast.Span, Vec<ast.Expr>, ast.TypeExpr)
     // Map literal: parallel keys and values. `[:]` is the empty map
-    // (both vectors empty); `[k: v, ...]` carries entries.
-    | EMapLit(ast.Span, Vec<ast.Expr>, Vec<ast.Expr>)
+    // (both vectors empty); `[k: v, ...]` carries entries. The trailing
+    // TypeExpr is the resolved Map<K, V> type, TEUnit when unknown.
+    | EMapLit(ast.Span, Vec<ast.Expr>, Vec<ast.Expr>, ast.TypeExpr)
     // Heap clone: `new_clone(<expr>)` evaluates the inner expression and
     // copies the result into a fresh heap cell, yielding a `*T`. Used to
     // build self-referential values whose `*T` fields must outlive the
     // current stack frame. (`new` is reserved for future type
     // construction; this node is the value-clone form.)
-    | ENew(ast.Span, ast.Expr)
+    | ENew(ast.Span, *ast.Expr)
 
 type Stmt =
     | SLet(ast.Span, string, ast.TypeExpr, ast.Expr)
@@ -200,7 +205,7 @@ let span_of_expr(e: ast.Expr): ast.Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _) | EMapLit(sp, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)

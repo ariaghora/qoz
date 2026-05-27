@@ -208,42 +208,42 @@ let parse_expr(p: *Parser): ast.Expr = {
     if is_punct(t, "=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, rhs)
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(rhs))
     }
     if is_punct(t, "+=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, EBinary(span, BOpAdd, lhs, rhs))
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(EBinary(span, BOpAdd, new_clone(lhs), new_clone(rhs))))
     }
     if is_punct(t, "-=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, EBinary(span, BOpSub, lhs, rhs))
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(EBinary(span, BOpSub, new_clone(lhs), new_clone(rhs))))
     }
     if is_punct(t, "*=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, EBinary(span, BOpMul, lhs, rhs))
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(EBinary(span, BOpMul, new_clone(lhs), new_clone(rhs))))
     }
     if is_punct(t, "/=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, EBinary(span, BOpDiv, lhs, rhs))
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(EBinary(span, BOpDiv, new_clone(lhs), new_clone(rhs))))
     }
     if is_punct(t, "%=") {
         advance(p)
         let rhs = parse_expr(p)
-        return EAssign(span, AOpSet, lhs, EBinary(span, BOpMod, lhs, rhs))
+        return EAssign(span, AOpSet, new_clone(lhs), new_clone(EBinary(span, BOpMod, new_clone(lhs), new_clone(rhs))))
     }
     if is_punct(t, "..<") {
         advance(p)
         let rhs = parse_logical_or(p)
-        return EBinary(span, BOpRange, lhs, rhs)
+        return EBinary(span, BOpRange, new_clone(lhs), new_clone(rhs))
     }
     if is_punct(t, "..=") {
         advance(p)
         let rhs = parse_logical_or(p)
-        return EBinary(span, BOpRangeInclusive, lhs, rhs)
+        return EBinary(span, BOpRangeInclusive, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -254,7 +254,7 @@ let parse_logical_or(p: *Parser): ast.Expr = {
         let span = span_of(p, peek(p))
         advance(p)
         let rhs = parse_logical_and(p)
-        lhs = EBinary(span, BOpOr, lhs, rhs)
+        lhs = EBinary(span, BOpOr, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -265,7 +265,7 @@ let parse_logical_and(p: *Parser): ast.Expr = {
         let span = span_of(p, peek(p))
         advance(p)
         let rhs = parse_bitor(p)
-        lhs = EBinary(span, BOpAnd, lhs, rhs)
+        lhs = EBinary(span, BOpAnd, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -276,7 +276,7 @@ let parse_bitor(p: *Parser): ast.Expr = {
         let span = span_of(p, peek(p))
         advance(p)
         let rhs = parse_bitxor(p)
-        lhs = EBinary(span, BOpBitOr, lhs, rhs)
+        lhs = EBinary(span, BOpBitOr, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -287,7 +287,7 @@ let parse_bitxor(p: *Parser): ast.Expr = {
         let span = span_of(p, peek(p))
         advance(p)
         let rhs = parse_bitand(p)
-        lhs = EBinary(span, BOpBitXor, lhs, rhs)
+        lhs = EBinary(span, BOpBitXor, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -298,7 +298,7 @@ let parse_bitand(p: *Parser): ast.Expr = {
         let span = span_of(p, peek(p))
         advance(p)
         let rhs = parse_compare(p)
-        lhs = EBinary(span, BOpBitAnd, lhs, rhs)
+        lhs = EBinary(span, BOpBitAnd, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -329,7 +329,7 @@ let parse_compare(p: *Parser): ast.Expr = {
         let span = span_of(p, tok)
         advance(p)
         let rhs = parse_shift(p)
-        lhs = EBinary(span, op, lhs, rhs)
+        lhs = EBinary(span, op, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -356,7 +356,7 @@ let parse_shift(p: *Parser): ast.Expr = {
             advance(p)
         }
         let rhs = parse_addsub(p)
-        lhs = EBinary(span, op, lhs, rhs)
+        lhs = EBinary(span, op, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -369,7 +369,7 @@ let parse_addsub(p: *Parser): ast.Expr = {
         let span = span_of(p, tok)
         advance(p)
         let rhs = parse_muldiv(p)
-        lhs = EBinary(span, op, lhs, rhs)
+        lhs = EBinary(span, op, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -382,7 +382,7 @@ let parse_muldiv(p: *Parser): ast.Expr = {
         let span = span_of(p, tok)
         advance(p)
         let rhs = parse_unary(p)
-        lhs = EBinary(span, op, lhs, rhs)
+        lhs = EBinary(span, op, new_clone(lhs), new_clone(rhs))
     }
     lhs
 }
@@ -393,29 +393,29 @@ let parse_unary(p: *Parser): ast.Expr = {
     if is_punct(tok, "-") {
         advance(p)
         let rhs = parse_unary(p)
-        return EUnary(span, UOpNeg, rhs)
+        return EUnary(span, UOpNeg, new_clone(rhs))
     }
     if is_punct(tok, "!") {
         advance(p)
         let rhs = parse_unary(p)
-        return EUnary(span, UOpNot, rhs)
+        return EUnary(span, UOpNot, new_clone(rhs))
     }
     if is_punct(tok, "&") {
         advance(p)
         let rhs = parse_unary(p)
-        return EUnary(span, UOpAddr, rhs)
+        return EUnary(span, UOpAddr, new_clone(rhs))
     }
     if is_punct(tok, "*") {
         advance(p)
         let rhs = parse_unary(p)
-        return EUnary(span, UOpDeref, rhs)
+        return EUnary(span, UOpDeref, new_clone(rhs))
     }
     if is_kw(tok, "new_clone") {
         advance(p)
         expect_punct(p, "(")
         let inner = parse_expr(p)
         expect_punct(p, ")")
-        return ENew(span, inner)
+        return ENew(span, new_clone(inner))
     }
     parse_postfix(p)
 }
@@ -525,7 +525,7 @@ let parse_postfix(p: *Parser): ast.Expr = {
                 // The parser produces EField(EIdent(pkg), TypeName);
                 // re-flatten into a two-segment path the resolver can
                 // hand to the qualifier-aware type lookup.
-                match base {
+                match *base {
                 | EIdent(_, pkg) -> {
                     var path: Vec<string> = []
                     vec.push(&path, pkg)
@@ -558,7 +558,7 @@ let parse_postfix(p: *Parser): ast.Expr = {
                 }
             }
             expect_punct(p, ")")
-            e = ECall(span, e, type_args, args)
+            e = ECall(span, new_clone(e), type_args, args)
         } elif is_punct(tok, "(") {
             var handled_sizeof = false
             match e {
@@ -593,19 +593,19 @@ let parse_postfix(p: *Parser): ast.Expr = {
                     }
                 }
                 expect_punct(p, ")")
-                e = ECall(span, e, [], args)
+                e = ECall(span, new_clone(e), [], args)
             }
         } elif is_punct(tok, "[") {
             advance(p)
             let idx = parse_expr(p)
             expect_punct(p, "]")
-            e = EIndex(span, e, idx)
+            e = EIndex(span, new_clone(e), new_clone(idx))
         } elif is_punct(tok, ".") {
             advance(p)
             let name_tok = peek(p)
             if is_ident(name_tok) {
                 advance(p)
-                e = EField(span, e, name_tok.text)
+                e = EField(span, new_clone(e), name_tok.text)
             } else {
                 err_unexpected(p, "field name after `.`", name_tok)
                 more = false
@@ -613,10 +613,10 @@ let parse_postfix(p: *Parser): ast.Expr = {
         } elif is_kw(tok, "as") {
             advance(p)
             let target = parse_type(p)
-            e = ECast(span, e, target)
+            e = ECast(span, new_clone(e), target)
         } elif is_punct(tok, "?") {
             advance(p)
-            e = ETry(span, e)
+            e = ETry(span, new_clone(e))
         } else {
             more = false
         }
@@ -669,7 +669,7 @@ let parse_closure(p: *Parser): ast.Expr = {
     }
     expect_punct(p, "->")
     let body = parse_expr(p)
-    EClosure(span, params, ret_ty, body)
+    EClosure(span, params, ret_ty, new_clone(body))
 }
 
 // Build a C-style quoted string literal from raw bytes for embedding
@@ -981,12 +981,12 @@ let interp_block(template: string, args: Vec<ast.Expr>, span: ast.Span): ast.Exp
         vec.push(&stmts, SExpr(span, builtin_call(span, "__qoz_interp_push_str", append_args2(sb_id, lit_arg))))
     }
     let finish_call: ast.Expr = builtin_call(span, "__qoz_interp_finish", append_args1(sb_id))
-    EBlock(span, stmts, finish_call)
+    EBlock(span, stmts, new_clone(finish_call))
 }
 
 let builtin_call(span: ast.Span, name: string, args: Vec<ast.Expr>): ast.Expr = {
     let callee: ast.Expr = EIdent(span, name)
-    ECall(span, callee, [], args)
+    ECall(span, new_clone(callee), [], args)
 }
 
 let append_args1(a: ast.Expr): Vec<ast.Expr> = {
@@ -1003,9 +1003,9 @@ let append_args2(a: ast.Expr, b: ast.Expr): Vec<ast.Expr> = {
 }
 
 let strings_call(method: string, span: ast.Span, args: Vec<ast.Expr>): ast.Expr = {
-    let callee: ast.Expr = EField(span, EIdent(span, "strings"), method)
+    let callee: ast.Expr = EField(span, new_clone(EIdent(span, "strings")), method)
     var type_args: Vec<ast.TypeExpr> = []
-    ECall(span, callee, type_args, args)
+    ECall(span, new_clone(callee), type_args, args)
 }
 
 let parse_atom(p: *Parser): ast.Expr = {
@@ -1118,13 +1118,13 @@ let parse_atom(p: *Parser): ast.Expr = {
             expect_punct(p, "]")
             var mk: Vec<ast.Expr> = []
             var mv: Vec<ast.Expr> = []
-            return EMapLit(span, mk, mv)
+            return EMapLit(span, mk, mv, TEUnit(span))
         }
         // Empty Vec literal `[]`.
         if is_punct(peek(p), "]") {
             advance(p)
             var empty: Vec<ast.Expr> = []
-            return EArrayLit(span, empty)
+            return EArrayLit(span, empty, TEUnit(span))
         }
         let first = parse_expr(p)
         // A colon after the first element marks a map literal.
@@ -1146,7 +1146,7 @@ let parse_atom(p: *Parser): ast.Expr = {
                 }
             }
             expect_punct(p, "]")
-            return EMapLit(span, keys, vals)
+            return EMapLit(span, keys, vals, TEUnit(span))
         }
         var elems: Vec<ast.Expr> = []
         vec.push(&elems, first)
@@ -1160,7 +1160,7 @@ let parse_atom(p: *Parser): ast.Expr = {
             }
         }
         expect_punct(p, "]")
-        return EArrayLit(span, elems)
+        return EArrayLit(span, elems, TEUnit(span))
     }
     if is_punct(t, "{") {
         return parse_block(p)
@@ -1200,19 +1200,19 @@ let parse_if(p: *Parser): ast.Expr = {
         let then_b = parse_block(p)
         let raw_else = parse_if_tail(p, span)
         let else_b = match raw_else {
-        | ENil(_) -> EBlock(span, [], ENil(span))
+        | ENil(_) -> EBlock(span, [], new_clone(ENil(span)))
         | _       -> raw_else
         }
         var arms: Vec<ast.MatchArm> = []
         vec.push(&arms, ast.MatchArm { pat: pat, body: then_b, has_guard: false, guard: ENil(span) })
         vec.push(&arms, ast.MatchArm { pat: PatWild(span), body: else_b, has_guard: false, guard: ENil(span) })
-        return EMatch(span, scrut, arms)
+        return EMatch(span, new_clone(scrut), arms)
     }
     let cond = parse_expr(p)
     let then_b = parse_block(p)
     let else_b = parse_if_tail(p, span)
     let tail_span = if_chain_end_span(span, then_b, else_b)
-    EIf(tail_span, cond, then_b, else_b)
+    EIf(tail_span, new_clone(cond), new_clone(then_b), new_clone(else_b))
 }
 
 let if_chain_end_span(start: ast.Span, then_b: ast.Expr, else_b: ast.Expr): ast.Span = {
@@ -1240,7 +1240,7 @@ let parse_if_tail(p: *Parser, anchor: ast.Span): ast.Expr = {
         let cond = parse_expr(p)
         let then_b = parse_block(p)
         let nested = parse_if_tail(p, span)
-        return EIf(if_chain_end_span(span, then_b, nested), cond, then_b, nested)
+        return EIf(if_chain_end_span(span, then_b, nested), new_clone(cond), new_clone(then_b), new_clone(nested))
     }
     if is_kw(peek(p), "else") {
         advance(p)
@@ -1252,7 +1252,7 @@ let parse_if_tail(p: *Parser, anchor: ast.Span): ast.Expr = {
             let cond = parse_expr(p)
             let then_b = parse_block(p)
             let nested = parse_if_tail(p, span)
-            return EIf(span, cond, then_b, nested)
+            return EIf(span, new_clone(cond), new_clone(then_b), new_clone(nested))
         }
         return parse_block(p)
     }
@@ -1265,7 +1265,7 @@ let parse_while(p: *Parser): ast.Expr = {
     advance(p)
     let cond = parse_expr(p)
     let body = parse_block(p)
-    EWhile(span_extended_to(span, body), cond, body)
+    EWhile(span_extended_to(span, body), new_clone(cond), new_clone(body))
 }
 
 let parse_for(p: *Parser): ast.Expr = {
@@ -1285,7 +1285,7 @@ let parse_for(p: *Parser): ast.Expr = {
     }
     let iter = parse_expr(p)
     let body = parse_block(p)
-    EFor(span_extended_to(span, body), binding, binding2, iter, body)
+    EFor(span_extended_to(span, body), binding, binding2, new_clone(iter), new_clone(body))
 }
 
 let parse_match(p: *Parser): ast.Expr = {
@@ -1329,7 +1329,7 @@ let parse_match(p: *Parser): ast.Expr = {
     let close = peek(p)
     expect_punct(p, "}")
     let full_span = ast.Span { file: span.file, line: span.line, col: span.col, end_line: close.line }
-    EMatch(full_span, scrutinee, arms)
+    EMatch(full_span, new_clone(scrutinee), arms)
 }
 
 // Build a span starting at `start` and extending to the last line
@@ -1349,7 +1349,7 @@ let parse_return(p: *Parser): ast.Expr = {
     if !is_punct(peek(p), "}") && !is_punct(peek(p), ";") && !at_eof(p) {
         value = parse_expr(p)
     }
-    EReturn(span, value)
+    EReturn(span, new_clone(value))
 }
 
 let parse_defer(p: *Parser): ast.Expr = {
@@ -1357,7 +1357,7 @@ let parse_defer(p: *Parser): ast.Expr = {
     let span = span_of(p, kw_tok)
     advance(p)
     let body = parse_expr(p)
-    EDefer(span, body)
+    EDefer(span, new_clone(body))
 }
 
 let parse_pattern(p: *Parser): ast.Pattern = {
@@ -1463,7 +1463,7 @@ let parse_block(p: *Parser): ast.Expr = {
                 for bname in binds {
                     if !strings.eq_raw(bname, "_") {
                         let field = `_{bi}`
-                        let fld_expr: ast.Expr = EField(stmt_span, EIdent(stmt_span, tmp), field)
+                        let fld_expr: ast.Expr = EField(stmt_span, new_clone(EIdent(stmt_span, tmp)), field)
                         vec.push(&stmts, SLet(stmt_span, bname, TEUnit(stmt_span), fld_expr))
                     }
                     bi += 1
@@ -1514,7 +1514,7 @@ let parse_block(p: *Parser): ast.Expr = {
         final_tail = tail
     }
     let full_span = ast.Span { file: span.file, line: span.line, col: span.col, end_line: close.line }
-    EBlock(full_span, stmts, final_tail)
+    EBlock(full_span, stmts, new_clone(final_tail))
 }
 
 // --- Declarations ---

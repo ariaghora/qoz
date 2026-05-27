@@ -16,9 +16,6 @@ type Instantiation = {
 
 type Emitter = {
     out:               strings.Strbuf,
-    // Per-expression TypeExpr map, keyed by expr_id (Expr pointer as
-    // i64). Populated by the check phase. Read by infer_value_te_cached.
-    expr_types:        Map<i64, ast.TypeExpr>,
     // Generic-instantiation substitution active while emitting a
     // monomorphised function body. Cached TypeExprs that mention these
     // params are substituted at lookup time.
@@ -87,7 +84,6 @@ type Emitter = {
 
 let make_emitter(): Emitter = Emitter {
     out:               strings.Strbuf { buf: nil as *u8, len: 0, cap: 0 },
-    expr_types:        [:],
     current_tparams:   [],
     current_targs:     [],
     pos_fn_typedefs:   -1,
@@ -180,7 +176,7 @@ let variant_callee_name(e: *Emitter, callee: ast.Expr): string = {
         }
     }
     | EField(_, base, method) -> {
-        match base {
+        match *base {
         | EIdent(_, enum_name) -> {
             if !map.contains(&e.enum_decls, enum_name) { return "" }
             match map.get(&e.variant_of, method) {
@@ -209,7 +205,7 @@ let variant_callee_name(e: *Emitter, callee: ast.Expr): string = {
 let variant_enum_from_callee(callee: ast.Expr): string = {
     match callee {
     | EField(_, base, _) -> {
-        match base {
+        match *base {
         | EIdent(_, en) -> en
         | _             -> ""
         }
@@ -240,7 +236,7 @@ let generic_callee_name(e: *Emitter, callee: ast.Expr): string = {
     match callee {
     | EIdent(_, name) -> name
     | EField(_, base, method) -> {
-        match base {
+        match *base {
         | EIdent(_, pkg) -> {
             if map.contains(&e.packages, pkg) {
                 return strings.cat(strings.cat(pkg, "_"), method)
@@ -450,11 +446,11 @@ let literal_typeexpr(ex: ast.Expr): Option<ast.TypeExpr> = {
 }
 
 // Register the container helper instantiations a Vec or Map literal
-// needs, given the literal's resolved type from the checker's
-// expr_types. The checker resolves the type in every position (binding,
-// return, argument, record field, constructor argument), including for
-// an empty `[]` or `[:]` whose element type comes only from context, so
-// one registration path covers them all.
+// needs, given the literal's resolved type carried on the literal node.
+// The checker fills that type in every position (binding, return,
+// argument, record field, constructor argument), including for an empty
+// `[]` or `[:]` whose element type comes only from context, so one
+// registration path covers them all. A TEUnit is ignored.
 let register_container_lit(e: *Emitter, te: ast.TypeExpr) = {
     if let TENamed(sp, path, args) = te {
         if len(path) < 1 { return }
@@ -463,15 +459,15 @@ let register_container_lit(e: *Emitter, te: ast.TypeExpr) = {
             var vec_args: Vec<ast.TypeExpr> = []
             vec.push(&vec_args, args[0])
             walk_typeexpr(e, TENamed(sp, path, vec_args))
-            register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "make"), vec_args)
-            register_fn_instantiation(e, EField(sp, EIdent(sp, "vec"), "push"), vec_args)
+            register_fn_instantiation(e, EField(sp, new_clone(EIdent(sp, "vec")), "make"), vec_args)
+            register_fn_instantiation(e, EField(sp, new_clone(EIdent(sp, "vec")), "push"), vec_args)
         }
         if strings.eq_raw(n, "Map") && len(args) >= 2 {
             var map_args: Vec<ast.TypeExpr> = []
             vec.push(&map_args, args[0])
             vec.push(&map_args, args[1])
             walk_typeexpr(e, TENamed(sp, path, map_args))
-            register_fn_instantiation(e, EField(sp, EIdent(sp, "map"), "make"), map_args)
+            register_fn_instantiation(e, EField(sp, new_clone(EIdent(sp, "map")), "make"), map_args)
             register_map_helper(e, "map_set", map_args)
         }
     }
@@ -499,7 +495,7 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
             | SExpr(_, ex2) -> walk_expr_for_types(e, ex2)
             }
         }
-        walk_expr_for_types(e, tail)
+        walk_expr_for_types(e, *tail)
     }
     | ERecord(_, te, fields) -> {
         walk_typeexpr(e, te)
@@ -507,27 +503,27 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
             walk_expr_for_types(e, f.value)
         }
     }
-    | ECast(_, val, te) -> { walk_typeexpr(e, te); walk_expr_for_types(e, val) }
+    | ECast(_, val, te) -> { walk_typeexpr(e, te); walk_expr_for_types(e, *val) }
     | ESizeOf(_, te) -> walk_typeexpr(e, te)
-    | EBinary(_, _, l, r) -> { walk_expr_for_types(e, l); walk_expr_for_types(e, r) }
-    | EUnary(_, _, rhs) -> walk_expr_for_types(e, rhs)
+    | EBinary(_, _, l, r) -> { walk_expr_for_types(e, *l); walk_expr_for_types(e, *r) }
+    | EUnary(_, _, rhs) -> walk_expr_for_types(e, *rhs)
     | EAssign(_, _, l, r) -> {
-        walk_expr_for_types(e, l)
-        walk_expr_for_types(e, r)
-        walk_assign_for_map_helpers(e, l)
+        walk_expr_for_types(e, *l)
+        walk_expr_for_types(e, *r)
+        walk_assign_for_map_helpers(e, *l)
     }
     | ECall(sp, callee, type_args, args) -> {
-        walk_expr_for_types(e, callee)
+        walk_expr_for_types(e, *callee)
         for ta in type_args { walk_typeexpr(e, ta) }
         for a in args { walk_expr_for_types(e, a) }
-        register_fn_instantiation(e, callee, type_args)
+        register_fn_instantiation(e, *callee, type_args)
         // Implicit variant-constructor instantiation: `Option.Some(42)`
         // with no explicit type args reaches this point with empty
         // type_args. Walk-time inference uses literal_typeexpr only,
         // because locals are not yet bound. The full emit-time inference
         // covers the rest of the cases through the normal dispatch.
         if len(type_args) == 0 {
-            let vname = variant_callee_name(e, callee)
+            let vname = variant_callee_name(e, *callee)
             if !strings.eq_raw(vname, "") {
                 match map.get(&e.variant_of, vname) {
                 | Some(en) -> {
@@ -543,34 +539,30 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
             }
         }
     }
-    | EField(_, base, _) -> walk_expr_for_types(e, base)
-    | EIndex(_, base, idx) -> { walk_expr_for_types(e, base); walk_expr_for_types(e, idx) }
-    | ETry(_, val) -> walk_expr_for_types(e, val)
-    | EIf(_, c, t, f) -> { walk_expr_for_types(e, c); walk_expr_for_types(e, t); walk_expr_for_types(e, f) }
+    | EField(_, base, _) -> walk_expr_for_types(e, *base)
+    | EIndex(_, base, idx) -> { walk_expr_for_types(e, *base); walk_expr_for_types(e, *idx) }
+    | ETry(_, val) -> walk_expr_for_types(e, *val)
+    | EIf(_, c, t, f) -> { walk_expr_for_types(e, *c); walk_expr_for_types(e, *t); walk_expr_for_types(e, *f) }
     | EMatch(_, scrut, arms) -> {
-        walk_expr_for_types(e, scrut)
+        walk_expr_for_types(e, *scrut)
         for arm in arms { walk_expr_for_types(e, arm.body) }
     }
-    | EWhile(_, c, b) -> { walk_expr_for_types(e, c); walk_expr_for_types(e, b) }
-    | EFor(_, _, _, it, b) -> { walk_expr_for_types(e, it); walk_expr_for_types(e, b) }
-    | EReturn(_, v) -> walk_expr_for_types(e, v)
-    | EDefer(_, b) -> walk_expr_for_types(e, b)
+    | EWhile(_, c, b) -> { walk_expr_for_types(e, *c); walk_expr_for_types(e, *b) }
+    | EFor(_, _, _, it, b) -> { walk_expr_for_types(e, *it); walk_expr_for_types(e, *b) }
+    | EReturn(_, v) -> walk_expr_for_types(e, *v)
+    | EDefer(_, b) -> walk_expr_for_types(e, *b)
     | ETuple(_, elems) -> { for el in elems { walk_expr_for_types(e, el) } }
-    | EArrayLit(_, elems) -> {
+    | EArrayLit(_, elems, lit_te) -> {
         for el in elems { walk_expr_for_types(e, el) }
-        if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
-            register_container_lit(e, te)
-        }
+        register_container_lit(e, lit_te)
     }
-    | EMapLit(_, keys, values) -> {
+    | EMapLit(_, keys, values, lit_te) -> {
         for k in keys { walk_expr_for_types(e, k) }
         for v in values { walk_expr_for_types(e, v) }
-        if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
-            register_container_lit(e, te)
-        }
+        register_container_lit(e, lit_te)
     }
-    | ENew(_, inner) -> walk_expr_for_types(e, inner)
-    | EClosure(_, _, _, body) -> walk_expr_for_types(e, body)
+    | ENew(_, inner) -> walk_expr_for_types(e, *inner)
+    | EClosure(_, _, _, body) -> walk_expr_for_types(e, *body)
     | _ -> { }
     }
 }
@@ -972,17 +964,6 @@ let substitute_type(e: *Emitter, t: ast.TypeExpr, params: Vec<string>, args: Vec
     }
 }
 
-// Carry a container literal's checker-recorded type across a generic
-// instantiation. The original node's recorded type holds the type
-// parameters; substituting them gives the instance's concrete Vec or
-// Map type, which register_container_lit and the emitters then read
-// from expr_types for the freshly substituted node.
-let propagate_lit_type(e: *Emitter, orig: ast.Expr, node: ast.Expr, params: Vec<string>, args: Vec<ast.TypeExpr>) = {
-    if let Some(te) = map.get(&e.expr_types, expr_id(orig)) {
-        e.expr_types[expr_id(node)] = substitute_type(e, te, params, args)
-    }
-}
-
 let substitute_expr(e: *Emitter, x: ast.Expr, params: Vec<string>, args: Vec<ast.TypeExpr>): ast.Expr = {
     match x {
     | EInt(_, _)
@@ -993,20 +974,20 @@ let substitute_expr(e: *Emitter, x: ast.Expr, params: Vec<string>, args: Vec<ast
     | ENil(_)
     | EIdent(_, _)
     | EPath(_, _)             -> x
-    | EUnary(sp, op, rhs)     -> EUnary(sp, op, substitute_expr(e, rhs, params, args))
-    | EBinary(sp, op, l, r)   -> EBinary(sp, op, substitute_expr(e, l, params, args), substitute_expr(e, r, params, args))
-    | EAssign(sp, op, l, r)   -> EAssign(sp, op, substitute_expr(e, l, params, args), substitute_expr(e, r, params, args))
+    | EUnary(sp, op, rhs)     -> EUnary(sp, op, new_clone(substitute_expr(e, *rhs, params, args)))
+    | EBinary(sp, op, l, r)   -> EBinary(sp, op, new_clone(substitute_expr(e, *l, params, args)), new_clone(substitute_expr(e, *r, params, args)))
+    | EAssign(sp, op, l, r)   -> EAssign(sp, op, new_clone(substitute_expr(e, *l, params, args)), new_clone(substitute_expr(e, *r, params, args)))
     | ECall(sp, callee, ta, ax) -> {
         var new_ta: Vec<ast.TypeExpr> = []
         for t in ta { vec.push(&new_ta, substitute_type(e, t, params, args)) }
         var new_args: Vec<ast.Expr> = []
         for a in ax { vec.push(&new_args, substitute_expr(e, a, params, args)) }
-        ECall(sp, substitute_expr(e, callee, params, args), new_ta, new_args)
+        ECall(sp, new_clone(substitute_expr(e, *callee, params, args)), new_ta, new_args)
     }
-    | EField(sp, base, name)  -> EField(sp, substitute_expr(e, base, params, args), name)
-    | EIndex(sp, base, idx)   -> EIndex(sp, substitute_expr(e, base, params, args), substitute_expr(e, idx, params, args))
-    | ECast(sp, value, t)     -> ECast(sp, substitute_expr(e, value, params, args), substitute_type(e, t, params, args))
-    | ETry(sp, value)         -> ETry(sp, substitute_expr(e, value, params, args))
+    | EField(sp, base, name)  -> EField(sp, new_clone(substitute_expr(e, *base, params, args)), name)
+    | EIndex(sp, base, idx)   -> EIndex(sp, new_clone(substitute_expr(e, *base, params, args)), new_clone(substitute_expr(e, *idx, params, args)))
+    | ECast(sp, value, t)     -> ECast(sp, new_clone(substitute_expr(e, *value, params, args)), substitute_type(e, t, params, args))
+    | ETry(sp, value)         -> ETry(sp, new_clone(substitute_expr(e, *value, params, args)))
     | ETuple(sp, elems)       -> {
         var new_e: Vec<ast.Expr> = []
         for el in elems { vec.push(&new_e, substitute_expr(e, el, params, args)) }
@@ -1024,41 +1005,37 @@ let substitute_expr(e: *Emitter, x: ast.Expr, params: Vec<string>, args: Vec<ast
         for cp in cps {
             vec.push(&new_cps, ast.ClosureParam { name: cp.name, ty: substitute_type(e, cp.ty, params, args) })
         }
-        EClosure(sp, new_cps, substitute_type(e, ret, params, args), substitute_expr(e, body, params, args))
+        EClosure(sp, new_cps, substitute_type(e, ret, params, args), new_clone(substitute_expr(e, *body, params, args)))
     }
     | EBlock(sp, stmts, tail) -> {
         var new_stmts: Vec<ast.Stmt> = []
         for s in stmts { vec.push(&new_stmts, substitute_stmt(e, s, params, args)) }
-        EBlock(sp, new_stmts, substitute_expr(e, tail, params, args))
+        EBlock(sp, new_stmts, new_clone(substitute_expr(e, *tail, params, args)))
     }
-    | EIf(sp, c, t, f)        -> EIf(sp, substitute_expr(e, c, params, args), substitute_expr(e, t, params, args), substitute_expr(e, f, params, args))
+    | EIf(sp, c, t, f)        -> EIf(sp, new_clone(substitute_expr(e, *c, params, args)), new_clone(substitute_expr(e, *t, params, args)), new_clone(substitute_expr(e, *f, params, args)))
     | EMatch(sp, scrut, arms) -> {
         var new_arms: Vec<ast.MatchArm> = []
         for a in arms { vec.push(&new_arms, ast.MatchArm { pat: a.pat, body: substitute_expr(e, a.body, params, args), has_guard: a.has_guard, guard: if a.has_guard { substitute_expr(e, a.guard, params, args) } else { a.guard } }) }
-        EMatch(sp, substitute_expr(e, scrut, params, args), new_arms)
+        EMatch(sp, new_clone(substitute_expr(e, *scrut, params, args)), new_arms)
     }
-    | EWhile(sp, c, b)        -> EWhile(sp, substitute_expr(e, c, params, args), substitute_expr(e, b, params, args))
-    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, substitute_expr(e, it, params, args), substitute_expr(e, body, params, args))
-    | EReturn(sp, v)          -> EReturn(sp, substitute_expr(e, v, params, args))
-    | EDefer(sp, v)           -> EDefer(sp, substitute_expr(e, v, params, args))
+    | EWhile(sp, c, b)        -> EWhile(sp, new_clone(substitute_expr(e, *c, params, args)), new_clone(substitute_expr(e, *b, params, args)))
+    | EFor(sp, b1, b2, it, body) -> EFor(sp, b1, b2, new_clone(substitute_expr(e, *it, params, args)), new_clone(substitute_expr(e, *body, params, args)))
+    | EReturn(sp, v)          -> EReturn(sp, new_clone(substitute_expr(e, *v, params, args)))
+    | EDefer(sp, v)           -> EDefer(sp, new_clone(substitute_expr(e, *v, params, args)))
     | ESizeOf(sp, t)          -> ESizeOf(sp, substitute_type(e, t, params, args))
-    | EArrayLit(sp, elems)    -> {
+    | EArrayLit(sp, elems, lit_te)    -> {
         var new_e: Vec<ast.Expr> = []
         for el in elems { vec.push(&new_e, substitute_expr(e, el, params, args)) }
-        let node = EArrayLit(sp, new_e)
-        propagate_lit_type(e, x, node, params, args)
-        node
+        EArrayLit(sp, new_e, substitute_type(e, lit_te, params, args))
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(sp, keys, values, lit_te) -> {
         var nk: Vec<ast.Expr> = []
         for k in keys { vec.push(&nk, substitute_expr(e, k, params, args)) }
         var nv: Vec<ast.Expr> = []
         for v in values { vec.push(&nv, substitute_expr(e, v, params, args)) }
-        let node = EMapLit(sp, nk, nv)
-        propagate_lit_type(e, x, node, params, args)
-        node
+        EMapLit(sp, nk, nv, substitute_type(e, lit_te, params, args))
     }
-    | ENew(sp, inner) -> ENew(sp, substitute_expr(e, inner, params, args))
+    | ENew(sp, inner) -> ENew(sp, new_clone(substitute_expr(e, *inner, params, args)))
     }
 }
 
@@ -1363,23 +1340,23 @@ let collect_closure_captures(e: *Emitter, ex: ast.Expr, sc: *CaptureScope, out: 
             }
         }
     }
-    | EUnary(_, _, sub)               -> collect_closure_captures(e, sub, sc, out)
+    | EUnary(_, _, sub)               -> collect_closure_captures(e, *sub, sc, out)
     | EBinary(_, _, l, r)
     | EAssign(_, _, l, r) -> {
-        collect_closure_captures(e, l, sc, out)
-        collect_closure_captures(e, r, sc, out)
+        collect_closure_captures(e, *l, sc, out)
+        collect_closure_captures(e, *r, sc, out)
     }
-    | ECall(_, callee, _, args)       -> { collect_closure_captures(e, callee, sc, out); for a in args { collect_closure_captures(e, a, sc, out) } }
-    | EField(_, base, _)              -> collect_closure_captures(e, base, sc, out)
-    | EIndex(_, base, idx)            -> { collect_closure_captures(e, base, sc, out); collect_closure_captures(e, idx, sc, out) }
+    | ECall(_, callee, _, args)       -> { collect_closure_captures(e, *callee, sc, out); for a in args { collect_closure_captures(e, a, sc, out) } }
+    | EField(_, base, _)              -> collect_closure_captures(e, *base, sc, out)
+    | EIndex(_, base, idx)            -> { collect_closure_captures(e, *base, sc, out); collect_closure_captures(e, *idx, sc, out) }
     | ECast(_, v, _)
     | ETry(_, v)
     | EReturn(_, v)
-    | EDefer(_, v)                    -> collect_closure_captures(e, v, sc, out)
+    | EDefer(_, v)                    -> collect_closure_captures(e, *v, sc, out)
     | ETuple(_, elems)
-    | EArrayLit(_, elems)             -> { for el in elems { collect_closure_captures(e, el, sc, out) } }
-    | EMapLit(_, keys, values)        -> { for k in keys { collect_closure_captures(e, k, sc, out) } for v in values { collect_closure_captures(e, v, sc, out) } }
-    | ENew(_, inner)                  -> collect_closure_captures(e, inner, sc, out)
+    | EArrayLit(_, elems, _)             -> { for el in elems { collect_closure_captures(e, el, sc, out) } }
+    | EMapLit(_, keys, values, _)        -> { for k in keys { collect_closure_captures(e, k, sc, out) } for v in values { collect_closure_captures(e, v, sc, out) } }
+    | ENew(_, inner)                  -> collect_closure_captures(e, *inner, sc, out)
     | ERecord(_, _, fields)           -> { for fl in fields { collect_closure_captures(e, fl.value, sc, out) } }
     | EClosure(_, _, _, _) -> { }
     | EBlock(_, stmts, tail) -> {
@@ -1396,21 +1373,21 @@ let collect_closure_captures(e: *Emitter, ex: ast.Expr, sc: *CaptureScope, out: 
             | SExpr(_, expr)          -> collect_closure_captures(e, expr, sc, out)
             }
         }
-        collect_closure_captures(e, tail, sc, out)
+        collect_closure_captures(e, *tail, sc, out)
     }
-    | EIf(_, c, t, f)         -> { collect_closure_captures(e, c, sc, out); collect_closure_captures(e, t, sc, out); collect_closure_captures(e, f, sc, out) }
+    | EIf(_, c, t, f)         -> { collect_closure_captures(e, *c, sc, out); collect_closure_captures(e, *t, sc, out); collect_closure_captures(e, *f, sc, out) }
     | EMatch(_, scrut, arms) -> {
-        collect_closure_captures(e, scrut, sc, out)
+        collect_closure_captures(e, *scrut, sc, out)
         for arm in arms {
             collect_closure_captures(e, arm.body, sc, out)
         }
     }
-    | EWhile(_, c, b)         -> { collect_closure_captures(e, c, sc, out); collect_closure_captures(e, b, sc, out) }
+    | EWhile(_, c, b)         -> { collect_closure_captures(e, *c, sc, out); collect_closure_captures(e, *b, sc, out) }
     | EFor(_, bn, bn2, it, b) -> {
-        collect_closure_captures(e, it, sc, out)
+        collect_closure_captures(e, *it, sc, out)
         sc.bound[bn] = true
         if !strings.eq_raw(bn2, "") { sc.bound[bn2] = true }
-        collect_closure_captures(e, b, sc, out)
+        collect_closure_captures(e, *b, sc, out)
     }
     }
 }
@@ -1509,8 +1486,8 @@ let emit_array_lit_using(e: *Emitter, sp: ast.Span, elems: Vec<ast.Expr>, hint: 
     vec.push(&elem_args, elem_te)
     var pkg_path: Vec<string> = []
     vec.push(&pkg_path, "vec")
-    let vec_callee_make: ast.Expr = EField(sp, EIdent(sp, "vec"), "make")
-    let vec_callee_push: ast.Expr = EField(sp, EIdent(sp, "vec"), "push")
+    let vec_callee_make: ast.Expr = EField(sp, new_clone(EIdent(sp, "vec")), "make")
+    let vec_callee_push: ast.Expr = EField(sp, new_clone(EIdent(sp, "vec")), "push")
     register_fn_instantiation(e, vec_callee_make, elem_args)
     register_fn_instantiation(e, vec_callee_push, elem_args)
     var vec_path: Vec<string> = []
@@ -1568,7 +1545,7 @@ let emit_map_lit_using(e: *Emitter, sp: ast.Span, keys: Vec<ast.Expr>, values: V
     var kv_args: Vec<ast.TypeExpr> = []
     vec.push(&kv_args, key_te)
     vec.push(&kv_args, val_te)
-    register_fn_instantiation(e, EField(sp, EIdent(sp, "map"), "make"), kv_args)
+    register_fn_instantiation(e, EField(sp, new_clone(EIdent(sp, "map")), "make"), kv_args)
     register_map_helper(e, "map_set", kv_args)
     var map_path: Vec<string> = []
     vec.push(&map_path, "Map")
@@ -1790,7 +1767,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         }
     }
     | EString(_, text)  -> push(e, `QOZ_STR_LIT({text})`)
-    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, lhs, rhs)
+    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, *lhs, *rhs)
     | EUnary(_, op, rhs) -> {
         // Operator-overload dispatch: `-pair`, `!pair`, etc. fall back
         // to the user-registered `@operator(\"unary-\")` function when
@@ -1798,7 +1775,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         // unary form below.
         let op_text = unary_op_text(op)
         if !strings.eq_raw(op_text, "") {
-            let rhs_te = infer_value_te(e, rhs)
+            let rhs_te = infer_value_te(e, *rhs)
             let tname = operator_first_param_type_name(rhs_te)
             if !strings.eq_raw(tname, "") {
                 let key = strings.cat(strings.cat(op_text, "::"), tname)
@@ -1807,14 +1784,14 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
                     let ret_te = match map.get(&e.fn_returns, fn_name) {
                     | Some(t) -> t
                     | None    -> {
-                        let _ = emit_die(span_of_expr(rhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
-                        TEUnit(span_of_expr(rhs))
+                        let _ = emit_die(span_of_expr(*rhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
+                        TEUnit(span_of_expr(*rhs))
                     }
                     }
                     let ret_ct = c_type_for(e, ret_te)
                     ensure_unary_byval_dispatch_helper(e, fn_name, ct, ret_ct)
                     push(e, `_qoz_byval_{fn_name}(`)
-                    emit_expr(e, rhs)
+                    emit_expr(e, *rhs)
                     push(e, ")")
                     return
                 }
@@ -1827,39 +1804,39 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         // `-(-x)` and `!(!x)` do not collapse to `--x` / `!!x` which
         // clang reads as predecrement / nested logical-not (the
         // latter is harmless but the former is not).
-        match rhs {
+        match *rhs {
         | EBinary(_, _, _, _) | EUnary(_, _, _) | EAssign(_, _, _, _) | ECast(_, _, _) -> {
             push(e, "(")
-            emit_expr(e, rhs)
+            emit_expr(e, *rhs)
             push(e, ")")
         }
-        | _ -> emit_expr(e, rhs)
+        | _ -> emit_expr(e, *rhs)
         }
     }
     | EReturn(_, value) -> {
-        if is_nil_expr(value) {
+        if is_nil_expr(*value) {
             push(e, "return")
         } else {
             push(e, "return ")
-            emit_value_with_hint(e, value, e.current_ret_te)
+            emit_value_with_hint(e, *value, e.current_ret_te)
         }
     }
     | EBlock(sp, stmts, tail) -> {
         if len(stmts) == 0 {
-            emit_block_tail_as_value(e, tail)
+            emit_block_tail_as_value(e, *tail)
             return
         }
         // A statement-shape tail (for, while, assign, defer, return)
         // contributes no value. Hoist the block as a void compound and
         // leave a placeholder 0 in the expression position so the
         // surrounding context still has a syntactic value.
-        match tail {
+        match *tail {
         | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) | EDefer(_, _) | EReturn(_, _) -> {
             let start_s = strings.sb_len(&e.out)
             push(e, "{\n        ")
             for s in stmts { emit_stmt(e, s) }
             let saved = open_statement_scope(e)
-            emit_stmt_expr(e, tail)
+            emit_stmt_expr(e, *tail)
             close_statement_scope(e, saved)
             push(e, "\n    }\n    ")
             hoist_to_prologue(e, start_s)
@@ -1874,13 +1851,13 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         // tail skips the result temp because `void` cannot be a C
         // variable type. The placeholder 0 sits in the expression slot
         // and the tail emits as a statement.
-        let tail_te = infer_value_te(e, tail)
+        let tail_te = infer_value_te(e, *tail)
         if is_unit_typeexpr(tail_te) {
             let start_u = strings.sb_len(&e.out)
             push(e, "{\n        ")
             for s in stmts { emit_stmt(e, s) }
             let saved_tail = open_statement_scope(e)
-            emit_stmt_expr(e, tail)
+            emit_stmt_expr(e, *tail)
             close_statement_scope(e, saved_tail)
             push(e, "\n    }\n    ")
             hoist_to_prologue(e, start_u)
@@ -1896,7 +1873,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
         for s in stmts { emit_stmt(e, s) }
         let saved_inner = open_statement_scope(e)
         push(e, `{tmp_res} = `)
-        emit_expr(e, tail)
+        emit_expr(e, *tail)
         push(e, ";\n    ")
         close_statement_scope(e, saved_inner)
         push(e, "}\n    ")
@@ -1907,41 +1884,41 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
     | EPath(sp, _)                 -> { let _ = emit_die(sp, "path expression in value position; only Enum::Variant in call position is supported") }
     | EAssign(sp, op, lhs, rhs)    -> {
         assert_plain_assign(op, sp)
-        emit_assign(e, lhs, rhs)
+        emit_assign(e, *lhs, *rhs)
     }
-    | ECall(_, callee, ta, args)   -> emit_call(e, callee, ta, args)
-    | EField(_, base, name)        -> emit_field(e, base, name)
-    | EIndex(_, base, idx)         -> emit_index(e, base, idx)
+    | ECall(_, callee, ta, args)   -> emit_call(e, *callee, ta, args)
+    | EField(_, base, name)        -> emit_field(e, *base, name)
+    | EIndex(_, base, idx)         -> emit_index(e, *base, *idx)
     | ECast(_, value, t)           -> {
         let tc = c_type_for(e, t)
         push(e, `(({tc})`)
-        emit_expr(e, value)
+        emit_expr(e, *value)
         push(e, ")")
     }
-    | ETry(sp, value)              -> emit_try(e, sp, value)
+    | ETry(sp, value)              -> emit_try(e, sp, *value)
     | ETuple(sp, elems)            -> emit_tuple_lit(e, sp, elems)
     | ERecord(_, te, fields)       -> emit_record_lit_with_hint(e, te, fields, te)
-    | EClosure(sp, cps, ret, body) -> emit_closure_lifted(e, sp, cps, ret, body)
+    | EClosure(sp, cps, ret, body) -> emit_closure_lifted(e, sp, cps, ret, *body)
     | EIf(sp, c, t, f)             -> {
         // Bare `if` with no else parses with a nil else branch. A nil
         // ternary arm forces clang to pick a type which usually fails;
         // reject the value-position use and direct the user to a
         // statement-position pattern instead.
-        if is_nil_expr(f) {
+        if is_nil_expr(*f) {
             let _ = emit_die(sp, "if without else cannot appear in value position; wrap in a block or add an else branch")
         }
         push(e, "(")
-        emit_expr(e, c)
+        emit_expr(e, *c)
         push(e, " ? ")
-        emit_expr(e, t)
+        emit_expr(e, *t)
         push(e, " : ")
-        emit_expr(e, f)
+        emit_expr(e, *f)
         push(e, ")")
     }
     | EMatch(span, scrut, arms)    -> {
         let saved = e.match_hint
         e.match_hint = TEUnit(ast.Span { file: "", line: 0, col: 0 })
-        emit_match_as_expr(e, span, scrut, arms)
+        emit_match_as_expr(e, span, *scrut, arms)
         e.match_hint = saved
     }
     | EWhile(sp, _, _)             -> { let _ = emit_die(sp, "while expression in value position; wrap in a block or use a tail expression") }
@@ -1951,9 +1928,9 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
     // The checker's recorded type resolves the element types, including
     // for an empty `[]`/`[:]`. emit_array_lit_with_hint extracts the Vec
     // element; emit_map_lit_using extracts the Map key/value.
-    | EArrayLit(sp, elems)         -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, ex, TEUnit(sp)))
-    | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, ex, TEUnit(sp)))
-    | ENew(sp, inner) -> emit_new_clone(e, sp, inner)
+    | EArrayLit(sp, elems, _)         -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(ex, TEUnit(sp)))
+    | EMapLit(sp, keys, values, _) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(ex, TEUnit(sp)))
+    | ENew(sp, inner) -> emit_new_clone(e, sp, *inner)
     }
 }
 
@@ -1972,13 +1949,13 @@ let infer_expr_ctype(e: *Emitter, ex: ast.Expr): string = {
     | EAssign(_, _, _, _) | EReturn(_, _) | EWhile(_, _, _) | EFor(_, _, _, _, _) | EDefer(_, _) -> "void"
     | EBlock(_, stmts, tail) -> {
         for s in stmts { ingest_stmt_locals(e, s) }
-        if is_nil_expr(tail) { return "void" }
-        infer_expr_ctype(e, tail)
+        if is_nil_expr(*tail) { return "void" }
+        infer_expr_ctype(e, *tail)
     }
     | EMatch(sp, scrut, arms) -> {
         if len(arms) == 0 { emit_die(sp, "match expression with no arms") }
         let bare_enum = bare_enum_for_pat(e, arms[0].pat)
-        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, scrut, bare_enum) }
+        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, *scrut, bare_enum) }
         bind_arm_locals(e, enum_name, arms[0].pat)
         infer_expr_ctype(e, arms[0].body)
     }
@@ -2055,13 +2032,13 @@ let infer_base_typeexpr(e: *Emitter, base: ast.Expr): ast.TypeExpr = {
         }
     }
     | EField(sp, b, n) -> {
-        let bte = infer_base_typeexpr(e, b)
+        let bte = infer_base_typeexpr(e, *b)
         field_typeexpr_for(e, bte, n, sp)
     }
     | EUnary(sp, op, rhs) -> {
         match op {
         | UOpDeref -> {
-            let inner = infer_base_typeexpr(e, rhs)
+            let inner = infer_base_typeexpr(e, *rhs)
             match inner {
             | TEPtr(_, t) -> *t
             | _           -> {
@@ -2070,18 +2047,18 @@ let infer_base_typeexpr(e: *Emitter, base: ast.Expr): ast.TypeExpr = {
             }
             }
         }
-        | UOpAddr -> TEPtr(sp, new_clone(infer_base_typeexpr(e, rhs)))
+        | UOpAddr -> TEPtr(sp, new_clone(infer_base_typeexpr(e, *rhs)))
         | _       -> {
             let _ = emit_die(sp, "unary operator does not yield a base ast.TypeExpr")
             TEUnit(sp)
         }
         }
     }
-    | ECall(sp, c, ta, va) -> call_return_te(e, c, ta, va, sp)
+    | ECall(sp, c, ta, va) -> call_return_te(e, *c, ta, va, sp)
     | ECast(_, _, t) -> t
     | ERecord(_, t, _) -> t
     | EIndex(sp, b, _) -> {
-        let bte = infer_base_typeexpr(e, b)
+        let bte = infer_base_typeexpr(e, *b)
         match bte {
         | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
@@ -2107,7 +2084,7 @@ let span_of_expr(e: ast.Expr): ast.Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _) | EMapLit(sp, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)
@@ -2205,70 +2182,23 @@ let binding_te(e: *Emitter, declared: ast.TypeExpr, value: ast.Expr): ast.TypeEx
     }
 }
 
-// Stable Expr identity for cache lookup. Matches check.expr_id.
-let expr_id(e: ast.Expr): i64 = (e as *void) as i64
-
-// Pick the better TypeExpr for an ERecord: prefer the check-phase
-// cached TypeExpr when it includes the struct's type arguments, fall
-// back to the literal's annotation otherwise.
-let prefer_typed_record(e: *Emitter, lit: ast.TypeExpr, cached: ast.TypeExpr): ast.TypeExpr = {
-    let cached_args = type_args_of(cached)
-    let lit_args    = type_args_of(lit)
-    if len(cached_args) > len(lit_args) { return cached }
-    lit
-}
-
-let type_args_of(te: ast.TypeExpr): Vec<ast.TypeExpr> = {
-    let empty: Vec<ast.TypeExpr> = []
-    match te {
-    | TENamed(_, _, args) -> args
-    | _                   -> empty
-    }
-}
-
-// Look up the type recorded for `v` by the check phase. Falls back to
-// structural inference when no entry exists (synthesised exprs). The
-// active generic-instantiation substitution is applied to the result
-// so type-parameter names resolve to their bound types.
-
-let infer_value_te_cached(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
-    match map.get(&e.expr_types, expr_id(v)) {
-    | Some(te) -> {
-        if len(e.current_tparams) > 0 {
-            substitute_type(e, te, e.current_tparams, e.current_targs)
-        } else {
-            te
-        }
-    }
-    | None -> infer_value_te(e, v)
-    }
-}
-
 let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
     match v {
     | ECast(_, _, t) -> t
-    | ERecord(_, t, _) -> {
-        // The literal's TypeExpr may omit the struct's type arguments
-        // (`Pair { fst: 7, snd: "hello" }` has te = TENamed("Pair", [])).
-        // The check phase recorded the fully-inferred type in
-        // expr_types. Prefer that when its arg count matches the
-        // struct's tparam count.
-        let cached = match map.get(&e.expr_types, expr_id(v)) {
-        | Some(cte) -> cte
-        | None      -> t
-        }
-        prefer_typed_record(e, t, cached)
-    }
+    // The checker rewrites every ERecord's TypeExpr to the fully
+    // inferred form (inferred_record_te), so the node's own annotation
+    // already carries the struct's type arguments.
+    | ERecord(_, t, _) -> t
     | EField(sp, base, name) -> {
         // `EnumName.Variant` for a C-style enum lifts to the enum's
         // own TypeExpr. The base is either the renamed enum name
         // or the qualified form `pkg.EnumShort`. Detect both before
         // infer_base_typeexpr tries to look up the enum name as a
         // local and dies.
-        let enum_lookup = match base {
+        let enum_lookup = match *base {
         | EIdent(_, enum_name) -> enum_name
         | EField(_, inner, enum_short) -> {
-            match inner {
+            match *inner {
             | EIdent(_, pkg) -> strings.cat(strings.cat(pkg, "_"), enum_short)
             | _              -> ""
             }
@@ -2280,10 +2210,10 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
                 return single_named_te(sp, enum_lookup)
             }
         }
-        field_typeexpr_for(e, infer_base_typeexpr(e, base), name, sp)
+        field_typeexpr_for(e, infer_base_typeexpr(e, *base), name, sp)
     }
     | EIndex(sp, base, _) -> {
-        let bte = infer_base_typeexpr(e, base)
+        let bte = infer_base_typeexpr(e, *base)
         match bte {
         | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
@@ -2315,7 +2245,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         }
         }
     }
-    | ECall(sp, callee, type_args, vargs) -> call_return_te(e, callee, type_args, vargs, sp)
+    | ECall(sp, callee, type_args, vargs) -> call_return_te(e, *callee, type_args, vargs, sp)
     | EInt(sp, _)    -> single_named_te(sp, "i64")
     | EFloat(sp, _)  -> single_named_te(sp, "f64")
     | EString(sp, _) -> single_named_te(sp, "string")
@@ -2324,9 +2254,9 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
     | ENil(sp)       -> TEPtr(sp, new_clone(single_named_te(sp, "void")))
     | EUnary(sp, op, rhs) -> {
         match op {
-        | UOpAddr -> TEPtr(sp, new_clone(infer_value_te(e, rhs)))
+        | UOpAddr -> TEPtr(sp, new_clone(infer_value_te(e, *rhs)))
         | UOpDeref -> {
-            let inner = infer_value_te(e, rhs)
+            let inner = infer_value_te(e, *rhs)
             match inner {
             | TEPtr(_, t) -> *t
             | _           -> {
@@ -2336,7 +2266,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
             }
         }
         | UOpNot -> single_named_te(sp, "bool")
-        | UOpNeg -> infer_value_te(e, rhs)
+        | UOpNeg -> infer_value_te(e, *rhs)
         }
     }
     | EBinary(sp, op, l, _) -> {
@@ -2349,21 +2279,21 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         | BOpGe -> single_named_te(sp, "bool")
         | BOpAnd -> single_named_te(sp, "bool")
         | BOpOr -> single_named_te(sp, "bool")
-        | _ -> infer_value_te(e, l)
+        | _ -> infer_value_te(e, *l)
         }
     }
     | EBlock(_, stmts, tail) -> {
         for s in stmts { ingest_stmt_locals(e, s) }
-        infer_value_te(e, tail)
+        infer_value_te(e, *tail)
     }
-    | EIf(_, _, t, _) -> infer_value_te(e, t)
+    | EIf(_, _, t, _) -> infer_value_te(e, *t)
     | EMatch(sp, scrut, arms) -> {
         if len(arms) == 0 {
             let _ = emit_die(sp, "match expression with no arms")
             return TEUnit(sp)
         }
-        let bare_enum = find_enum_from_arms_with_scrut(e, arms, infer_value_te(e, scrut))
-        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, scrut, bare_enum) }
+        let bare_enum = find_enum_from_arms_with_scrut(e, arms, infer_value_te(e, *scrut))
+        let enum_name = if strings.eq_raw(bare_enum, "") { bare_enum } else { enum_lookup_name(e, *scrut, bare_enum) }
         bind_arm_locals(e, enum_name, arms[0].pat)
         infer_value_te(e, arms[0].body)
     }
@@ -2379,7 +2309,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         TEFn(sp, pte, new_clone(ret))
     }
     | ETry(sp, value) -> {
-        let inner = infer_value_te(e, value)
+        let inner = infer_value_te(e, *value)
         match inner {
         | TENamed(_, path, args) -> {
             if len(args) == 2 {
@@ -2395,7 +2325,13 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         | _ -> inner
         }
     }
-    | EArrayLit(sp, elems) -> {
+    | EArrayLit(sp, elems, lit_te) -> {
+        // The checker fills lit_te from context. Use it when present; an
+        // empty `[]` has no elements to infer from and relies on it.
+        match lit_te {
+        | TEUnit(_) -> { } // no recorded type; infer from the first element below
+        | _         -> return lit_te
+        }
         if len(elems) == 0 {
             let _ = emit_die(sp, "empty array literal: element type cannot be inferred")
             return TEUnit(sp)
@@ -2407,7 +2343,11 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         vec.push(&path, "Vec")
         TENamed(sp, path, args)
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(sp, keys, values, lit_te) -> {
+        match lit_te {
+        | TEUnit(_) -> { } // no recorded type; infer from the first entry below
+        | _         -> return lit_te
+        }
         if len(keys) == 0 {
             let _ = emit_die(sp, "empty map literal: key and value types cannot be inferred")
             return TEUnit(sp)
@@ -2421,7 +2361,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         vec.push(&path, "Map")
         TENamed(sp, path, args)
     }
-    | ENew(sp, inner) -> TEPtr(sp, new_clone(infer_value_te(e, inner)))
+    | ENew(sp, inner) -> TEPtr(sp, new_clone(infer_value_te(e, *inner)))
     // Statement-shape expressions have no value type. They occur in
     // value position when an outer block ends with one. The inferred
     // type is unit and the emitter renders them as statements with a
@@ -2734,7 +2674,7 @@ let collect_defers_in_stmts(stmts: Vec<ast.Stmt>): Vec<ast.Expr> = {
         match s {
         | SExpr(_, expr) -> {
             match expr {
-            | EDefer(_, body) -> vec.push(&defers, body)
+            | EDefer(_, body) -> vec.push(&defers, *body)
             | _               -> { }
             }
         }
@@ -2757,7 +2697,7 @@ let emit_defers_reverse(e: *Emitter, defers: Vec<ast.Expr>) = {
 let emit_cond(e: *Emitter, cond: ast.Expr) = {
     push(e, "(")
     match cond {
-    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, lhs, rhs)
+    | EBinary(_, op, lhs, rhs) -> emit_binary(e, op, *lhs, *rhs)
     | _ -> emit_expr(e, cond)
     }
     push(e, ")")
@@ -2774,29 +2714,29 @@ let emit_stmt_expr(e: *Emitter, expr: ast.Expr) = {
     }
     | EIf(_, cond, then_b, else_b) -> {
         push(e, "if ")
-        emit_cond(e, cond)
+        emit_cond(e, *cond)
         push(e, " ")
-        emit_branch_as_statement(e, then_b)
-        if !is_nil_expr(else_b) {
+        emit_branch_as_statement(e, *then_b)
+        if !is_nil_expr(*else_b) {
             push(e, " else ")
-            emit_branch_as_statement(e, else_b)
+            emit_branch_as_statement(e, *else_b)
         }
     }
     | EWhile(_, cond, body) -> {
         push(e, "while (")
-        emit_expr(e, cond)
+        emit_expr(e, *cond)
         push(e, ") ")
-        emit_branch_as_statement(e, body)
+        emit_branch_as_statement(e, *body)
     }
     | EFor(_, binding, binding2, iter, body) -> {
-        emit_for_loop_one(e, binding, binding2, iter, body)
+        emit_for_loop_one(e, binding, binding2, *iter, *body)
     }
     | EReturn(_, value) -> {
-        if is_nil_expr(value) {
+        if is_nil_expr(*value) {
             push(e, "return;")
         } else {
             push(e, "return ")
-            emit_value_with_hint(e, value, e.current_ret_te)
+            emit_value_with_hint(e, *value, e.current_ret_te)
             push(e, ";")
         }
     }
@@ -2812,11 +2752,11 @@ let emit_branch_as_statement(e: *Emitter, br: ast.Expr) = {
     | EBlock(_, stmts, tail) -> {
         push(e, "{ ")
         var defers = collect_defers_in_stmts(stmts)
-        var effective_tail = tail
-        match tail {
+        var effective_tail = *tail
+        match *tail {
         | EDefer(_, dbody) -> {
-            vec.push(&defers, dbody)
-            effective_tail = ENil(span_of_expr(tail))
+            vec.push(&defers, *dbody)
+            effective_tail = ENil(span_of_expr(*tail))
         }
         | _ -> { }
         }
@@ -2842,7 +2782,7 @@ let emit_branch_as_statement(e: *Emitter, br: ast.Expr) = {
 let path_is(callee: ast.Expr, a: string, b: string): bool =
     match callee {
     | EPath(_, segs)        -> len(segs) == 2 && strings.eq_raw(segs[0], a) && strings.eq_raw(segs[1], b)
-    | EField(_, base, name) -> strings.eq_raw(name, b) && ident_is(base, a)
+    | EField(_, base, name) -> strings.eq_raw(name, b) && ident_is(*base, a)
     | _                     -> false
     }
 
@@ -2855,7 +2795,7 @@ let ident_is(ex: ast.Expr, name: string): bool =
 let qualified_call_name(e: *Emitter, callee: ast.Expr): string = {
     match callee {
     | EField(_, base, method) -> {
-        match base {
+        match *base {
         | EIdent(_, pkg) -> {
             if map.contains(&e.packages, pkg) {
                 return strings.cat(strings.cat(pkg, "_"), method)
@@ -2906,7 +2846,7 @@ let arm_body_ctype(e: *Emitter, enum_name: string, body: ast.Expr): string = {
         }
     }
     | ECall(_, callee, _, _) -> {
-        match callee {
+        match *callee {
         | EIdent(_, name) -> {
             match map.get(&e.variant_of, name) {
             | Some(en) -> {
@@ -3047,7 +2987,7 @@ let emit_field(e: *Emitter, base: ast.Expr, name: string) = {
     let enum_lookup = match base {
     | EIdent(_, enum_name) -> enum_name
     | EField(_, inner, enum_short) -> {
-        match inner {
+        match *inner {
         | EIdent(_, pkg) -> strings.cat(strings.cat(pkg, "_"), enum_short)
         | _              -> ""
         }
@@ -3114,7 +3054,7 @@ let field_access_op(e: *Emitter, base: ast.Expr): string = {
 let walk_assign_for_map_helpers(e: *Emitter, lhs: ast.Expr) = {
     match lhs {
     | EIndex(_, base, _) -> {
-        let bte = base_type_for_walk(e, base)
+        let bte = base_type_for_walk(e, *base)
         match bte {
         | TENamed(_, path, args) -> {
             if len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") && len(args) == 2 {
@@ -3140,19 +3080,19 @@ let base_type_for_walk(e: *Emitter, ex: ast.Expr): ast.TypeExpr = {
         }
     }
     | EField(sp, b, name) -> {
-        let bte = base_type_for_walk(e, b)
+        let bte = base_type_for_walk(e, *b)
         field_typeexpr_for_no_die(e, bte, name, sp)
     }
     | EUnary(sp, op, rhs) -> {
         match op {
         | UOpDeref -> {
-            let inner = base_type_for_walk(e, rhs)
+            let inner = base_type_for_walk(e, *rhs)
             match inner {
             | TEPtr(_, t) -> *t
             | _           -> TEUnit(sp)
             }
         }
-        | UOpAddr -> TEPtr(sp, new_clone(base_type_for_walk(e, rhs)))
+        | UOpAddr -> TEPtr(sp, new_clone(base_type_for_walk(e, *rhs)))
         | _       -> TEUnit(sp)
         }
     }
@@ -3248,7 +3188,7 @@ let emit_container_receiver(e: *Emitter, base: ast.Expr) = {
 let emit_assign(e: *Emitter, lhs: ast.Expr, rhs: ast.Expr) = {
     match lhs {
     | EIndex(_, base, idx) -> {
-        let te = unwrap_container_te(infer_base_typeexpr(e, base))
+        let te = unwrap_container_te(infer_base_typeexpr(e, *base))
         match te {
         | TENamed(_, path, args) -> {
             if len(path) >= 1 && strings.eq_raw(path[len(path) - 1], "Map") && len(args) == 2 {
@@ -3256,9 +3196,9 @@ let emit_assign(e: *Emitter, lhs: ast.Expr, rhs: ast.Expr) = {
                 let k_m = mangle_type(e, args[0])
                 let v_m = mangle_type(e, args[1])
                 push(e, `qoz_map_set__{k_m}__{v_m}(`)
-                emit_container_receiver(e, base)
+                emit_container_receiver(e, *base)
                 push(e, ", ")
-                emit_expr(e, idx)
+                emit_expr(e, *idx)
                 push(e, ", ")
                 emit_expr(e, rhs)
                 push(e, ")")
@@ -3280,11 +3220,11 @@ let lvalue_hint(e: *Emitter, lhs: ast.Expr): ast.TypeExpr = {
     let sp = ast.Span { file: "", line: 0, col: 0 }
     match lhs {
     | EField(_, base, name) -> {
-        let bte = infer_base_typeexpr(e, base)
+        let bte = infer_base_typeexpr(e, *base)
         field_typeexpr_for_no_die(e, bte, name, sp)
     }
     | EIndex(_, base, _) -> {
-        let bte = infer_base_typeexpr(e, base)
+        let bte = infer_base_typeexpr(e, *base)
         match bte {
         | TEPtr(_, inner) -> *inner
         | TENamed(_, path, args) -> {
@@ -3415,7 +3355,7 @@ let emit_len_builtin(e: *Emitter, arg: ast.Expr) = {
 let peel_addr_of(e: ast.Expr): ast.Expr = {
     match e {
     | EUnary(_, op, inner) -> {
-        match op { | UOpAddr -> inner | _ -> e }
+        match op { | UOpAddr -> *inner | _ -> e }
     }
     | _ -> e
     }
@@ -4074,11 +4014,11 @@ let emit_fn_body_block(e: *Emitter, body: ast.Expr, ret_hint: ast.TypeExpr) = {
     match body {
     | EBlock(_, stmts, tail) -> {
         var defers = collect_defers_in_stmts(stmts)
-        var effective_tail = tail
-        match tail {
+        var effective_tail = *tail
+        match *tail {
         | EDefer(_, dbody) -> {
-            vec.push(&defers, dbody)
-            effective_tail = ENil(span_of_expr(tail))
+            vec.push(&defers, *dbody)
+            effective_tail = ENil(span_of_expr(*tail))
         }
         | _ -> { }
         }
@@ -4400,9 +4340,8 @@ let debug_recursive_enums(f: ast.File): string = {
     strings.sb_finish(&sb)
 }
 
-let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
+let emit_program(f: ast.File): string = {
     var e = make_emitter()
-    e.expr_types = expr_types
     strings.sb_init(&e.out)
     register_variants(&e, f)
     register_generics(&e, f)
@@ -5348,7 +5287,7 @@ let emit_block_tail_as_value(e: *Emitter, tail: ast.Expr) = {
     | EAssign(sp, op, lhs, rhs) -> {
         assert_plain_assign(op, sp)
         push(e, "(")
-        emit_assign(e, lhs, rhs)
+        emit_assign(e, *lhs, *rhs)
         push(e, ", 0)")
     }
     | EWhile(_, _, _) | EFor(_, _, _, _, _) | EDefer(_, _) -> {
@@ -5361,7 +5300,7 @@ let emit_block_tail_as_value(e: *Emitter, tail: ast.Expr) = {
         // An `if` whose else branch is missing, or whose branches both
         // yield unit, has no value. Emit it as a C statement (hoisted to
         // the surrounding prologue) and leave 0 in the expression slot.
-        let unit_if = is_nil_expr(f) || is_unit_typeexpr(infer_value_te(e, tail))
+        let unit_if = is_nil_expr(*f) || is_unit_typeexpr(infer_value_te(e, tail))
         if unit_if {
             let start = strings.sb_len(&e.out)
             emit_stmt_expr(e, tail)
@@ -5397,16 +5336,19 @@ let hint_is_cstring(hint: ast.TypeExpr): bool = {
     }
 }
 
-// The checker records a Vec or Map literal's resolved type in
-// expr_types for every position, so it is authoritative over a passed
-// hint. Return it when present, otherwise the fallback hint.
-let lit_recorded_hint(e: *Emitter, ex: ast.Expr, fallback: ast.TypeExpr): ast.TypeExpr = {
-    if let Some(te) = map.get(&e.expr_types, expr_id(ex)) {
-        if let TENamed(_, path, _) = te {
-            if len(path) >= 1 {
-                let n = path[len(path) - 1]
-                if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return te }
-            }
+// A Vec or Map literal carries its checker-resolved container type in
+// its own node field, which is authoritative over a passed hint. Return
+// it when present, otherwise the fallback hint.
+let lit_recorded_hint(ex: ast.Expr, fallback: ast.TypeExpr): ast.TypeExpr = {
+    let lit_te = match ex {
+    | EArrayLit(_, _, te)  -> te
+    | EMapLit(_, _, _, te) -> te
+    | _                    -> TEUnit(span_of_expr(ex)) // caller passes only container literals
+    }
+    if let TENamed(_, path, _) = lit_te {
+        if len(path) >= 1 {
+            let n = path[len(path) - 1]
+            if strings.eq_raw(n, "Vec") || strings.eq_raw(n, "Map") { return lit_te }
         }
     }
     fallback
@@ -5439,29 +5381,29 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     }
     match value {
     | ERecord(_, te, fields) -> emit_record_lit_with_hint(e, te, fields, hint)
-    | ECall(_, callee, ta, args) -> emit_call_with_hint(e, callee, ta, args, hint)
+    | ECall(_, callee, ta, args) -> emit_call_with_hint(e, *callee, ta, args, hint)
     | EIdent(_, name) -> emit_ident_with_hint(e, name, hint)
-    | EArrayLit(sp, elems) -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(e, value, hint))
-    | EMapLit(sp, keys, values) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(e, value, hint))
-    | ENew(sp, inner) -> emit_new_clone(e, sp, inner)
+    | EArrayLit(sp, elems, _) -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(value, hint))
+    | EMapLit(sp, keys, values, _) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(value, hint))
+    | ENew(sp, inner) -> emit_new_clone(e, sp, *inner)
     | EField(_, base, name) -> {
         // `Enum.Variant` in value position with a known type hint
         // (e.g. `let a: Option<i32> = Option.None`) emits the mangled
         // constructor so the result type matches the binding's type.
-        let did_emit = emit_qualified_variant_with_hint(e, base, name, hint)
-        if !did_emit { emit_field(e, base, name) }
+        let did_emit = emit_qualified_variant_with_hint(e, *base, name, hint)
+        if !did_emit { emit_field(e, *base, name) }
     }
     | EBlock(sp, stmts, tail) -> {
         // A block with no statements is just its tail expression. Emit
         // it directly, without wrapping in a GNU statement expression.
         if len(stmts) == 0 {
-            match tail {
+            match *tail {
             | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) -> {
                 push(e, "((")
-                emit_stmt_expr(e, tail)
+                emit_stmt_expr(e, *tail)
                 push(e, "), 0)")
             }
-            | _ -> emit_value_with_hint(e, tail, hint)
+            | _ -> emit_value_with_hint(e, *tail, hint)
             }
             return
         }
@@ -5477,17 +5419,17 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
         let start = strings.sb_len(&e.out)
         push(e, `{result_c} {tmp_res};\n    {{\n        `)
         for s in stmts { emit_stmt(e, s) }
-        match tail {
+        match *tail {
         | EWhile(_, _, _) | EFor(_, _, _, _, _) | EAssign(_, _, _, _) -> {
             let saved = open_statement_scope(e)
-            emit_stmt_expr(e, tail)
+            emit_stmt_expr(e, *tail)
             close_statement_scope(e, saved)
             push(e, `\n        {tmp_res} = 0;\n    `)
         }
         | _ -> {
             let saved = open_statement_scope(e)
             push(e, `{tmp_res} = `)
-            emit_value_with_hint(e, tail, hint)
+            emit_value_with_hint(e, *tail, hint)
             push(e, ";\n    ")
             close_statement_scope(e, saved)
         }
@@ -5498,14 +5440,14 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     }
     | EIf(sp, c, t, f) -> {
         push(e, "(")
-        emit_cond(e, c)
+        emit_cond(e, *c)
         push(e, " ? ")
-        emit_value_with_hint(e, t, hint)
+        emit_value_with_hint(e, *t, hint)
         push(e, " : ")
-        emit_value_with_hint(e, f, hint)
+        emit_value_with_hint(e, *f, hint)
         push(e, ")")
     }
-    | EMatch(sp, scrut, arms) -> emit_match_as_expr_with_hint(e, sp, scrut, arms, hint)
+    | EMatch(sp, scrut, arms) -> emit_match_as_expr_with_hint(e, sp, *scrut, arms, hint)
     | _                      -> emit_expr(e, value)
     }
 }
@@ -5789,7 +5731,7 @@ let expand_record_spread_fields(e: *Emitter, te: ast.TypeExpr, fields: Vec<ast.R
         if !map.contains(&listed, fname) {
             vec.push(&out, ast.RecordFieldLit {
                 name:  fname,
-                value: EField(sp, spread_base, fname),
+                value: EField(sp, new_clone(spread_base), fname),
             })
         }
         k += 1
@@ -5912,10 +5854,10 @@ let emit_for_loop_one(e: *Emitter, binding: string, binding2: string, iter: ast.
     | EBinary(_, op, lo, hi) -> {
         if is_range_op(op) {
             push(e, `for (int64_t {binding} = `)
-            emit_expr(e, lo)
+            emit_expr(e, *lo)
             let cmp = range_cmp_op(op)
             push(e, `; {binding} {cmp} `)
-            emit_expr(e, hi)
+            emit_expr(e, *hi)
             push(e, `; {binding}++) `)
             emit_branch_as_statement(e, body)
             return
@@ -5993,11 +5935,11 @@ let emit_branch_body_inline(e: *Emitter, body: ast.Expr) = {
     match body {
     | EBlock(_, stmts, tail) -> {
         var defers = collect_defers_in_stmts(stmts)
-        var effective_tail = tail
-        match tail {
+        var effective_tail = *tail
+        match *tail {
         | EDefer(_, dbody) -> {
-            vec.push(&defers, dbody)
-            effective_tail = ENil(span_of_expr(tail))
+            vec.push(&defers, *dbody)
+            effective_tail = ENil(span_of_expr(*tail))
         }
         | _ -> { }
         }
@@ -6694,11 +6636,11 @@ let unmangle_primitive(s: string): string = {
 let emit_arm_body_with_hint(e: *Emitter, res_tmp: string, body: ast.Expr, hint: ast.TypeExpr) = {
     match body {
     | EReturn(_, v) -> {
-        if is_nil_expr(v) {
+        if is_nil_expr(*v) {
             push(e, "return; ")
         } else {
             push(e, "return ")
-            emit_value_with_hint(e, v, e.current_ret_te)
+            emit_value_with_hint(e, *v, e.current_ret_te)
             push(e, "; ")
         }
     }
@@ -6735,11 +6677,11 @@ let emit_main(e: *Emitter, ret: ast.TypeExpr, body: ast.Expr) = {
         // statements must be emitted before that trailer rather
         // than relying on the regular function-exit machinery.
         var defers = collect_defers_in_stmts(stmts)
-        var effective_tail: ast.Expr = tail
-        match tail {
+        var effective_tail: ast.Expr = *tail
+        match *tail {
         | EDefer(_, dbody) -> {
-            vec.push(&defers, dbody)
-            effective_tail = ENil(span_of_expr(tail))
+            vec.push(&defers, *dbody)
+            effective_tail = ENil(span_of_expr(*tail))
         }
         | _ -> { }
         }
@@ -6799,7 +6741,7 @@ let emit_main_tail(e: *Emitter, kind: MainRetKind, ret: ast.TypeExpr, tail: ast.
         // ternary-emitting it would require a value type for the missing
         // arm.
         let is_unit_if = match tail {
-        | EIf(_, _, _, f) -> is_nil_expr(f) || is_unit_typeexpr(infer_value_te(e, tail))
+        | EIf(_, _, _, f) -> is_nil_expr(*f) || is_unit_typeexpr(infer_value_te(e, tail))
         | _               -> false
         }
         match tail {

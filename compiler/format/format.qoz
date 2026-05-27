@@ -516,24 +516,24 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
     }
     | EUnary(_, op, rhs) -> {
         p_emit(p, unary_op_text(op))
-        print_expr(p, rhs)
+        print_expr(p, *rhs)
     }
     | EBinary(_, op, l, r) -> {
-        print_expr(p, l)
+        print_expr(p, *l)
         p_emit(p, " ")
         p_emit(p, binary_op_text(op))
         p_emit(p, " ")
-        print_expr(p, r)
+        print_expr(p, *r)
     }
     | EAssign(_, op, l, r) -> {
-        print_expr(p, l)
+        print_expr(p, *l)
         p_emit(p, " ")
         p_emit(p, assign_op_text(op))
         p_emit(p, " ")
-        print_expr(p, r)
+        print_expr(p, *r)
     }
     | ECall(_, callee, tas, args) -> {
-        print_expr(p, callee)
+        print_expr(p, *callee)
         if len(tas) > 0 {
             p_emit(p, "<")
             var i: i64 = 0
@@ -554,23 +554,23 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
         p_emit(p, ")")
     }
     | EField(_, base, name) -> {
-        print_expr(p, base)
+        print_expr(p, *base)
         p_emit(p, ".")
         p_emit(p, name)
     }
     | EIndex(_, base, idx) -> {
-        print_expr(p, base)
+        print_expr(p, *base)
         p_emit(p, "[")
-        print_expr(p, idx)
+        print_expr(p, *idx)
         p_emit(p, "]")
     }
     | ECast(_, v, te) -> {
-        print_expr(p, v)
+        print_expr(p, *v)
         p_emit(p, " as ")
         print_te(p, te)
     }
     | ETry(_, v) -> {
-        print_expr(p, v)
+        print_expr(p, *v)
         p_emit(p, "?")
     }
     | ETuple(_, elems) -> {
@@ -602,25 +602,25 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
             print_te(p, ret)
         }
         p_emit(p, " ")
-        print_expr(p, body)
+        print_expr(p, *body)
     }
-    | EBlock(_, stmts, tail) -> print_block(p, stmts, tail)
+    | EBlock(_, stmts, tail) -> print_block(p, stmts, *tail)
     | EIf(_, c, t, f) -> {
         p_emit(p, "if ")
-        print_expr(p, c)
+        print_expr(p, *c)
         p_emit(p, " ")
-        print_expr(p, t)
-        if !is_unit_block(f) {
+        print_expr(p, *t)
+        if !is_unit_block(*f) {
             p_emit(p, " else ")
-            print_expr(p, f)
+            print_expr(p, *f)
         }
     }
-    | EMatch(_, scrut, arms) -> print_match(p, scrut, arms)
+    | EMatch(_, scrut, arms) -> print_match(p, *scrut, arms)
     | EWhile(_, c, body) -> {
         p_emit(p, "while ")
-        print_expr(p, c)
+        print_expr(p, *c)
         p_emit(p, " ")
-        print_expr(p, body)
+        print_expr(p, *body)
     }
     | EFor(_, b1, b2, it, body) -> {
         p_emit(p, "for ")
@@ -630,27 +630,27 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
             p_emit(p, b2)
         }
         p_emit(p, " in ")
-        print_expr(p, it)
+        print_expr(p, *it)
         p_emit(p, " ")
-        print_expr(p, body)
+        print_expr(p, *body)
     }
     | EReturn(_, v) -> {
         p_emit(p, "return")
-        if !is_unit_expr(v) {
+        if !is_unit_expr(*v) {
             p_emit(p, " ")
-            print_expr(p, v)
+            print_expr(p, *v)
         }
     }
     | EDefer(_, v) -> {
         p_emit(p, "defer ")
-        print_expr(p, v)
+        print_expr(p, *v)
     }
     | ESizeOf(_, te) -> {
         p_emit(p, "size_of(")
         print_te(p, te)
         p_emit(p, ")")
     }
-    | EArrayLit(_, elems) -> {
+    | EArrayLit(_, elems, _) -> {
         p_emit(p, "[")
         var i: i64 = 0
         for el in elems {
@@ -660,7 +660,7 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
         }
         p_emit(p, "]")
     }
-    | EMapLit(_, keys, values) -> {
+    | EMapLit(_, keys, values, _) -> {
         if len(keys) == 0 {
             p_emit(p, "[:]")
         } else {
@@ -678,7 +678,7 @@ let print_expr(p: *format.Printer, e: ast.Expr) = {
     }
     | ENew(_, inner) -> {
         p_emit(p, "new_clone(")
-        print_expr(p, inner)
+        print_expr(p, *inner)
         p_emit(p, ")")
     }
     }
@@ -689,7 +689,7 @@ let is_unit_expr(e: ast.Expr): bool = {
     | ENil(_) -> true
     | EBlock(_, stmts, tail) -> {
         if len(stmts) > 0 { return false }
-        is_unit_block_tail(tail)
+        is_unit_block_tail(*tail)
     }
     | _ -> false
     }
@@ -699,7 +699,7 @@ let is_unit_block_tail(e: ast.Expr): bool = {
     match e {
     | EBlock(_, stmts, tail) -> {
         if len(stmts) > 0 { return false }
-        is_unit_block_tail(tail)
+        is_unit_block_tail(*tail)
     }
     | _ -> false
     }
@@ -843,7 +843,7 @@ let try_print_interp_block(p: *format.Printer, stmts: Vec<ast.Stmt>, tail: ast.E
 let is_builtin_call(e: ast.Expr, name: string): bool = {
     match e {
     | ECall(_, callee, _, _) -> {
-        match callee {
+        match *callee {
         | EIdent(_, n) -> strings.eq_raw(n, name)
         | _            -> false
         }
@@ -855,7 +855,7 @@ let is_builtin_call(e: ast.Expr, name: string): bool = {
 let is_builtin_call_on(e: ast.Expr, name: string, sb: string): bool = {
     match e {
     | ECall(_, callee, _, args) -> {
-        match callee {
+        match *callee {
         | EIdent(_, n) -> {
             if !strings.eq_raw(n, name) { return false }
             if len(args) < 1 { return false }
@@ -876,7 +876,7 @@ let is_builtin_call_on(e: ast.Expr, name: string, sb: string): bool = {
 let extract_push_arg(e: ast.Expr, sb_name: string): Option<ast.Expr> = {
     match e {
     | ECall(_, callee, _, args) -> {
-        match callee {
+        match *callee {
         | EIdent(_, n) -> {
             if !strings.has_prefix(n, "__qoz_interp_push") { return None }
             if len(args) != 2 { return None }

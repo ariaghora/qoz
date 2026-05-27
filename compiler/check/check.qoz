@@ -73,15 +73,6 @@ type TyContext = {
     file_pkgs:     Map<string, string>,
     errors:       Vec<check.TypeError>,
     type_params:  Map<string, bool>,
-    // Per-expression TypeExpr cache, keyed by the Expr's runtime
-    // pointer cast to i64. Populated by synth. Consumed by emit.
-    expr_types:   Map<i64, ast.TypeExpr>,
-    // Expected container type for an array or map literal, keyed by the
-    // literal's runtime pointer. Recorded by infer_calls_expr from the
-    // surrounding expected type, so an empty `[]` or `[:]` (whose type
-    // cannot be synthesised from its absent elements) resolves from
-    // context in every position. synth reads it back into expr_types.
-    literal_hints: Map<i64, ast.TypeExpr>,
     // Bidirectional expected-type hints recorded for every
     // expression visited by infer_calls_expr with a non-error
     // expected. Stored as a flat list so the LSP can find the
@@ -114,16 +105,9 @@ let make_ctx(): check.TyContext = TyContext {
     file_pkgs:    [:],
     errors:      [],
     type_params: [:],
-    expr_types:  [:],
-    literal_hints: [:],
     expected_hints: [],
     current_ret_ty: ty.ty_error_(),
 }
-
-// Stable identity key for an Expr: its runtime heap pointer cast to
-// i64. ADT variants are heap-boxed, so two constructed Expr values
-// have different addresses iff they are different expressions.
-let expr_id(e: ast.Expr): i64 = (e as *void) as i64
 
 let record_error(tc: *check.TyContext, span: ast.Span, msg: string) = {
     vec.push(&tc.errors, check.TypeError { span: span, message: msg })
@@ -737,9 +721,7 @@ let expected_at_cursor(tc: *check.TyContext, file: string, line: i64, col: i64):
 }
 
 let synth(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
-    let t = synth_inner(tc, env, e)
-    tc.expr_types[expr_id(e)] = ty.ty_to_type_expr_at(t, ast.span_of_expr(e))
-    t
+    synth_inner(tc, env, e)
 }
 
 let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
@@ -752,19 +734,19 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
     | ENil(_)                -> ty.ty_nil_()
     | EIdent(span, name)     -> synth_ident(tc, env, span, name)
     | EPath(sp, segs)        -> synth_path(tc, sp, segs)
-    | EUnary(sp, op, rhs)    -> synth_unary(tc, env, sp, op, rhs)
-    | EBinary(sp, op, l, r)  -> synth_binary(tc, env, sp, op, l, r)
-    | EAssign(sp, _, l, v)   -> check_assign(tc, env, sp, l, v)
-    | ECall(sp, callee, ta, args) -> synth_call_full(tc, env, sp, callee, ta, args)
-    | EField(sp, base, name) -> synth_field(tc, env, sp, base, name)
-    | EIndex(sp, base, idx)  -> synth_index(tc, env, sp, base, idx)
-    | ECast(_, value, te)    -> { let _ = synth(tc, env, value); resolve_type(tc, te) }
+    | EUnary(sp, op, rhs)    -> synth_unary(tc, env, sp, op, *rhs)
+    | EBinary(sp, op, l, r)  -> synth_binary(tc, env, sp, op, *l, *r)
+    | EAssign(sp, _, l, v)   -> check_assign(tc, env, sp, *l, *v)
+    | ECall(sp, callee, ta, args) -> synth_call_full(tc, env, sp, *callee, ta, args)
+    | EField(sp, base, name) -> synth_field(tc, env, sp, *base, name)
+    | EIndex(sp, base, idx)  -> synth_index(tc, env, sp, *base, *idx)
+    | ECast(_, value, te)    -> { let _ = synth(tc, env, *value); resolve_type(tc, te) }
     | ETry(sp, v)            -> {
         // The `?` operator on the prelude's Result<T, E> evaluates to
         // T. Codegen handles the early-return on the Err branch. The
         // operand's home must be "" (the prelude). A user-declared
         // enum that happens to be named Result is rejected.
-        let t = synth(tc, env, v)
+        let t = synth(tc, env, *v)
         if ty.ty_is_error(t) { return ty.ty_error_() }
         match t {
         | TyAdt(home, name, args) -> {
@@ -796,7 +778,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         let ret_ty = resolve_type(tc, ret)
         let saved_ret = tc.current_ret_ty
         tc.current_ret_ty = ret_ty
-        let body_ty = synth(tc, env, body)
+        let body_ty = synth(tc, env, *body)
         tc.current_ret_ty = saved_ret
         // A closure with no explicit return annotation parses with a
         // TEUnit ret which resolves to TyUnit. That disables the
@@ -809,31 +791,31 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         }
         ty.ty_fn_(pty, ret_ty)
     }
-    | EBlock(_, stmts, tail) -> synth_block(tc, env, stmts, tail)
-    | EIf(sp, c, t, f)       -> synth_if(tc, env, sp, c, t, f)
-    | EMatch(sp, scrut, arms) -> synth_match(tc, env, sp, scrut, arms)
+    | EBlock(_, stmts, tail) -> synth_block(tc, env, stmts, *tail)
+    | EIf(sp, c, t, f)       -> synth_if(tc, env, sp, *c, *t, *f)
+    | EMatch(sp, scrut, arms) -> synth_match(tc, env, sp, *scrut, arms)
     | EWhile(sp, c, b)       -> {
-        let ct = synth(tc, env, c)
+        let ct = synth(tc, env, *c)
         if !ty.ty_is_error(ct) && !ty.ty_is_bool(ct) {
             record_error(tc, sp, `while condition must be bool, got {ty.ty_show(ct)}`)
         }
-        let _ = synth(tc, env, b)
+        let _ = synth(tc, env, *b)
         ty.ty_unit_()
     }
     | EFor(sp, b1, b2, it, b) -> {
-        let it_ty = synth(tc, env, it)
+        let it_ty = synth(tc, env, *it)
         if !ty.ty_is_error(it_ty) && !iterable_ty(it_ty, !strings.eq_raw(b2, "")) {
             let kind = if strings.eq_raw(b2, "") { "iterable" } else { "Map-like iterable producing key, value pairs" }
             record_error(tc, sp, `for loop expects {kind}, got {ty.ty_show(it_ty)}`)
         }
         let saved_len = len(env.bindings)
         bind_for_loop(env, b1, b2, it_ty)
-        let _ = synth(tc, env, b)
+        let _ = synth(tc, env, *b)
         env_truncate(env, saved_len)
         ty.ty_unit_()
     }
     | EReturn(sp, v)         -> {
-        let vt = synth(tc, env, v)
+        let vt = synth(tc, env, *v)
         let rt = tc.current_ret_ty
         // A unit-returning function accepts a bare `return` whose
         // value parses as nil. The discarded value never reaches
@@ -849,12 +831,14 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         }
         ty.ty_unit_()
     }
-    | EDefer(_, b)           -> { let _ = synth(tc, env, b); ty.ty_unit_() }
+    | EDefer(_, b)           -> { let _ = synth(tc, env, *b); ty.ty_unit_() }
     | ESizeOf(_, _)          -> ty.ty_int_(64, true)
-    | EArrayLit(sp, elems)   -> {
-        // A recorded expected type wins; otherwise infer from elements.
-        if let Some(te) = map.get(&tc.literal_hints, expr_id(e)) {
-            return resolve_type(tc, te)
+    | EArrayLit(sp, elems, lit_te)   -> {
+        // The checker-filled container type wins; otherwise infer from
+        // the elements. An empty `[]` has only this field to go on.
+        match lit_te {
+        | TEUnit(_) -> { } // no recorded type yet; infer from elements below
+        | _         -> return resolve_type(tc, lit_te)
         }
         if len(elems) == 0 { return ty.ty_error_() }
         let elem_ty = synth(tc, env, elems[0])
@@ -872,10 +856,12 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         vec.push(&args, elem_ty)
         ty.ty_record_("Vec", args)
     }
-    | EMapLit(sp, keys, values) -> {
-        // A recorded expected type wins; otherwise infer from entries.
-        if let Some(te) = map.get(&tc.literal_hints, expr_id(e)) {
-            return resolve_type(tc, te)
+    | EMapLit(sp, keys, values, lit_te) -> {
+        // The checker-filled container type wins; otherwise infer from
+        // the entries. An empty `[:]` has only this field to go on.
+        match lit_te {
+        | TEUnit(_) -> { } // no recorded type yet; infer from entries below
+        | _         -> return resolve_type(tc, lit_te)
         }
         if len(keys) == 0 { return ty.ty_error_() }
         let key_ty = synth(tc, env, keys[0])
@@ -901,7 +887,7 @@ let synth_inner(tc: *check.TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         vec.push(&margs, val_ty)
         ty.ty_record_("Map", margs)
     }
-    | ENew(_, inner) -> ty.ty_ptr_(synth(tc, env, inner))
+    | ENew(_, inner) -> ty.ty_ptr_(synth(tc, env, *inner))
     }
 }
 
@@ -929,12 +915,12 @@ let is_lvalue(tc: *check.TyContext, env: *Env, e: ast.Expr): bool = {
     if !is_lvalue_shape(e) { return false }
     match e {
     | EField(_, base, _) | EIndex(_, base, _) -> {
-        match base {
+        match *base {
         | ECall(_, _, _, _) -> {
             // A call returns a value. Assigning through `call().f`
             // would write to a temporary. Only valid when the
             // call's return type is a pointer.
-            let bt = synth(tc, env, base)
+            let bt = synth(tc, env, *base)
             match bt { | TyPtr(_) -> true | _ -> false }
         }
         | _ -> true
@@ -1052,7 +1038,7 @@ let c_enum_variant_ref(tc: *check.TyContext, base: ast.Expr, name: string): Opti
     let base_name = match base {
     | EIdent(_, n) -> n
     | EField(_, inner, enum_short) -> {
-        match inner {
+        match *inner {
         | EIdent(_, pkg) -> strings.cat(strings.cat(pkg, "_"), enum_short)
         | _              -> ""
         }
@@ -1278,7 +1264,7 @@ let is_strings_callee(callee: ast.Expr, method: string): bool = {
     match callee {
     | EField(_, base, m) -> {
         if !strings.eq_raw(m, method) { return false }
-        match base {
+        match *base {
         | EIdent(_, name) -> strings.eq_raw(name, "strings")
         | _ -> false
         }
@@ -1360,7 +1346,7 @@ let resolve_callee_fn(tc: *check.TyContext, callee: ast.Expr): string = {
     match callee {
     | EIdent(_, name) -> name
     | EField(_, base, method) -> {
-        match base {
+        match *base {
         | EIdent(_, pkg) -> {
             if map.contains(&tc.packages, pkg) {
                 return strings.cat(strings.cat(pkg, "_"), method)
@@ -1697,7 +1683,7 @@ let synth_variant_ctor(tc: *check.TyContext, name: string): ty.Ty = {
 let explicit_enum_from_callee(callee: ast.Expr): string = {
     match callee {
     | EField(_, base, _) -> {
-        match base {
+        match *base {
         | EIdent(_, en) -> en
         | _             -> ""
         }
@@ -2267,7 +2253,7 @@ let scrut_span(scrut: ast.Expr): ast.Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _) | EMapLit(sp, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)
@@ -2572,23 +2558,23 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         if env_has(env, name) { return e }
         if map.contains(&tc.variant_of, name) { return e }
         match pick_c_enum_home(tc, name, expected) {
-        | Some(enum_name) -> EField(sp, EIdent(sp, enum_name), name)
+        | Some(enum_name) -> EField(sp, new_clone(EIdent(sp, enum_name)), name)
         | None            -> e
         }
     }
     | EPath(_, _)             -> e
-    | EUnary(sp, op, rhs)     -> EUnary(sp, op, infer_calls_expr(tc, env, rhs, ty.ty_error_()))
-    | EBinary(sp, op, l, r)   -> EBinary(sp, op, infer_calls_expr(tc, env, l, ty.ty_error_()), infer_calls_expr(tc, env, r, ty.ty_error_()))
+    | EUnary(sp, op, rhs)     -> EUnary(sp, op, new_clone(infer_calls_expr(tc, env, *rhs, ty.ty_error_())))
+    | EBinary(sp, op, l, r)   -> EBinary(sp, op, new_clone(infer_calls_expr(tc, env, *l, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *r, ty.ty_error_())))
     | EAssign(sp, op, l, r)   -> {
-        let new_l = infer_calls_expr(tc, env, l, ty.ty_error_())
-        let lhs_ty = synth(tc, env, l)
-        EAssign(sp, op, new_l, infer_calls_expr(tc, env, r, lhs_ty))
+        let new_l = infer_calls_expr(tc, env, *l, ty.ty_error_())
+        let lhs_ty = synth(tc, env, *l)
+        EAssign(sp, op, new_clone(new_l), new_clone(infer_calls_expr(tc, env, *r, lhs_ty)))
     }
-    | ECall(sp, callee, ta, args) -> rewrite_call(tc, env, sp, callee, ta, args, expected)
-    | EField(sp, base, name)  -> EField(sp, infer_calls_expr(tc, env, base, ty.ty_error_()), name)
-    | EIndex(sp, base, idx)   -> EIndex(sp, infer_calls_expr(tc, env, base, ty.ty_error_()), infer_calls_expr(tc, env, idx, ty.ty_error_()))
-    | ECast(sp, value, t)     -> ECast(sp, infer_calls_expr(tc, env, value, ty.ty_error_()), t)
-    | ETry(sp, v)             -> ETry(sp, infer_calls_expr(tc, env, v, expected))
+    | ECall(sp, callee, ta, args) -> rewrite_call(tc, env, sp, *callee, ta, args, expected)
+    | EField(sp, base, name)  -> EField(sp, new_clone(infer_calls_expr(tc, env, *base, ty.ty_error_())), name)
+    | EIndex(sp, base, idx)   -> EIndex(sp, new_clone(infer_calls_expr(tc, env, *base, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *idx, ty.ty_error_())))
+    | ECast(sp, value, t)     -> ECast(sp, new_clone(infer_calls_expr(tc, env, *value, ty.ty_error_())), t)
+    | ETry(sp, v)             -> ETry(sp, new_clone(infer_calls_expr(tc, env, *v, expected)))
     | ETuple(sp, elems)       -> {
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, infer_calls_expr(tc, env, el, ty.ty_error_())) }
@@ -2600,6 +2586,7 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         for f in fields {
             let field_hint = record_field_hint(tc, effective_te, f.name)
             vec.push(&nf, ast.RecordFieldLit { name: f.name, value: infer_calls_expr(tc, env, f.value, field_hint) })
+            // f.value is an Expr value (RecordFieldLit holds it by value), so no deref.
         }
         // Rebuild the TypeExpr with the inferred type arguments so the
         // emit walk picks up the right struct instantiation. Start from
@@ -2608,15 +2595,15 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         let inferred_te = inferred_record_te(tc, env, sp, effective_te, nf)
         ERecord(sp, inferred_te, nf)
     }
-    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, infer_calls_expr(tc, env, body, ty.ty_error_()))
+    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, new_clone(infer_calls_expr(tc, env, *body, ty.ty_error_())))
     | EBlock(sp, stmts, tail) -> {
         var ns: Vec<ast.Stmt> = []
         for s in stmts { vec.push(&ns, infer_calls_stmt(tc, env, s)) }
-        EBlock(sp, ns, infer_calls_expr(tc, env, tail, expected))
+        EBlock(sp, ns, new_clone(infer_calls_expr(tc, env, *tail, expected)))
     }
-    | EIf(sp, c, t, f) -> EIf(sp, infer_calls_expr(tc, env, c, ty.ty_error_()), infer_calls_expr(tc, env, t, expected), infer_calls_expr(tc, env, f, expected))
+    | EIf(sp, c, t, f) -> EIf(sp, new_clone(infer_calls_expr(tc, env, *c, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *t, expected)), new_clone(infer_calls_expr(tc, env, *f, expected)))
     | EMatch(sp, scrut, arms) -> {
-        let new_scrut = infer_calls_expr(tc, env, scrut, ty.ty_error_())
+        let new_scrut = infer_calls_expr(tc, env, *scrut, ty.ty_error_())
         // Synth on the rewritten scrutinee so a bare builtin call
         // (`match pop(&xs) { ... }`) has its container-dispatch
         // applied before its type is read by pattern binding.
@@ -2628,41 +2615,42 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
             vec.push(&na, ast.MatchArm { pat: a.pat, body: infer_calls_expr(tc, env, a.body, expected), has_guard: a.has_guard, guard: a.guard })
             env_truncate(env, saved_len)
         }
-        EMatch(sp, new_scrut, na)
+        EMatch(sp, new_clone(new_scrut), na)
     }
-    | EWhile(sp, c, b) -> EWhile(sp, infer_calls_expr(tc, env, c, ty.ty_error_()), infer_calls_expr(tc, env, b, ty.ty_error_()))
+    | EWhile(sp, c, b) -> EWhile(sp, new_clone(infer_calls_expr(tc, env, *c, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *b, ty.ty_error_())))
     | EFor(sp, b1, b2, it, body) -> {
-        let new_it = infer_calls_expr(tc, env, it, ty.ty_error_())
-        let it_ty = synth(tc, env, it)
+        let new_it = infer_calls_expr(tc, env, *it, ty.ty_error_())
+        let it_ty = synth(tc, env, *it)
         let saved_len = len(env.bindings)
         bind_for_loop(env, b1, b2, it_ty)
-        let new_body = infer_calls_expr(tc, env, body, ty.ty_error_())
+        let new_body = infer_calls_expr(tc, env, *body, ty.ty_error_())
         env_truncate(env, saved_len)
-        EFor(sp, b1, b2, new_it, new_body)
+        EFor(sp, b1, b2, new_clone(new_it), new_clone(new_body))
     }
-    | EReturn(sp, v)          -> EReturn(sp, infer_calls_expr(tc, env, v, expected))
-    | EDefer(sp, v)           -> EDefer(sp, infer_calls_expr(tc, env, v, ty.ty_error_()))
+    | EReturn(sp, v)          -> EReturn(sp, new_clone(infer_calls_expr(tc, env, *v, expected)))
+    | EDefer(sp, v)           -> EDefer(sp, new_clone(infer_calls_expr(tc, env, *v, ty.ty_error_())))
     | ESizeOf(_, _)           -> e
-    | EArrayLit(sp, elems)    -> {
+    | EArrayLit(sp, elems, _)    -> {
         var elem_expected = ty.ty_error_()
         if let TyRecord(_, nm, args) = expected {
             if strings.eq_raw(nm, "Vec") && len(args) >= 1 { elem_expected = args[0] }
         }
         var ne: Vec<ast.Expr> = []
         for el in elems { vec.push(&ne, infer_calls_expr(tc, env, el, elem_expected)) }
-        let node = EArrayLit(sp, ne)
-        // Record the expected Vec type so emit resolves the element type
-        // from context, including for an empty `[]`. Write expr_types
-        // directly too, since synth does not revisit every node (a
-        // function's expression-body record fields, for one).
+        // Store the resolved Vec type on the node itself so emit can
+        // register the container helpers and resolve the element type,
+        // including for an empty `[]`. Prefer the expected type; with no
+        // expected type, synthesise it from the elements.
+        var lit_te: ast.TypeExpr = TEUnit(sp)
         if !ty.ty_is_error(elem_expected) {
-            let rte = ty.ty_to_type_expr_at(expected, sp)
-            tc.literal_hints[expr_id(node)] = rte
-            tc.expr_types[expr_id(node)] = rte
+            lit_te = ty.ty_to_type_expr_at(expected, sp)
+        } else {
+            let synthed = synth(tc, env, EArrayLit(sp, ne, TEUnit(sp)))
+            if !ty.ty_is_error(synthed) { lit_te = ty.ty_to_type_expr_at(synthed, sp) }
         }
-        node
+        EArrayLit(sp, ne, lit_te)
     }
-    | EMapLit(sp, keys, values) -> {
+    | EMapLit(sp, keys, values, _) -> {
         var kexp = ty.ty_error_()
         var vexp = ty.ty_error_()
         var is_map = false
@@ -2677,23 +2665,25 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         for k in keys { vec.push(&nk, infer_calls_expr(tc, env, k, kexp)) }
         var nv: Vec<ast.Expr> = []
         for v in values { vec.push(&nv, infer_calls_expr(tc, env, v, vexp)) }
-        let node = EMapLit(sp, nk, nv)
-        // Record the expected Map type so emit resolves key/value types
-        // from context, including for an empty `[:]`. Write expr_types
-        // directly too, since synth does not revisit every node.
+        // Store the resolved Map type on the node itself so emit can
+        // register the container helpers and resolve key/value types,
+        // including for an empty `[:]`. Prefer the expected type; with no
+        // expected type, synthesise it from the entries.
+        var lit_te: ast.TypeExpr = TEUnit(sp)
         if is_map {
-            let rte = ty.ty_to_type_expr_at(expected, sp)
-            tc.literal_hints[expr_id(node)] = rte
-            tc.expr_types[expr_id(node)] = rte
+            lit_te = ty.ty_to_type_expr_at(expected, sp)
+        } else {
+            let synthed = synth(tc, env, EMapLit(sp, nk, nv, TEUnit(sp)))
+            if !ty.ty_is_error(synthed) { lit_te = ty.ty_to_type_expr_at(synthed, sp) }
         }
-        node
+        EMapLit(sp, nk, nv, lit_te)
     }
     | ENew(sp, inner) -> {
         // `new e` yields `*T`, so the inner expression's expected type is
         // the pointee of the surrounding expected type when known.
         var inner_expected = ty.ty_error_()
         if let TyPtr(it) = expected { inner_expected = it }
-        ENew(sp, infer_calls_expr(tc, env, inner, inner_expected))
+        ENew(sp, new_clone(infer_calls_expr(tc, env, *inner, inner_expected)))
     }
     }
 }
@@ -3003,13 +2993,13 @@ let single_te(sp: ast.Span, name: string): ast.TypeExpr = {
 let rewrite_container_builtin(tc: *check.TyContext, env: *Env, sp: ast.Span, name: string, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): Option<ast.Expr> = {
     if len(args) == 0 {
         record_error(tc, sp, `'{name}' needs a container as its first argument`)
-        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+        return Some(ECall(sp, new_clone(EIdent(sp, name)), type_args, args))
     }
     let recv_ty = synth(tc, env, args[0])
     let info = unwrap_container_ty(recv_ty)
     if strings.eq_raw(info.kind, "") {
         record_error(tc, sp, `'{name}' expects a Vec or Map as its first argument; got {ty.ty_show(recv_ty)}`)
-        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+        return Some(ECall(sp, new_clone(EIdent(sp, name)), type_args, args))
     }
     let is_vec = strings.eq_raw(info.kind, "Vec")
     let is_map = strings.eq_raw(info.kind, "Map")
@@ -3021,9 +3011,9 @@ let rewrite_container_builtin(tc: *check.TyContext, env: *Env, sp: ast.Span, nam
         let needed = if is_vec { "Map" } else { "Vec" }
         let got    = if is_vec { "Vec" } else { "Map" }
         record_error(tc, sp, `'{name}' is a {needed} operation; got {got}`)
-        return Some(ECall(sp, EIdent(sp, name), type_args, args))
+        return Some(ECall(sp, new_clone(EIdent(sp, name)), type_args, args))
     }
-    let new_callee: ast.Expr = EField(sp, EIdent(sp, target_pkg), name)
+    let new_callee: ast.Expr = EField(sp, new_clone(EIdent(sp, target_pkg)), name)
     var new_ta: Vec<ast.TypeExpr> = []
     for a in info.args { vec.push(&new_ta, ty_to_type_expr_at(a, sp)) }
     Some(rewrite_call(tc, env, sp, new_callee, new_ta, args, expected))
@@ -3074,7 +3064,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
                     msg = strings.cat(msg, `; qualify the call as Enum.{bare_name}(...) or add a type annotation`)
                     record_error(tc, sp, msg)
                 } else {
-                    let qualified: ast.Expr = EField(sp, EIdent(sp, chosen), bare_name)
+                    let qualified: ast.Expr = EField(sp, new_clone(EIdent(sp, chosen)), bare_name)
                     return rewrite_call(tc, env, sp, qualified, type_args, args, expected)
                 }
             }
@@ -3112,7 +3102,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
                 var new_args: Vec<ast.Expr> = []
                 vec.push(&new_args, rewritten_sb)
                 vec.push(&new_args, rewritten_arg)
-                return ECall(sp, new_callee2, type_args, new_args)
+                return ECall(sp, new_clone(new_callee2), type_args, new_args)
             }
             // method == "__qoz_interp_push_str": keep the call but
             // use the already-rewritten args so nested builtins are
@@ -3120,7 +3110,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
             var new_args: Vec<ast.Expr> = []
             vec.push(&new_args, rewritten_sb)
             vec.push(&new_args, rewritten_arg)
-            return ECall(sp, callee, type_args, new_args)
+            return ECall(sp, new_clone(callee), type_args, new_args)
         }
         | None -> {
             if can_show_ty(val_ty) {
@@ -3128,7 +3118,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
                 var new_args: Vec<ast.Expr> = []
                 vec.push(&new_args, rewritten_sb)
                 vec.push(&new_args, rewritten_arg)
-                return ECall(sp, new_callee2, type_args, new_args)
+                return ECall(sp, new_clone(new_callee2), type_args, new_args)
             }
             record_error(tc, sp, `interpolation slot type {ty.ty_show(val_ty)} cannot be rendered as a string`)
         }
@@ -3139,7 +3129,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
         for a in args {
             vec.push(&new_args, infer_calls_expr(tc, env, a, ty.ty_error_()))
         }
-        return ECall(sp, callee, type_args, new_args)
+        return ECall(sp, new_clone(callee), type_args, new_args)
     }
     // strings.sb_append accepts a string. The same retargeting trick as
     // above applies for user code that calls the Strbuf surface
@@ -3149,11 +3139,11 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
         let val_ty = synth(tc, env, args[1])
         let method = sb_append_method_for(val_ty)
         if !strings.eq_raw(method, "sb_append") {
-            let new_callee2: ast.Expr = EField(sp, EIdent(sp, "strings"), method)
+            let new_callee2: ast.Expr = EField(sp, new_clone(EIdent(sp, "strings")), method)
             var new_args: Vec<ast.Expr> = []
             vec.push(&new_args, infer_calls_expr(tc, env, args[0], ty.ty_error_()))
             vec.push(&new_args, infer_calls_expr(tc, env, args[1], val_ty))
-            return ECall(sp, new_callee2, type_args, new_args)
+            return ECall(sp, new_clone(new_callee2), type_args, new_args)
         }
     }
     let new_callee = infer_calls_expr(tc, env, callee, ty.ty_error_())
@@ -3168,18 +3158,18 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
         ai += 1
     }
     if len(type_args) > 0 {
-        return ECall(sp, new_callee, type_args, new_args)
+        return ECall(sp, new_clone(new_callee), type_args, new_args)
     }
     let fn_name: string = resolve_callee_fn(tc, callee)
     if strings.eq_raw(fn_name, "") {
-        return ECall(sp, new_callee, type_args, new_args)
+        return ECall(sp, new_clone(new_callee), type_args, new_args)
     }
     match map.get(&tc.fns, fn_name) {
     | Some(d) -> {
         match d {
         | DFn(_, _, tparams, params, ret, _, _) -> {
             if len(tparams) == 0 {
-                return ECall(sp, new_callee, type_args, new_args)
+                return ECall(sp, new_clone(new_callee), type_args, new_args)
             }
             var arg_tys: Vec<ty.Ty> = []
             for a in args { vec.push(&arg_tys, synth(tc, env, a)) }
@@ -3201,7 +3191,7 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
             }
             if !ok {
                 record_error(tc, sp, `could not unify argument types with generic parameters of '{fn_name}'`)
-                return ECall(sp, new_callee, type_args, new_args)
+                return ECall(sp, new_clone(new_callee), type_args, new_args)
             }
             var inferred: Vec<ast.TypeExpr> = []
             for tp in tparams {
@@ -3213,12 +3203,12 @@ let rewrite_call(tc: *check.TyContext, env: *Env, sp: ast.Span, callee: ast.Expr
                 }
                 }
             }
-            ECall(sp, new_callee, inferred, new_args)
+            ECall(sp, new_clone(new_callee), inferred, new_args)
         }
-        | _ -> ECall(sp, new_callee, type_args, new_args)
+        | _ -> ECall(sp, new_clone(new_callee), type_args, new_args)
         }
     }
-    | None -> ECall(sp, new_callee, type_args, new_args)
+    | None -> ECall(sp, new_clone(new_callee), type_args, new_args)
     }
 }
 
@@ -3239,41 +3229,41 @@ let is_unhandled_result(t: ty.Ty): bool = {
 let expr_has_return(e: ast.Expr): bool = {
     match e {
     | EReturn(_, _) -> true
-    | EUnary(_, _, rhs) -> expr_has_return(rhs)
-    | EBinary(_, _, l, r) -> expr_has_return(l) || expr_has_return(r)
-    | EAssign(_, _, l, r) -> expr_has_return(l) || expr_has_return(r)
+    | EUnary(_, _, rhs) -> expr_has_return(*rhs)
+    | EBinary(_, _, l, r) -> expr_has_return(*l) || expr_has_return(*r)
+    | EAssign(_, _, l, r) -> expr_has_return(*l) || expr_has_return(*r)
     | ECall(_, callee, _, args) -> {
-        if expr_has_return(callee) { return true }
+        if expr_has_return(*callee) { return true }
         for a in args { if expr_has_return(a) { return true } }
         false
     }
-    | EField(_, base, _) -> expr_has_return(base)
-    | EIndex(_, base, idx) -> expr_has_return(base) || expr_has_return(idx)
-    | ECast(_, value, _) -> expr_has_return(value)
-    | ETry(_, v) -> expr_has_return(v)
+    | EField(_, base, _) -> expr_has_return(*base)
+    | EIndex(_, base, idx) -> expr_has_return(*base) || expr_has_return(*idx)
+    | ECast(_, value, _) -> expr_has_return(*value)
+    | ETry(_, v) -> expr_has_return(*v)
     | ETuple(_, elems) -> { for el in elems { if expr_has_return(el) { return true } } false }
     | ERecord(_, _, fields) -> { for f in fields { if expr_has_return(f.value) { return true } } false }
     | EClosure(_, _, _, _) -> false
     | EBlock(_, stmts, tail) -> {
         for s in stmts { if stmt_has_return(s) { return true } }
-        expr_has_return(tail)
+        expr_has_return(*tail)
     }
-    | EIf(_, c, t, f) -> expr_has_return(c) || expr_has_return(t) || expr_has_return(f)
+    | EIf(_, c, t, f) -> expr_has_return(*c) || expr_has_return(*t) || expr_has_return(*f)
     | EMatch(_, scrut, arms) -> {
-        if expr_has_return(scrut) { return true }
+        if expr_has_return(*scrut) { return true }
         for a in arms { if expr_has_return(a.body) { return true } }
         false
     }
-    | EWhile(_, c, b) -> expr_has_return(c) || expr_has_return(b)
-    | EFor(_, _, _, it, b) -> expr_has_return(it) || expr_has_return(b)
-    | EDefer(_, b) -> expr_has_return(b)
-    | EArrayLit(_, elems) -> { for el in elems { if expr_has_return(el) { return true } } false }
-    | EMapLit(_, keys, values) -> {
+    | EWhile(_, c, b) -> expr_has_return(*c) || expr_has_return(*b)
+    | EFor(_, _, _, it, b) -> expr_has_return(*it) || expr_has_return(*b)
+    | EDefer(_, b) -> expr_has_return(*b)
+    | EArrayLit(_, elems, _) -> { for el in elems { if expr_has_return(el) { return true } } false }
+    | EMapLit(_, keys, values, _) -> {
         for k in keys { if expr_has_return(k) { return true } }
         for v in values { if expr_has_return(v) { return true } }
         false
     }
-    | ENew(_, inner) -> expr_has_return(inner)
+    | ENew(_, inner) -> expr_has_return(*inner)
     | _ -> false
     }
 }
