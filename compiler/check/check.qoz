@@ -2898,7 +2898,6 @@ let pick_variant_home(tc: *check.TyContext, homes: Vec<string>, expected: ty.Ty,
 // open extension model would defeat the reserved-name property the
 // spec promises.
 let is_container_builtin(name: string): bool = {
-    strings.eq_raw(name, "make")     ||
     strings.eq_raw(name, "push")     ||
     strings.eq_raw(name, "pop")      ||
     strings.eq_raw(name, "clear")    ||
@@ -2994,31 +2993,6 @@ let single_te(sp: ast.Span, name: string): ast.TypeExpr = {
 // case rewrite_call falls through and the user gets the standard
 // "undefined name" diagnostic).
 let rewrite_container_builtin(tc: *check.TyContext, env: *Env, sp: ast.Span, name: string, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, expected: ty.Ty): Option<ast.Expr> = {
-    // make() has no receiver. Its container kind comes from the
-    // binding annotation passed in `expected`. With no annotation the
-    // call is ambiguous and we report it as such.
-    if strings.eq_raw(name, "make") {
-        // make<Vec<T>>() and make<Map<K, V>>() pin the container kind
-        // through the explicit type argument. The rest of the
-        // dispatch reads the container args from there. Falling back
-        // to the binding annotation is the concise form
-        // (`var xs: Vec<i64> = make()`).
-        let info = if len(type_args) == 1 {
-            let ta_ty = resolve_type(tc, type_args[0])
-            unwrap_container_ty(ta_ty)
-        } else {
-            unwrap_container_ty(expected)
-        }
-        if strings.eq_raw(info.kind, "") {
-            record_error(tc, sp, `make() needs a type annotation or an explicit type argument like 'make<Vec<i64>>()'`)
-            return Some(ECall(sp, EIdent(sp, "make"), type_args, args))
-        }
-        let pkg = if strings.eq_raw(info.kind, "Vec") { "vec" } else { "map" }
-        let new_callee: ast.Expr = EField(sp, EIdent(sp, pkg), "make")
-        var new_ta: Vec<ast.TypeExpr> = []
-        for a in info.args { vec.push(&new_ta, ty_to_type_expr_at(a, sp)) }
-        return Some(rewrite_call(tc, env, sp, new_callee, new_ta, args, expected))
-    }
     if len(args) == 0 {
         record_error(tc, sp, `'{name}' needs a container as its first argument`)
         return Some(ECall(sp, EIdent(sp, name), type_args, args))

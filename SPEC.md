@@ -344,7 +344,7 @@ import fmt
 import strings
 
 let main() = {
-    var v: Vec<i32> = make()
+    var v: Vec<i32> = []
     push(&v, 1)
     push(&v, 2)
     fmt.println(`v = {v}, len = {len(v)}`)
@@ -469,13 +469,38 @@ This is the Go and Odin pattern: the language has a fixed, small surface for the
 - `hash(x): u64` returns a hash of `x`. Dispatches to `@operator("hash")` for `x`'s type when one is registered, otherwise to the auto-derived hash for records, otherwise to a built-in bit-cast lowering for numeric, boolean, character, pointer, and `cstring` operands. ADTs without an `@operator("hash")` registration are rejected.
 - `len(x): i64` returns the length of `x`. Defined for `string`, `Vec<T>`, and `Map<K, V>`. Other types must register `@operator("len")` to participate.
 
+### Container Construction
+
+Vectors and maps are built with literals. The element type comes from the
+literal's elements or, for an empty literal, from the surrounding context
+(a binding annotation, a function return type, a parameter type, a record
+field type, or a constructor argument).
+
+| Literal | Type | Meaning |
+|---------|------|---------|
+| `[]` | `Vec<T>` | empty vector |
+| `[1, 2, 3]` | `Vec<T>` | vector with elements |
+| `[:]` | `Map<K, V>` | empty map |
+| `["a": 1, "b": 2]` | `Map<K, V>` | map with entries |
+
+```
+let xs: Vec<i64> = []
+var ys = [1, 2, 3]
+let m: Map<string, i64> = [:]
+var counts = ["a": 1, "b": 2]
+```
+
+An empty `[]` or `[:]` whose type cannot be determined from context is a
+compile error. The literals lower to the standard library's `vec.make` /
+`map.make` and the per-element `vec.push` / `map.set`, which remain
+callable as ordinary package functions.
+
 ### Container Operations
 
 The following names are reserved for container primitives. Each dispatches on the first argument's type to the right runtime call:
 
 | Builtin | Operand kind | Lowering |
 |---------|--------------|----------|
-| `make()` | binding-typed `Vec<T>` or `Map<K, V>` | constructs an empty container of the inferred type. The explicit form `make<Vec<T>>()` / `make<Map<K, V>>()` carries the kind at the call site when no annotation is available. |
 | `push(&xs, v)` | `&Vec<T>`, `v: T` | appends `v` to the vector |
 | `pop(&xs): Option<T>` | `&Vec<T>` | removes and returns the last element, `None` if empty |
 | `clear(&xs)` | `&Vec<T>` or `&Map<K, V>` | drops every element, length becomes zero |
@@ -491,7 +516,7 @@ Indexing uses the `[]` operator, registered on `Vec` and `Map` in the standard l
 
 ### Reserved Name Rules
 
-The builtin names listed above are reserved at file scope. A top-level `let` that tries to define `push`, `make`, `len`, or any other reserved name is a compile error. A function *inside* a package may still share the bare name when its package qualifies the name from outside: a `let push<T>(v: *Vec<T>, x: T)` inside `std/vec` is fine because external code refers to it as `vec.push`, distinct from the builtin `push`. The builtin's lowering uses the package-qualified function under the hood.
+The builtin names listed above are reserved at file scope. A top-level `let` that tries to define `push`, `len`, or any other reserved name is a compile error. A function *inside* a package may still share the bare name when its package qualifies the name from outside: a `let push<T>(v: *Vec<T>, x: T)` inside `std/vec` is fine because external code refers to it as `vec.push`, distinct from the builtin `push`. The builtin's lowering uses the package-qualified function under the hood.
 
 ### Why Builtins, Not Bare Package Functions
 
@@ -743,7 +768,7 @@ let main() = {
 import fmt
 
 let main() = {
-    var v: Vec<i32> = make()
+    var v: Vec<i32> = []
     push(&v, 10)
     push(&v, 20)
     push(&v, 30)
@@ -755,4 +780,4 @@ let main() = {
 }
 ```
 
-Array literal syntax `[a, b, c]` constructs a `Vec<T>` whose element type is inferred from the literal's elements or from the binding annotation. The literal lowers to `make()` followed by `push(&tmp, e)` for each element. `for x in v` iterates the resulting `Vec`.
+Array literal syntax `[a, b, c]` constructs a `Vec<T>` whose element type is inferred from the literal's elements or from the binding annotation. The literal lowers to `vec.make` followed by `vec.push(&tmp, e)` for each element. `for x in v` iterates the resulting `Vec`.

@@ -1,0 +1,7 @@
+// Negative: the bare make() container builtin is retired in favour of
+// the [] and [:] literals. A make() call no longer resolves.
+
+let main(): i64 = {
+    var xs: Vec<i64> = make()
+    len(xs)
+}
