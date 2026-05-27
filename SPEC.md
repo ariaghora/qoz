@@ -404,6 +404,7 @@ All heap memory is owned by the garbage collector. There is no `free`, no alloca
 - `new_clone(value)` heap-allocates a copy of an existing value and yields a `*T`. It is how a `*T` field is filled with a value that must outlive the current stack frame: `Node(new_clone(left), x, new_clone(right))`. Taking `&local` instead is unsafe, since the local dies with its frame.
 - `new` is reserved for heap construction of a type (`new T(...)`), the counterpart to `new_clone`. (Not yet implemented.)
 - Records are value types. `Point { x: 1.0, y: 2.0 }` is a stack value. Assignment copies. Use `new_clone(Point { ... })` to obtain a heap pointer to a record.
+- A field omitted from a record literal takes its zero value, following Odin: `0` for a number, `false` for a bool, the empty string for `string`, an empty `Vec` or `Map`, a null `*T`. `Point {}` zero-initialises every field, and `Point { x: 1.0 }` leaves `y` zero. This is also the only way to construct a value of a struct whose fields you do not all want to set.
 - Container growth (`Vec.push`, `Map.insert`) calls into the collector.
 - Closures heap-allocate their captured environment.
 - The compiler is permitted to stack-allocate ADT values whose lifetime is provably bounded by their scope, but this is an optimisation. The user model is reference semantics.

@@ -1,0 +1,26 @@
+// expect: 0
+// An empty record literal `T {}` zero-initialises every field, the
+// Odin zero-value rule: a string is empty, a Vec or Map is empty, a
+// number is 0, a bool is false. Emit must produce a C11 `{0}`, not an
+// empty `{ }` (which is a C23 extension and fails under -pedantic).
+
+import fmt
+import strings
+
+type Bag = {
+    name:  string,
+    items: Vec<i64>,
+    count: i64,
+    flag:  bool,
+}
+
+let main(): i64 = {
+    let b: Bag = Bag {}
+    var bad: i64 = 0
+    if !strings.eq_raw(b.name, "") { bad += 1 }
+    if len(b.items) != 0 { bad += 1 }
+    if b.count != 0 { bad += 1 }
+    if b.flag { bad += 1 }
+    fmt.println(`name="{b.name}" items={len(b.items)} count={b.count} flag={b.flag} bad={bad}`)
+    bad
+}

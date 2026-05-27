@@ -5699,6 +5699,12 @@ let emit_record_lit_with_hint(e: *Emitter, te: ast.TypeExpr, fields: Vec<ast.Rec
     let effective = pick_type_with_args(te, hint)
     let expanded = expand_record_spread_fields(e, effective, fields)
     let ec = c_type_for(e, effective)
+    // A record literal with no fields zero-initialises every member.
+    // C11 rejects an empty `{ }` (it is a C23 extension), so emit `{0}`.
+    if len(expanded) == 0 {
+        push(e, `(({ec}){{0}})`)
+        return
+    }
     push(e, `(({ec}){{ `)
     var i: i64 = 0
     for f in expanded {
