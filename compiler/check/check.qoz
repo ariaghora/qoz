@@ -66,6 +66,11 @@ type TyContext = {
     // the callee's TypeExprs again.
     fn_param_tys:  Map<string, Vec<ty.Ty>>,
     fn_ret_ty:     Map<string, ty.Ty>,
+    // Set while resolving a record literal's head type, where omitted
+    // type arguments are inferred from the field values. It suppresses
+    // the arity error so `Pair { ... }` (no explicit <...>) is allowed
+    // while a bare `Pair` in a type annotation is still rejected.
+    record_head_resolve: bool,
     // @operator overloads, keyed "<op-symbol>::<TypeName>" -> fn name,
     // where TypeName is the head name of the operator's first parameter
     // type. synth_binary consults this so an overloaded operator on a
@@ -113,6 +118,7 @@ let make_ctx(): TyContext = TyContext {
     file_pkgs:    [:],
     errors:      [],
     type_params: [:],
+    record_head_resolve: false,
     op_overloads: [:],
     expected_hints: [],
     current_ret_ty: ty.ty_error_(),
@@ -586,6 +592,27 @@ let resolve_named(tc: *TyContext, span: ast.Span, path: Vec<string>, args: Vec<a
     resolve_named_short(tc, span, "", name, args)
 }
 
+// Number of type parameters a type declaration takes.
+let type_decl_param_count(d: ast.Decl): i64 = {
+    match d {
+    | DStruct(_, _, tps, _)    -> len(tps)
+    | DEnum(_, _, tps, _)      -> len(tps)
+    | DTypeAlias(_, _, tps, _) -> len(tps)
+    // Other declarations are not types applied with arguments.
+    | _                        -> 0
+    }
+}
+
+// A generic type must be applied to exactly its declared number of type
+// arguments. A bare `Tensor` for `type Tensor<T>` would otherwise reach
+// emit as an un-monomorphised name.
+let check_type_arity(tc: *TyContext, span: ast.Span, name: string, want: i64, got: i64) = {
+    if tc.record_head_resolve { return }
+    if want != got {
+        record_error(tc, span, `type '{name}' takes {want} type argument(s) but {got} were given`)
+    }
+}
+
 let resolve_named_short(tc: *TyContext, span: ast.Span, home: string, name: string, args: Vec<ast.TypeExpr>): ty.Ty = {
     if map.contains(&tc.type_params, name) {
         return ty.ty_var_(name)
@@ -611,13 +638,16 @@ let resolve_named_short(tc: *TyContext, span: ast.Span, home: string, name: stri
         vec.push(&resolved_args, resolve_type(tc, a))
     }
     let key = type_key(home, name)
-    if map.contains(&tc.enums, key) {
+    if let Some(d) = map.get(&tc.enums, key) {
+        check_type_arity(tc, span, name, type_decl_param_count(d), len(args))
         return ty.ty_adt_homed(home, name, resolved_args)
     }
-    if map.contains(&tc.structs, key) {
+    if let Some(d) = map.get(&tc.structs, key) {
+        check_type_arity(tc, span, name, type_decl_param_count(d), len(args))
         return ty.ty_record_homed(home, name, resolved_args)
     }
-    if map.contains(&tc.aliases, key) {
+    if let Some(d) = map.get(&tc.aliases, key) {
+        check_type_arity(tc, span, name, type_decl_param_count(d), len(args))
         return ty.ty_record_homed(home, name, resolved_args)
     }
     if map.contains(&tc.c_enums, key) {
@@ -1483,7 +1513,13 @@ let synth_call_full(tc: *TyContext, env: *Env, sp: ast.Span, callee: ast.Expr, t
 // may name a tparam) against the synthesised value type and accumulates
 // bindings.
 let synth_record(tc: *TyContext, env: *Env, sp: ast.Span, te: ast.TypeExpr, fields: Vec<ast.RecordFieldLit>): ty.Ty = {
+    // Resolve the literal's head type with arity checking suppressed:
+    // a record literal may omit the type arguments and have them
+    // inferred from the field values below.
+    let saved_rhr = tc.record_head_resolve
+    tc.record_head_resolve = true
     let bare_resolved = resolve_type(tc, te)
+    tc.record_head_resolve = saved_rhr
     let struct_name = record_name_of(bare_resolved)
     if strings.eq_raw(struct_name, "") { return bare_resolved }
     let struct_home = record_home_of(bare_resolved)

@@ -1,0 +1,11 @@
+// Negative: a generic type must be applied to its type arguments. The
+// field uses `Vec<*Tensor>` where Tensor is `Tensor<T>`, so the bare
+// `Tensor` is missing its argument. The checker rejects it instead of
+// emitting an un-monomorphised C type.
+
+type Tensor<T> = {
+    value: T,
+    deps:  Vec<*Tensor>,
+}
+
+let main(): i64 = 0
