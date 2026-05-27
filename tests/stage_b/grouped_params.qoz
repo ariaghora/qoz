@@ -1,0 +1,29 @@
+// expect: 0
+// Parameters of the same type may be grouped Odin/Pascal style:
+// `a, b: T` means `a: T, b: T`. Works in functions, in an @operator
+// overload, and in a closure parameter list, and mixes with
+// individually-typed parameters.
+
+import fmt
+
+type Vec2 = { x: i64, y: i64 }
+
+@operator("+")
+let v2_add(a, b: *Vec2): *Vec2 = new_clone(Vec2 { x: a.x + b.x, y: a.y + b.y })
+
+let add3(a, b, c: i64): i64 = a + b + c
+let mixed(label: string, x, y: i64): i64 = x + y + len(label)
+
+let main(): i64 = {
+    var bad: i64 = 0
+    if add3(1, 2, 3) != 6 { bad += 1 }
+    if mixed("ab", 4, 5) != 11 { bad += 1 }
+    let f = (p, q: i64) -> p * q
+    if f(6, 7) != 42 { bad += 1 }
+    let a: Vec2 = Vec2 { x: 1, y: 2 }
+    let b: Vec2 = Vec2 { x: 3, y: 4 }
+    let c = &a + &b
+    if c.x != 4 || c.y != 6 { bad += 1 }
+    fmt.println(`bad={bad}`)
+    bad
+}

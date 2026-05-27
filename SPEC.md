@@ -230,7 +230,9 @@ let positives = vec.filter((x: i32) -> x > 0, v)
 let sum = vec.fold((acc, x) -> acc + x, 0, v)
 ```
 
-Closures use a parenthesised parameter list followed by `->` and a body expression. Parameters may carry type annotations: `(x: i32, y: i32): i32 -> x + y`. The parser distinguishes a closure from a parenthesised expression by looking ahead one token past the matching `)`: a trailing `->` (or `:` for the return type) marks a closure.
+Closures use a parenthesised parameter list followed by `->` and a body expression. Parameters carry type annotations: `(x: i32, y: i32): i32 -> x + y`. With no return-type annotation the closure's return type is its body's type. The parser distinguishes a closure from a parenthesised expression by scanning the parenthesised group: a `:` at the top level of the group (a parameter's type) marks a closure, as does an empty `()` followed by `->` or a return-type `:`.
+
+Parameters of the same type may be grouped, the Odin and Pascal convention: `(a, b: i32)` is `(a: i32, b: i32)`. This applies to top-level function definitions, `@operator` overloads, and closure parameter lists, and mixes with individually-typed parameters: `(label: string, x, y: i32)`.
 
 Closures capture surrounding bindings by reference when they are mutable, by value when they are immutable. The captured environment lives on the heap and is managed by the garbage collector.
 

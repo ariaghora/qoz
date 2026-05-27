@@ -1638,6 +1638,28 @@ let emit_new_clone(e: *Emitter, sp: ast.Span, inner: ast.Expr) = {
     push(e, ")")
 }
 
+// The return type of a closure. An explicit annotation is used as
+// written; an un-annotated closure (unit ret) takes its body's type,
+// inferred with the parameters and captures in scope. Shared by the
+// closure emitter and the value-type inferer so both agree.
+let closure_effective_ret(e: *Emitter, cps: Vec<ast.ClosureParam>, ret: ast.TypeExpr, body: ast.Expr): ast.TypeExpr = {
+    if !is_unit_typeexpr(ret) { return ret }
+    var sc: CaptureScope = CaptureScope { bound: [:] }
+    for cp in cps { sc.bound[cp.name] = true }
+    var captures: Vec<string> = []
+    collect_closure_captures(e, body, &sc, &captures)
+    let outer = e.locals
+    var il: Map<string, ast.TypeExpr> = [:]
+    for c in captures {
+        if let Some(te) = map.get(&outer, c) { il[c] = te }
+    }
+    for cp in cps { il[cp.name] = cp.ty }
+    e.locals = il
+    let r = infer_value_te(e, body)
+    e.locals = outer
+    r
+}
+
 let emit_closure_lifted(e: *Emitter, sp: ast.Span, cps: Vec<ast.ClosureParam>, ret: ast.TypeExpr, body: ast.Expr) = {
     var sc: CaptureScope = CaptureScope { bound: [:] }
     for cp in cps { sc.bound[cp.name] = true }
@@ -1657,10 +1679,14 @@ let emit_closure_lifted(e: *Emitter, sp: ast.Span, cps: Vec<ast.ClosureParam>, r
         }
     }
 
+    // An un-annotated closure (unit ret) returns its body's type, so the
+    // lifted function's C signature matches what the body produces.
+    let eff_ret = closure_effective_ret(e, cps, ret, body)
+
     // Closure-type typedef for the value the closure produces.
     var ptes: Vec<ast.TypeExpr> = []
     for cp in cps { vec.push(&ptes, cp.ty) }
-    let clo_type = register_fn_typedef(e, ptes, ret)
+    let clo_type = register_fn_typedef(e, ptes, eff_ret)
 
     var fparams: Vec<ast.FnParam> = []
     for cp in cps {
@@ -1669,7 +1695,7 @@ let emit_closure_lifted(e: *Emitter, sp: ast.Span, cps: Vec<ast.ClosureParam>, r
 
     // Forward declaration of the lifted fn.
     var sig = "static "
-    sig = strings.cat(sig, c_type_for(e, ret))
+    sig = strings.cat(sig, c_type_for(e, eff_ret))
     sig = strings.cat(sig, " ")
     sig = strings.cat(sig, cname)
     sig = strings.cat(sig, "(void *_qoz_env")
@@ -1705,7 +1731,7 @@ let emit_closure_lifted(e: *Emitter, sp: ast.Span, cps: Vec<ast.ClosureParam>, r
     let saved_locals = e.locals
     let saved_ret = e.current_ret_te
     let saved_hint = e.match_hint
-    let ret_c = c_type_for(e, ret)
+    let ret_c = c_type_for(e, eff_ret)
     push(e, `static {ret_c} {cname}(void *_qoz_env`)
     for fp in fparams {
         let fp_c = c_type_for(e, fp.ty)
@@ -1725,17 +1751,17 @@ let emit_closure_lifted(e: *Emitter, sp: ast.Span, cps: Vec<ast.ClosureParam>, r
             ci2 += 1
         }
     }
-    e.current_ret_te = ret
+    e.current_ret_te = eff_ret
     if is_block(body) {
-        emit_fn_body_block(e, body, ret)
+        emit_fn_body_block(e, body, eff_ret)
     } else {
         let saved = open_statement_scope(e)
-        if is_unit_typeexpr(ret) {
+        if is_unit_typeexpr(eff_ret) {
             emit_expr(e, body)
             push(e, ";\n    return;\n")
         } else {
             push(e, "return ")
-            emit_value_with_hint(e, body, ret)
+            emit_value_with_hint(e, body, eff_ret)
             push(e, ";\n")
         }
         close_statement_scope(e, saved)
@@ -2328,10 +2354,10 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         for el in elems { vec.push(&ets, infer_value_te(e, el)) }
         TETuple(sp, ets)
     }
-    | EClosure(sp, cps, ret, _) -> {
+    | EClosure(sp, cps, ret, body) -> {
         var pte: Vec<ast.TypeExpr> = []
         for cp in cps { vec.push(&pte, cp.ty) }
-        TEFn(sp, pte, new_clone(ret))
+        TEFn(sp, pte, new_clone(closure_effective_ret(e, cps, ret, *body)))
     }
     | ETry(sp, value) -> {
         let inner = infer_value_te(e, *value)
@@ -2542,6 +2568,11 @@ let is_type_var_name(n: string): bool = {
 }
 
 let call_return_te(e: *Emitter, callee: ast.Expr, type_args: Vec<ast.TypeExpr>, args: Vec<ast.Expr>, sp: ast.Span): ast.TypeExpr = {
+    // A callee that is a local of function type is a closure value; its
+    // result is the function type's return type.
+    if let TEFn(_, _, ret) = callee_value_typeexpr(e, callee) {
+        return *ret
+    }
     let name = generic_callee_name(e, callee)
     if strings.eq_raw(name, "") {
         let _ = emit_die(sp, "could not derive return type: callee has no recognisable name")

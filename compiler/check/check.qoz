@@ -819,15 +819,16 @@ let synth_inner(tc: *TyContext, env: *Env, e: ast.Expr): ty.Ty = {
         let body_ty = synth(tc, env, *body)
         tc.current_ret_ty = saved_ret
         // A closure with no explicit return annotation parses with a
-        // TEUnit ret which resolves to TyUnit. That disables the
-        // body-vs-declared check, matching the user's intent (no
-        // annotation = take the body's type).
+        // TEUnit ret which resolves to TyUnit. In that case the return
+        // type is the body's type. An explicit annotation is checked
+        // against the body instead.
         if !ty.ty_is_unit(ret_ty) && !ty.ty_is_error(ret_ty) && !ty.ty_is_error(body_ty) {
             if !ty.ty_is_nil(body_ty) && !ty.ty_assignable(ret_ty, body_ty) {
                 record_error(tc, sp, `closure body produces {ty.ty_show(body_ty)} but declared return type is {ty.ty_show(ret_ty)}`)
             }
         }
-        ty.ty_fn_(pty, ret_ty)
+        let effective_ret = if ty.ty_is_unit(ret_ty) { body_ty } else { ret_ty }
+        ty.ty_fn_(pty, effective_ret)
     }
     | EBlock(_, stmts, tail) -> synth_block(tc, env, stmts, *tail)
     | EIf(sp, c, t, f)       -> synth_if(tc, env, sp, *c, *t, *f)

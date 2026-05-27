@@ -1,0 +1,20 @@
+// expect: 0
+// A closure stored in a local can be called through that local. An
+// un-annotated closure takes its body's type as the return type, so
+// the call has the right type without an explicit annotation. Captures
+// are visible to that inference.
+
+import fmt
+
+let main(): i64 = {
+    let f = (x: i64): i64 -> x + 1   // explicit return annotation
+    let g = (p, q: i64) -> p * q     // return inferred from body
+    let y = 100
+    let h = (a: i64) -> a + y        // inferred return depends on a capture
+    var bad: i64 = 0
+    if f(5) != 6 { bad += 1 }
+    if g(6, 7) != 42 { bad += 1 }
+    if h(1) != 101 { bad += 1 }
+    fmt.println(`bad={bad}`)
+    bad
+}

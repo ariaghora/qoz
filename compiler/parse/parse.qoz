@@ -631,16 +631,35 @@ let parse_postfix(p: *Parser): ast.Expr = {
     e
 }
 
+// A `(` begins a closure when its parameter list has a typed parameter,
+// which a parenthesised expression or tuple never has. Scan the group:
+// a `:` at the top level (paren depth 1) marks the type of a parameter
+// and so a closure. An empty `()` is a closure only when followed by
+// `->` or a return-type `:`. The scan is bounded by the token count.
 let looks_like_closure(p: *Parser): bool = {
     if !is_punct(peek_at(p, 0), "(") { return false }
-    let a = peek_at(p, 1)
-    let b = peek_at(p, 2)
-    if is_punct(a, ")") {
-        if is_punct(b, "->") { return true }
-        if is_punct(b, ":") { return true }
-        return false
+    var depth: i64 = 0
+    var i: i64 = 0
+    var saw_colon = false
+    var saw_param = false
+    let n = len(p.tokens)
+    while p.pos + i < n {
+        let t = peek_at(p, i)
+        if is_punct(t, "(") {
+            depth += 1
+        } elif is_punct(t, ")") {
+            depth -= 1
+            if depth == 0 {
+                let after = peek_at(p, i + 1)
+                if !saw_param { return is_punct(after, "->") || is_punct(after, ":") }
+                return saw_colon
+            }
+        } elif depth == 1 {
+            if is_punct(t, ":") { saw_colon = true }
+            if !is_punct(t, ",") { saw_param = true }
+        }
+        i += 1
     }
-    if is_ident(a) && is_punct(b, ":") { return true }
     false
 }
 
@@ -653,10 +672,16 @@ let parse_closure(p: *Parser): ast.Expr = {
         var more = true
         while more {
             let start_pos = p.pos
-            let name = expect_ident(p)
+            // Grouped parameters share one trailing type: `a, b: T`.
+            var names: Vec<string> = []
+            vec.push(&names, expect_ident(p))
+            while is_punct(peek(p), ",") {
+                advance(p)
+                vec.push(&names, expect_ident(p))
+            }
             expect_punct(p, ":")
             let ty = parse_type(p)
-            vec.push(&params, ast.ClosureParam { name: name, ty: ty })
+            for nm in names { vec.push(&params, ast.ClosureParam { name: nm, ty: ty }) }
             if is_punct(peek(p), ",") {
                 advance(p)
             } else {
@@ -1676,10 +1701,18 @@ let parse_fn_params(p: *Parser): Vec<ast.FnParam> = {
     expect_punct(p, "(")
     while !is_punct(peek(p), ")") && !at_eof(p) {
         let start_pos = p.pos
-        let name = expect_ident(p)
+        // Grouped parameters share one trailing type: `a, b: T` is the
+        // same as `a: T, b: T`. Collect the comma-separated names that
+        // precede the `:`, then apply the type to each.
+        var names: Vec<string> = []
+        vec.push(&names, expect_ident(p))
+        while is_punct(peek(p), ",") {
+            advance(p)
+            vec.push(&names, expect_ident(p))
+        }
         expect_punct(p, ":")
         let ty = parse_type(p)
-        vec.push(&params, ast.FnParam { name: name, ty: ty })
+        for nm in names { vec.push(&params, ast.FnParam { name: nm, ty: ty }) }
         if is_punct(peek(p), ",") {
             advance(p)
         }
