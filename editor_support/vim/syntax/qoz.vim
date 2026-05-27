@@ -23,6 +23,14 @@ syntax match qozDirective "#\(link_library\|link_framework\|link_path\|load_stri
 syntax keyword qozType i8 i16 i32 i64 u8 u16 u32 u64 f32 f64
 syntax keyword qozType bool char string cstring void unit
 
+" -- User types and generic arguments -------------------------------
+" A capitalized identifier names a type: a struct, an enum, or a type
+" parameter such as `T`. This covers the head and the arguments of a
+" generic like `Tensor<f32>` or `Vec<*Tensor<T>>`, since each argument
+" is itself a type name (or a primitive matched above). Enum variant
+" constructors share this colour, as in most ML/Rust highlighters.
+syntax match qozType "\<[A-Z][A-Za-z0-9_]*\>"
+
 " -- Numbers ---------------------------------------------------------
 syntax match qozNumber "\<\d\(\d\|_\)*\(\.\d\(\d\|_\)*\)\=\([eE][+-]\=\d\+\)\=\>"
 syntax match qozNumber "\<0x[0-9A-Fa-f_]\+\>"
