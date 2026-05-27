@@ -1,0 +1,42 @@
+// expect: 0
+// Empty container literals get their element type from context, not from
+// their (absent) elements. This must work in return, argument, and
+// record-field positions, not only in an annotated `let`. Each position
+// previously failed to register the container helpers (the map case
+// crashed the compiler), so this guards all four.
+
+import fmt
+import map
+
+type Holder = { m: Map<string, i64>, v: Vec<i64> }
+
+let ret_vec(): Vec<i64> = []
+let ret_map(): Map<string, i64> = [:]
+let take_vec(v: Vec<i64>): i64 = len(v)
+let take_map(m: Map<string, i64>): i64 = map.len(&m)
+
+let main(): i64 = {
+    // let-annotated (already worked)
+    let lv: Vec<i64> = []
+    let lm: Map<string, i64> = [:]
+    // record-field position
+    let h = Holder { m: [:], v: [] }
+    // return position
+    let rv = ret_vec()
+    let rm = ret_map()
+    // argument position
+    let av = take_vec([])
+    let am = take_map([:])
+
+    var bad: i64 = 0
+    if len(lv) != 0 { bad += 1 }
+    if map.len(&lm) != 0 { bad += 1 }
+    if len(h.v) != 0 { bad += 1 }
+    if map.len(&h.m) != 0 { bad += 1 }
+    if len(rv) != 0 { bad += 1 }
+    if map.len(&rm) != 0 { bad += 1 }
+    if av != 0 { bad += 1 }
+    if am != 0 { bad += 1 }
+    fmt.println(`bad={bad}`)
+    bad
+}
