@@ -355,6 +355,53 @@ let decl_span(d: ast.Decl): ast.Span = {
 
 // --- Operators ---
 
+// Binding tightness of a binary operator, matching the parser's layer
+// order (higher binds tighter). Used to decide where the printer must
+// insert parentheses so the re-parsed tree keeps its shape.
+let binop_prec(op: ast.BinaryOp): i64 = {
+    match op {
+    | BOpRange | BOpRangeInclusive -> 1
+    | BOpOr -> 2
+    | BOpAnd -> 3
+    | BOpBitOr -> 4
+    | BOpBitXor -> 5
+    | BOpBitAnd -> 6
+    | BOpEq | BOpNe | BOpLt | BOpGt | BOpLe | BOpGe -> 7
+    | BOpShl | BOpShr -> 8
+    | BOpAdd | BOpSub -> 9
+    | BOpMul | BOpDiv | BOpMod -> 10
+    }
+}
+
+// Tightness of an expression for parenthesization. Operator-bearing
+// forms report their operator precedence; control-flow forms used in
+// value position report the lowest tightness so they are always
+// parenthesized inside a tighter context; everything else (literals,
+// identifiers, calls, field and index access) binds tightest.
+let expr_prec(e: ast.Expr): i64 = {
+    match e {
+    | EBinary(_, op, _, _) -> binop_prec(op)
+    | EUnary(_, _, _)      -> 11
+    | EAssign(_, _, _, _)  -> 0
+    | EIf(_, _, _, _)      -> 0
+    | EMatch(_, _, _)      -> 0
+    | EClosure(_, _, _, _) -> 0
+    | _                    -> 100
+    }
+}
+
+// Print `e` wrapped in parentheses when its tightness is below
+// `min_prec`, so it keeps its grouping inside a tighter context.
+let print_expr_paren(p: *Printer, e: ast.Expr, min_prec: i64) = {
+    if expr_prec(e) < min_prec {
+        p_emit(p, "(")
+        print_expr(p, e)
+        p_emit(p, ")")
+    } else {
+        print_expr(p, e)
+    }
+}
+
 let unary_op_text(op: ast.UnaryOp): string = {
     match op {
     | UOpNeg   -> "-"
@@ -516,14 +563,20 @@ let print_expr(p: *Printer, e: ast.Expr) = {
     }
     | EUnary(_, op, rhs) -> {
         p_emit(p, unary_op_text(op))
-        print_expr(p, *rhs)
+        // A prefix operator binds tighter than any binary operator, so a
+        // binary operand must be parenthesized: !(a == b), not !a == b.
+        print_expr_paren(p, *rhs, 11)
     }
     | EBinary(_, op, l, r) -> {
-        print_expr(p, *l)
+        let prec = binop_prec(op)
+        // Left-associative: the left operand keeps its grouping at the
+        // same precedence, the right operand needs parentheses at the
+        // same precedence so a - (b - c) does not reprint as a - b - c.
+        print_expr_paren(p, *l, prec)
         p_emit(p, " ")
         p_emit(p, binary_op_text(op))
         p_emit(p, " ")
-        print_expr(p, *r)
+        print_expr_paren(p, *r, prec + 1)
     }
     | EAssign(_, op, l, r) -> {
         print_expr(p, *l)
