@@ -36,6 +36,12 @@ type Emitter = {
     // payload-less. A value of one is just a tag that is never
     // allocated and never traced.
     value_enums:       Map<string, bool>,
+    // Value enums (keyed like value_enums) whose payload carries at
+    // least one managed pointer. A precisely described object that
+    // embeds one inline cannot use a fixed offset table, because the
+    // pointer's position depends on the active tag, so it falls back
+    // to a conservative descriptor.
+    value_ptr_enums:   Map<string, bool>,
     enum_decls:        Map<string, ast.Decl>,    // bare enum name -> DEnum (generic or not)
     c_enum_decls:      Map<string, ast.Decl>,    // bare C-enum name -> DCEnum
     struct_decls:      Map<string, ast.Decl>,    // bare struct name -> DStruct (generic or not)
@@ -90,6 +96,7 @@ let make_emitter(): Emitter = Emitter {
     variant_of:       map.make(),
     is_enum:          map.make(),
     value_enums:      map.make(),
+    value_ptr_enums:  map.make(),
     enum_decls:       map.make(),
     c_enum_decls:     map.make(),
     struct_decls:     map.make(),
@@ -3992,28 +3999,46 @@ let c_type_is_pointer(ct: string): bool = {
     strings.byte_at(ct, len(ct) - 1) == 42
 }
 
-// Emit every struct definition (non-generic decl and generic instantiation)
-// in dependency order, so by-value field types are defined before the
-// struct that contains them.
-let emit_records_topological(e: *Emitter, f: ast.File) = {
+// Emit every by-value aggregate definition (record and value enum,
+// generic or not) in dependency order, so a type embedded by value is
+// defined before the aggregate that contains it. Records and value
+// enums can reference each other inline (a record field may be a value
+// enum, a value enum payload may be a record), so they share one
+// topological pass. Boxed enums are pointers and are emitted afterward.
+let emit_aggregates_topological(e: *Emitter, f: ast.File) = {
     var names: Vec<string> = vec.make()
+    var is_enum_node: Vec<bool> = vec.make()
     var field_lists: Vec<Vec<ast.StructField>> = vec.make()
+    var variant_lists: Vec<Vec<ast.VariantDecl>> = vec.make()
     for d in f.decls {
         match d {
         | DStruct(_, name, params, fields) -> {
             if len(params) == 0 {
                 vec.push(&names, name)
+                vec.push(&is_enum_node, false)
                 vec.push(&field_lists, fields)
+                var empty: Vec<ast.VariantDecl> = vec.make()
+                vec.push(&variant_lists, empty)
             }
         }
+        | DEnum(_, name, params, variants) -> {
+            if len(params) == 0 && map.contains(&e.value_enums, name) {
+                vec.push(&names, name)
+                vec.push(&is_enum_node, true)
+                var empty: Vec<ast.StructField> = vec.make()
+                vec.push(&field_lists, empty)
+                vec.push(&variant_lists, variants)
+            }
+        }
+        // Boxed enums (not in value_enums), C-style enums, functions,
+        // imports, constants, and other declarations are not by-value
+        // aggregates, so they contribute no node to this pass.
         | _ -> { }
         }
     }
     for inst in e.record_insts {
-        match map.get(&e.generic_decls, inst.name) {
-        | Some(decl) -> {
-            match decl {
-            | DStruct(_, _, params, fields) -> {
+        if let Some(decl) = map.get(&e.generic_decls, inst.name) {
+            if let DStruct(_, _, params, fields) = decl {
                 var subst_fields: Vec<ast.StructField> = vec.make()
                 for fld in fields {
                     vec.push(&subst_fields, ast.StructField {
@@ -4022,55 +4047,106 @@ let emit_records_topological(e: *Emitter, f: ast.File) = {
                     })
                 }
                 vec.push(&names, inst.mangled)
+                vec.push(&is_enum_node, false)
                 vec.push(&field_lists, subst_fields)
-            }
-            | _ -> { }
+                var empty: Vec<ast.VariantDecl> = vec.make()
+                vec.push(&variant_lists, empty)
             }
         }
-        | None -> { }
+    }
+    for inst in e.enum_insts {
+        if map.contains(&e.value_enums, inst.mangled) {
+            if let Some(decl) = map.get(&e.generic_decls, inst.name) {
+                if let DEnum(_, _, params, variants) = decl {
+                    vec.push(&names, inst.mangled)
+                    vec.push(&is_enum_node, true)
+                    var empty: Vec<ast.StructField> = vec.make()
+                    vec.push(&field_lists, empty)
+                    vec.push(&variant_lists, subst_variants_for(e, params, variants, inst.args))
+                }
+            }
         }
     }
     var visited: Map<string, bool> = map.make()
     var i: i64 = 0
     while i < len(names) {
-        emit_record_visit(e, names[i], names, field_lists, &visited)
+        emit_aggregate_visit(e, names[i], names, is_enum_node, field_lists, variant_lists, &visited)
         i += 1
     }
 }
 
-let emit_record_visit(e: *Emitter, name: string, names: Vec<string>, field_lists: Vec<Vec<ast.StructField>>, visited: *Map<string, bool>) = {
+let emit_aggregate_visit(e: *Emitter, name: string, names: Vec<string>, is_enum_node: Vec<bool>, field_lists: Vec<Vec<ast.StructField>>, variant_lists: Vec<Vec<ast.VariantDecl>>, visited: *Map<string, bool>) = {
     if map.contains(visited, name) { return }
     map.set(visited, name, true)
     var i: i64 = 0
     while i < len(names) {
         if strings.eq_raw(names[i], name) {
-            let fields = field_lists[i]
-            for fld in fields {
-                match value_field_dep(e, fld.ty) {
-                | Some(dep) -> emit_record_visit(e, dep, names, field_lists, visited)
-                | None      -> { }
+            if is_enum_node[i] {
+                let variants = variant_lists[i]
+                for v in variants {
+                    for pt in v.pos {
+                        if let Some(dep) = aggregate_field_dep(e, pt) {
+                            emit_aggregate_visit(e, dep, names, is_enum_node, field_lists, variant_lists, visited)
+                        }
+                    }
+                    for sf in v.named {
+                        if let Some(dep) = aggregate_field_dep(e, sf.ty) {
+                            emit_aggregate_visit(e, dep, names, is_enum_node, field_lists, variant_lists, visited)
+                        }
+                    }
                 }
+                emit_enum(e, name, variants)
+            } else {
+                let fields = field_lists[i]
+                for fld in fields {
+                    if let Some(dep) = aggregate_field_dep(e, fld.ty) {
+                        emit_aggregate_visit(e, dep, names, is_enum_node, field_lists, variant_lists, visited)
+                    }
+                }
+                emit_struct(e, name, fields)
             }
-            emit_struct(e, name, fields)
             return
         }
         i += 1
     }
 }
 
-// Return the C-side struct name a value-typed field depends on, or None
-// when the field is a pointer, primitive, or ADT (ADTs are always
-// pointers in the emitted C).
-let value_field_dep(e: *Emitter, te: ast.TypeExpr): Option<string> = {
+// Substitute a generic enum's type parameters with concrete arguments,
+// producing the variant list for one instantiation.
+let subst_variants_for(e: *Emitter, params: Vec<string>, variants: Vec<ast.VariantDecl>, args: Vec<ast.TypeExpr>): Vec<ast.VariantDecl> = {
+    var out: Vec<ast.VariantDecl> = vec.make()
+    for v in variants {
+        var np: Vec<ast.TypeExpr> = vec.make()
+        for pt in v.pos { vec.push(&np, substitute_type(e, pt, params, args)) }
+        var nn: Vec<ast.StructField> = vec.make()
+        for sf in v.named { vec.push(&nn, ast.StructField { name: sf.name, ty: substitute_type(e, sf.ty, params, args) }) }
+        vec.push(&out, ast.VariantDecl { span: v.span, name: v.name, kind: v.kind, pos: np, named: nn })
+    }
+    out
+}
+
+// Return the C-side aggregate name a by-value field depends on, or None
+// when the field is a pointer, primitive, boxed enum, or an aggregate
+// not emitted in this pass. A value enum is embedded inline, so it is a
+// dependency; a boxed enum is a pointer and needs only a forward
+// declaration.
+let aggregate_field_dep(e: *Emitter, te: ast.TypeExpr): Option<string> = {
     match te {
     | TENamed(_, path, args) -> {
         if len(path) < 1 { return None }
         let n = path[len(path) - 1]
         if !strings.eq_raw(primitive_c_name(n), "") { return None }
-        if map.contains(&e.is_enum, n) { return None }
-        if len(args) > 0 { return Some(mangle_inst(e, n, args)) }
-        Some(n)
+        let key = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+        if map.contains(&e.is_enum, n) {
+            if map.contains(&e.value_enums, key) { return Some(key) }
+            return None
+        }
+        Some(key)
     }
+    // A TEPtr field is a pointer and needs only a forward declaration.
+    // TEUnit and TEFn carry no aggregate definition. Tuple typedefs are
+    // emitted in their own block, so a TETuple introduces no ordering
+    // dependency in this pass.
     | _ -> None
     }
 }
@@ -4171,18 +4247,10 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
     }
     push(&e, "\n")
     e.pos_synth_fn_decls = strings.sb_len(&e.out)
-    // Value enums are embedded by value in records and other enums,
-    // so their full struct definitions must precede any by-value
-    // use. Nullary value enums depend on nothing, so emitting them
-    // before the records pass satisfies the ordering.
-    for d in f.decls {
-        if let DEnum(_, name, params, variants) = d {
-            if len(params) == 0 && map.contains(&e.value_enums, name) {
-                emit_enum(&e, name, variants)
-            }
-        }
-    }
-    emit_records_topological(&e, f)
+    // Records and value enums are embedded by value, so their full
+    // definitions must precede any by-value use. They can reference
+    // each other inline, so one topological pass orders both.
+    emit_aggregates_topological(&e, f)
     // Enum definitions (non-generic), excluding value enums already
     // emitted above.
     for d in f.decls {
@@ -4212,7 +4280,12 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
                         named: new_named,
                     })
                 }
-                emit_enum(&e, inst.mangled, subst_variants)
+                // A value enum's definition comes from the topological
+                // pass. A boxed enum is defined here. Both still need
+                // their variant constructors emitted.
+                if !map.contains(&e.value_enums, inst.mangled) {
+                    emit_enum(&e, inst.mangled, subst_variants)
+                }
                 for v in subst_variants {
                     emit_variant_ctor(&e, inst.mangled, v)
                 }
@@ -4362,11 +4435,28 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
     render(&e)
 }
 
+// True when every variant of the named enum is payload-free, so the
+// enum is a bare tag with no managed pointers. Looks the declaration
+// up directly, so the answer does not depend on classification order.
+let enum_is_nullary_only(e: *Emitter, n: string): bool = {
+    if let Some(d) = map.get(&e.enum_decls, n) {
+        if let DEnum(_, _, _, variants) = d {
+            for v in variants {
+                if len(v.pos) > 0 { return false }
+                if len(v.named) > 0 { return false }
+            }
+            return true
+        }
+    }
+    false
+}
+
 // A payload type that carries no managed pointer, so a value enum
 // containing only such payloads needs no GC tracing. Scalars
-// (numeric, bool, char), C-style enums, the unit type, nullary
-// value enums, and tuples of pointer-free types qualify. `string`
-// is excluded: it carries data and root pointers.
+// (numeric, bool, char), C-style enums, the unit type, nullary-only
+// enums, and tuples of pointer-free types qualify. `string` carries
+// data and root pointers. A payload-carrying enum, a record, Vec, Map,
+// or a function value is treated as pointer-bearing.
 let pointer_free_payload(e: *Emitter, te: ast.TypeExpr): bool = {
     match te {
     | TEUnit(_)      -> true
@@ -4381,10 +4471,7 @@ let pointer_free_payload(e: *Emitter, te: ast.TypeExpr): bool = {
         let n = path[len(path) - 1]
         if !strings.eq_raw(primitive_c_name(n), "") { return !strings.eq_raw(n, "string") }
         if map.contains(&e.c_enum_decls, n) { return true }
-        // A nullary value enum is a bare tag with no pointers. It
-        // is already in value_enums when this runs, since nullary
-        // classification happens during register_variants.
-        if map.contains(&e.value_enums, n) { return true }
+        if enum_is_nullary_only(e, n) { return true }
         false
     }
     }
@@ -4398,17 +4485,19 @@ let variants_pointer_free(e: *Emitter, variants: Vec<ast.VariantDecl>): bool = {
     true
 }
 
-// Classify non-recursive enums with pointer-free payloads as value
-// types, beyond the nullary set already recorded in
-// register_variants. Generic instances are classified per
-// instantiation by their mangled name, since `Option<i64>` is a
-// value type while `Option<string>` is not.
+// Classify every non-recursive enum as a value type. Recursion is the
+// only condition that forces boxing. A value enum whose payload carries
+// a managed pointer is also recorded in value_ptr_enums, so an object
+// that embeds it inline can fall back to a conservative descriptor.
+// Generic instances are classified per instantiation by their mangled
+// name, since Option<i64> holds no pointer while Option<string> does.
 let classify_value_enums(e: *Emitter, f: ast.File) = {
     let rec = recur.recursive_adts(f)
     for d in f.decls {
         if let DEnum(_, name, params, variants) = d {
             if len(params) == 0 && !map.contains(&rec, name) {
-                if variants_pointer_free(e, variants) { e.value_enums[name] = true }
+                e.value_enums[name] = true
+                if !variants_pointer_free(e, variants) { e.value_ptr_enums[name] = true }
             }
         }
     }
@@ -4424,7 +4513,8 @@ let classify_value_enums(e: *Emitter, f: ast.File) = {
                         for sf in v.named { vec.push(&nn, ast.StructField { name: sf.name, ty: substitute_type(e, sf.ty, params, inst.args) }) }
                         vec.push(&subst, ast.VariantDecl { span: v.span, name: v.name, kind: v.kind, pos: np, named: nn })
                     }
-                    if variants_pointer_free(e, subst) { e.value_enums[inst.mangled] = true }
+                    e.value_enums[inst.mangled] = true
+                    if !variants_pointer_free(e, subst) { e.value_ptr_enums[inst.mangled] = true }
                 }
             }
         }
@@ -4589,6 +4679,68 @@ let emit_variant_ctor(e: *Emitter, enum_name: string, v: ast.VariantDecl) = {
     push(e, "    return p;\n}\n\n")
 }
 
+// True when this field type, stored inline in a precisely described
+// object, embeds a value enum that carries a managed pointer. The
+// pointer sits at a tag-dependent offset, so the containing object
+// cannot describe it with a fixed offset table and must use a
+// conservative descriptor. Inline records and tuples are walked, since
+// they may embed such a value enum.
+let field_forces_conservative(e: *Emitter, te: ast.TypeExpr): bool = {
+    match te {
+    | TETuple(_, elems) -> {
+        for x in elems { if field_forces_conservative(e, x) { return true } }
+        false
+    }
+    | TENamed(_, path, args) -> {
+        if len(path) == 0 { return false }
+        let n = path[len(path) - 1]
+        let vk = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+        if map.contains(&e.value_ptr_enums, vk) { return true }
+        if len(args) == 0 {
+            if let Some(d) = map.get(&e.struct_decls, n) {
+                if let DStruct(_, _, params, fields) = d {
+                    if len(params) == 0 {
+                        for fld in fields {
+                            if field_forces_conservative(e, fld.ty) { return true }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    // TEPtr, TEUnit, and TEFn embed no value enum inline: a pointer is
+    // described at a fixed offset, and unit and function values carry
+    // no inline aggregate.
+    | _ -> false
+    }
+}
+
+// True when any field of a record forces a conservative descriptor.
+let fields_force_conservative(e: *Emitter, fields: Vec<ast.StructField>): bool = {
+    for f in fields {
+        if field_forces_conservative(e, f.ty) { return true }
+    }
+    false
+}
+
+// True when any variant payload of an enum forces a conservative
+// descriptor on the enum's own heap representation.
+let variants_force_conservative(e: *Emitter, variants: Vec<ast.VariantDecl>): bool = {
+    for v in variants {
+        for pt in v.pos { if field_forces_conservative(e, pt) { return true } }
+        for sf in v.named { if field_forces_conservative(e, sf.ty) { return true } }
+    }
+    false
+}
+
+// Emit a conservative descriptor: the collector scans every word of the
+// allocation for candidate pointers. It never frees a live object, so
+// it is safe wherever a precise offset table cannot be formed.
+let emit_conservative_desc(e: *Emitter, name: string, sizeof_expr: string) = {
+    push(e, `static const qoz_type_desc qoz_{name}_desc = {{ QOZ_DESC_CONSERVATIVE, (int32_t){sizeof_expr}, 0, NULL, 0, 0, 0, NULL, \"{name}\" }};\n\n`)
+}
+
 // True when a field of the given TypeExpr is a managed pointer in C.
 // Step 2 minimal scope: direct pointer fields and ADT references. String,
 // Vec, and Map fields will be added once those types' internal pointer
@@ -4611,10 +4763,14 @@ let collect_field_ptr_offsets(e: *Emitter, parent: string, field: string, te: as
         if len(path) >= 1 {
             let n = path[len(path) - 1]
             if map.contains(&e.is_enum, n) {
-                // A value enum is stored inline. Nullary value
-                // enums carry no pointers, so they contribute no
-                // managed-pointer slot to the parent's descriptor.
-                if map.contains(&e.value_enums, n) { return }
+                // A pointer-free value enum is stored inline and
+                // carries no managed pointer, so it adds no slot. A
+                // pointer-bearing value enum forces the whole object
+                // conservative before this runs, so any value enum
+                // reaching here is pointer-free. The key is the mangled
+                // name for a generic instance.
+                let vk = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+                if map.contains(&e.value_enums, vk) { return }
                 vec.push(out, strings.cat("(int32_t)", base))
                 return
             }
@@ -4668,6 +4824,10 @@ let collect_field_ptr_offsets(e: *Emitter, parent: string, field: string, te: as
 }
 
 let emit_record_desc(e: *Emitter, name: string, fields: Vec<ast.StructField>) = {
+    if fields_force_conservative(e, fields) {
+        emit_conservative_desc(e, name, strings.cat("sizeof(struct qoz_", strings.cat(name, ")")))
+        return
+    }
     let parent = strings.cat("struct qoz_", name)
     var offsets: Vec<string> = vec.make()
     for f in fields {
@@ -4717,6 +4877,10 @@ let collect_variant_ptr_offsets(e: *Emitter, enum_name: string, v: ast.VariantDe
 
 // Emit an ADT descriptor with per-variant pointer-offset tables.
 let emit_adt_desc(e: *Emitter, name: string, variants: Vec<ast.VariantDecl>) = {
+    if variants_force_conservative(e, variants) {
+        emit_conservative_desc(e, name, strings.cat("sizeof(struct qoz_", strings.cat(name, ")")))
+        return
+    }
     // Per-variant offset arrays for positional payloads. Named-field
     // payloads share the `f<n>` slot convention since the variant's
     // payload struct mirrors the declared field order. Named-field
@@ -4834,6 +4998,22 @@ let emit_field_hash_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
             }
         }
     }
+    | TETuple(_, elems) -> {
+        if len(elems) == 0 { push(e, "0"); return }
+        push(e, "(")
+        var i: i64 = 0
+        for el in elems {
+            if i > 0 { push(e, " * 31 + ") }
+            push(e, "(uint64_t)(")
+            emit_field_hash_expr(e, el, strings.cat(fname, strings.cat("._", int_to_string(i))))
+            push(e, ")")
+            i += 1
+        }
+        push(e, ")")
+        return
+    }
+    // TEPtr, TEUnit, and TEFn fall through to the scalar hash below,
+    // folding the pointer or scalar bit pattern directly.
     | _ -> { }
     }
     push(e, `v.{fname}`)
@@ -4867,6 +5047,21 @@ let emit_field_eq_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
             }
         }
     }
+    | TETuple(_, elems) -> {
+        if len(elems) == 0 { push(e, "true"); return }
+        push(e, "(")
+        var i: i64 = 0
+        for el in elems {
+            if i > 0 { push(e, " && ") }
+            emit_field_eq_expr(e, el, strings.cat(fname, strings.cat("._", int_to_string(i))))
+            i += 1
+        }
+        push(e, ")")
+        return
+    }
+    // TEPtr, TEUnit, and TEFn fall through to the scalar comparison
+    // below. A pointer payload compares by identity, a unit carries no
+    // data, and a function value compares its code pointer.
     | _ -> { }
     }
     push(e, `a.{fname} == b.{fname}`)

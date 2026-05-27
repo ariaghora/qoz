@@ -1,0 +1,87 @@
+// expect: 0
+// A3 regression: pointer-holding value enums. Tok carries a string, so
+// it is non-recursive and represented by value, with the string pointer
+// stored inline. Tree is recursive and therefore boxed; a Leaf embeds a
+// Tok by value, so the Tree allocation holds a string pointer at a
+// tag-dependent offset and uses a conservative descriptor. The test
+// builds many boxed trees that own inline strings, allocates throwaway
+// strings to force a garbage collection, then reads the owned strings
+// back. A string that does not round-trip means the inline pointer was
+// not traced. Also exercises match, the ? operator, interpolation,
+// nested patterns, and a catch-all bind on the value enum.
+
+import fmt
+import strings
+
+type Tok =
+    | Word(string)
+    | Punct(string, i64)
+    | Eof
+
+type Tree =
+    | Leaf(Tok)
+    | Node(Tree, Tree)
+
+let show_tok(t: Tok): string =
+    match t {
+    | Word(s)     -> `word:{s}`
+    | Punct(p, n) -> `punct:{p}:{n}`
+    | Eof         -> "eof"
+    }
+
+let leaf_word(t: Tree): Result<string, string> =
+    match t {
+    | Leaf(Word(s)) -> Ok(s)
+    // Every other shape (a Node, or a Leaf holding Punct or Eof) has no
+    // word to return, so the catch-all reports the absence.
+    | other         -> Err("no word")
+    }
+
+let unwrap(t: Tree): Result<string, string> = {
+    let w = leaf_word(t)?
+    Ok(`got:{w}`)
+}
+
+let main(): i64 = {
+    var trees: Vec<Tree> = vec.make()
+    var i: i64 = 0
+    while i < 8000 {
+        let s = `tok{i}`
+        let pair = Node(Leaf(Word(s)), Leaf(Eof))
+        vec.push(&trees, pair)
+        i += 1
+    }
+    // Throwaway allocation pushes the live heap past the collector's
+    // threshold while `trees` and the inline string pointers inside each
+    // boxed Leaf stay reachable.
+    var k: i64 = 0
+    while k < 60000 {
+        let junk = `junk{k}-{k * 7}`
+        if len(junk) == 0 { return 99 }
+        k += 1
+    }
+
+    var bad: i64 = 0
+    var j: i64 = 0
+    while j < len(trees) {
+        let pair = trees[j]
+        match pair {
+        | Node(l, _) -> {
+            match unwrap(l) {
+            | Ok(g)  -> { if !strings.eq_raw(g, `got:tok{j}`) { bad += 1 } }
+            // A word leaf must succeed; an Err here means the inline
+            // string pointer was collected, so it is a real failure.
+            | Err(_) -> { bad += 1 }
+            }
+            let d = show_tok(Word(`x{j}`))
+            if len(d) == 0 { bad += 1 }
+        }
+        // Every stored tree is a Node by construction, so a Leaf at the
+        // top level signals a corrupted Vec read.
+        | Leaf(_) -> { bad += 1 }
+        }
+        j += 1
+    }
+    fmt.println(`checked={len(trees)} bad={bad}`)
+    bad
+}
