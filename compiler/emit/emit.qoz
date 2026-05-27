@@ -562,6 +562,7 @@ let walk_expr_for_types(e: *Emitter, ex: ast.Expr) = {
         register_container_lit(e, lit_te)
     }
     | ENew(_, inner) -> walk_expr_for_types(e, *inner)
+    | ENewType(_, t) -> walk_typeexpr(e, t)
     | EClosure(_, _, _, body) -> walk_expr_for_types(e, *body)
     | _ -> { }
     }
@@ -1036,6 +1037,7 @@ let substitute_expr(e: *Emitter, x: ast.Expr, params: Vec<string>, args: Vec<ast
         EMapLit(sp, nk, nv, substitute_type(e, lit_te, params, args))
     }
     | ENew(sp, inner) -> ENew(sp, new_clone(substitute_expr(e, *inner, params, args)))
+    | ENewType(sp, t) -> ENewType(sp, substitute_type(e, t, params, args))
     }
 }
 
@@ -1357,6 +1359,8 @@ let collect_closure_captures(e: *Emitter, ex: ast.Expr, sc: *CaptureScope, out: 
     | EArrayLit(_, elems, _)             -> { for el in elems { collect_closure_captures(e, el, sc, out) } }
     | EMapLit(_, keys, values, _)        -> { for k in keys { collect_closure_captures(e, k, sc, out) } for v in values { collect_closure_captures(e, v, sc, out) } }
     | ENew(_, inner)                  -> collect_closure_captures(e, *inner, sc, out)
+    // new(T) holds only a type, no sub-expression to capture from.
+    | ENewType(_, _)                  -> { }
     | ERecord(_, _, fields)           -> { for fl in fields { collect_closure_captures(e, fl.value, sc, out) } }
     | EClosure(_, _, _, _) -> { }
     | EBlock(_, stmts, tail) -> {
@@ -1602,6 +1606,26 @@ let ensure_new_clone_helper(e: *Emitter, te: ast.TypeExpr) = {
     let desc = new_desc_expr(e, te)
     vec.push(&e.synth_fn_decls, `static {ct}* qoz_new_clone__{key}({ct} v);\n`)
     vec.push(&e.synth_fn_defs, `static {ct}* qoz_new_clone__{key}({ct} v) {{ {ct}* p = ({ct}*)qoz_gc_alloc(sizeof({ct}), {desc}); *p = v; return p; }}\n`)
+}
+
+// Emit, once per type, a helper that heap-allocates a zero-initialised
+// value and returns the pointer. `new(T)` lowers to a call to it.
+let ensure_new_type_helper(e: *Emitter, te: ast.TypeExpr) = {
+    let key = mangle_type(e, te)
+    if map.contains(&e.byval_helpers_emitted, strings.cat("new_type_", key)) { return }
+    e.byval_helpers_emitted[strings.cat("new_type_", key)] = true
+    let ct = c_type_for(e, te)
+    let desc = new_desc_expr(e, te)
+    vec.push(&e.synth_fn_decls, `static {ct}* qoz_new__{key}(void);\n`)
+    vec.push(&e.synth_fn_defs, `static {ct}* qoz_new__{key}(void) {{ {ct}* p = ({ct}*)qoz_gc_alloc(sizeof({ct}), {desc}); *p = ({ct}){{0}}; return p; }}\n`)
+}
+
+// Lower `new(T)` to a call to the per-type zero-allocation helper.
+let emit_new_type(e: *Emitter, sp: ast.Span, te: ast.TypeExpr) = {
+    walk_typeexpr(e, te)
+    ensure_new_type_helper(e, te)
+    let key = mangle_type(e, te)
+    push(e, `qoz_new__{key}()`)
 }
 
 // Lower `new_clone(<inner>)` to a call to the per-type clone helper.
@@ -1931,6 +1955,7 @@ let emit_expr(e: *Emitter, ex: ast.Expr) = {
     | EArrayLit(sp, elems, _)         -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(ex, TEUnit(sp)))
     | EMapLit(sp, keys, values, _) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(ex, TEUnit(sp)))
     | ENew(sp, inner) -> emit_new_clone(e, sp, *inner)
+    | ENewType(sp, t) -> emit_new_type(e, sp, t)
     }
 }
 
@@ -2084,7 +2109,7 @@ let span_of_expr(e: ast.Expr): ast.Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ENewType(sp, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)
@@ -2362,6 +2387,7 @@ let infer_value_te(e: *Emitter, v: ast.Expr): ast.TypeExpr = {
         TENamed(sp, path, args)
     }
     | ENew(sp, inner) -> TEPtr(sp, new_clone(infer_value_te(e, *inner)))
+    | ENewType(sp, t) -> TEPtr(sp, new_clone(t))
     // Statement-shape expressions have no value type. They occur in
     // value position when an outer block ends with one. The inferred
     // type is unit and the emitter renders them as statements with a
@@ -5412,6 +5438,7 @@ let emit_value_with_hint(e: *Emitter, value: ast.Expr, hint: ast.TypeExpr) = {
     | EArrayLit(sp, elems, _) -> emit_array_lit_with_hint(e, sp, elems, lit_recorded_hint(value, hint))
     | EMapLit(sp, keys, values, _) -> emit_map_lit_using(e, sp, keys, values, lit_recorded_hint(value, hint))
     | ENew(sp, inner) -> emit_new_clone(e, sp, *inner)
+    | ENewType(sp, t) -> emit_new_type(e, sp, t)
     | EField(_, base, name) -> {
         // `Enum.Variant` in value position with a known type hint
         // (e.g. `let a: Option<i32> = Option.None`) emits the mangled

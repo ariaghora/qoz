@@ -132,6 +132,10 @@ type Expr =
     // current stack frame. (`new` is reserved for future type
     // construction; this node is the value-clone form.)
     | ENew(Span, *Expr)
+    // Heap construction: `new(T)` allocates a zero-initialised value of
+    // type T on the heap and yields a `*T`. The counterpart to
+    // new_clone, which clones an existing value.
+    | ENewType(Span, TypeExpr)
 
 type Stmt =
     | SLet(Span, string, TypeExpr, Expr)
@@ -210,7 +214,7 @@ let span_of_expr(e: Expr): Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ENewType(sp, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)

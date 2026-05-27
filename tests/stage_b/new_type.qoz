@@ -1,0 +1,26 @@
+// expect: 0
+// `new(T)` heap-allocates a zero-initialised value of type T and yields
+// a *T, the counterpart to new_clone(value). The allocation is mutable
+// through the returned pointer. Works for records, primitives, and
+// generic instantiations (monomorphised like any generic).
+
+import fmt
+
+type Point = { x: i64, y: i64 }
+type Box<T> = { value: T }
+
+let main(): i64 = {
+    let p: *Point = new(Point)
+    let n: *i64 = new(i64)
+    let b: *Box<i64> = new(Box<i64>)
+    var bad: i64 = 0
+    if p.x != 0 || p.y != 0 { bad += 1 }
+    let nv = *n
+    if nv != 0 { bad += 1 }
+    if b.value != 0 { bad += 1 }
+    p.x = 7
+    b.value = 42
+    if p.x != 7 || b.value != 42 { bad += 1 }
+    fmt.println(`p=({p.x}, {p.y}) b={b.value} bad={bad}`)
+    bad
+}

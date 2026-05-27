@@ -245,6 +245,7 @@ let rewrite_ident_refs(e: ast.Expr, pkg: string, local_fns: Map<string, bool>): 
         EMapLit(sp, nk, nv, lit_te)
     }
     | ENew(sp, inner) -> ENew(sp, new_clone(rewrite_ident_refs(*inner, pkg, local_fns)))
+    | ENewType(sp, t) -> ENewType(sp, t)
     }
 }
 
@@ -739,6 +740,7 @@ let qualify_expr(e: ast.Expr, pkg: string, ctx: *QualifyCtx): ast.Expr = {
         EMapLit(sp, nk, nv, qualify_te(lit_te, pkg, ctx))
     }
     | ENew(sp, inner) -> ENew(sp, new_clone(qualify_expr(*inner, pkg, ctx)))
+    | ENewType(sp, t) -> ENewType(sp, qualify_te(t, pkg, ctx))
     }
 }
 

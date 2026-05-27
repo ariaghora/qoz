@@ -417,6 +417,13 @@ let parse_unary(p: *Parser): ast.Expr = {
         expect_punct(p, ")")
         return ENew(span, new_clone(inner))
     }
+    if is_kw(tok, "new") {
+        advance(p)
+        expect_punct(p, "(")
+        let t = parse_type(p)
+        expect_punct(p, ")")
+        return ENewType(span, t)
+    }
     parse_postfix(p)
 }
 

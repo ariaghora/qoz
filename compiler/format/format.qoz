@@ -734,6 +734,11 @@ let print_expr(p: *Printer, e: ast.Expr) = {
         print_expr(p, *inner)
         p_emit(p, ")")
     }
+    | ENewType(_, t) -> {
+        p_emit(p, "new(")
+        print_te(p, t)
+        p_emit(p, ")")
+    }
     }
 }
 
