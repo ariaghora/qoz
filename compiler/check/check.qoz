@@ -2651,9 +2651,13 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         for el in elems { vec.push(&ne, infer_calls_expr(tc, env, el, elem_expected)) }
         let node = EArrayLit(sp, ne)
         // Record the expected Vec type so emit resolves the element type
-        // from context, including for an empty `[]`.
+        // from context, including for an empty `[]`. Write expr_types
+        // directly too, since synth does not revisit every node (a
+        // function's expression-body record fields, for one).
         if !ty.ty_is_error(elem_expected) {
-            tc.literal_hints[expr_id(node)] = ty.ty_to_type_expr_at(expected, sp)
+            let rte = ty.ty_to_type_expr_at(expected, sp)
+            tc.literal_hints[expr_id(node)] = rte
+            tc.expr_types[expr_id(node)] = rte
         }
         node
     }
@@ -2674,8 +2678,13 @@ let infer_calls_expr(tc: *check.TyContext, env: *Env, e: ast.Expr, expected: ty.
         for v in values { vec.push(&nv, infer_calls_expr(tc, env, v, vexp)) }
         let node = EMapLit(sp, nk, nv)
         // Record the expected Map type so emit resolves key/value types
-        // from context, including for an empty `[:]`.
-        if is_map { tc.literal_hints[expr_id(node)] = ty.ty_to_type_expr_at(expected, sp) }
+        // from context, including for an empty `[:]`. Write expr_types
+        // directly too, since synth does not revisit every node.
+        if is_map {
+            let rte = ty.ty_to_type_expr_at(expected, sp)
+            tc.literal_hints[expr_id(node)] = rte
+            tc.expr_types[expr_id(node)] = rte
+        }
         node
     }
     }
