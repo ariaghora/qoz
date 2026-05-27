@@ -792,7 +792,11 @@ let render_show_body_adt(e: *Emitter, bare: string, mangled: string, args: Vec<a
         match d {
         | DEnum(_, _, tparams, variants) -> {
             var body = ""
-            body = strings.cat(body, `switch (v->tag) {{\n`)
+            // A value enum's show fn receives the struct by value,
+            // so it accesses tag and payload with `.`. A boxed enum
+            // receives a pointer and uses `->`.
+            let acc = if map.contains(&e.value_enums, case_prefix) { "." } else { "->" }
+            body = strings.cat(body, `switch (v{acc}tag) {{\n`)
             for vd in variants {
                 let vname = vd.name
                 body = strings.cat(body, `case qoz_{case_prefix}_{vname}: {{\n`)
@@ -807,7 +811,7 @@ let render_show_body_adt(e: *Emitter, bare: string, mangled: string, args: Vec<a
                             substitute_type(e, pte, tparams, inst_args)
                         } else { pte }
                         let pstr = int_to_string(pi)
-                        let access = `v->payload.{vname}.f{pstr}`
+                        let access = `v{acc}payload.{vname}.f{pstr}`
                         body = emit_show_push(e, body, access, sub_te)
                         pi += 1
                     }
@@ -1309,9 +1313,11 @@ let c_type_for_named_with_args(e: *Emitter, path: Vec<string>, args: Vec<ast.Typ
     }
     // A value ADT is stored inline, so its C representation is the
     // struct itself. A boxed ADT is heap-allocated and represented
-    // as a pointer.
+    // as a pointer. Value-ness is per-instantiation, so the lookup
+    // key is the mangled name when type arguments are present.
     if map.contains(&e.is_enum, n) {
-        if map.contains(&e.value_enums, n) { return base }
+        let vkey = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+        if map.contains(&e.value_enums, vkey) { return base }
         return strings.cat(base, "*")
     }
     base
@@ -1413,8 +1419,17 @@ let emit_try(e: *Emitter, sp: ast.Span, value: ast.Expr) = {
     // qoz_gc_shadow_set_top(_g); return MAKE_ERR; }` as prologue,
     // then emit `tmp->payload.Ok.f0` in expression position.
     let start = strings.sb_len(&e.out)
-    push(e, `qoz_{inner_mangle}* {tmp} = `)
-    emit_expr(e, value)
+    // A value Result is materialized into a local whose address
+    // drives the tag test and payload reads, so the `->` access
+    // works the same as for a boxed Result.
+    if map.contains(&e.value_enums, inner_mangle) {
+        push(e, `qoz_{inner_mangle} {tmp}_v = `)
+        emit_expr(e, value)
+        push(e, `; qoz_{inner_mangle}* {tmp} = &{tmp}_v`)
+    } else {
+        push(e, `qoz_{inner_mangle}* {tmp} = `)
+        emit_expr(e, value)
+    }
     let crr = e.current_return_restore
     push(e, `; if ({tmp}->tag == qoz_{inner_mangle}_Err) {{ {crr}return qoz_make_{outer_mangle}_Err({tmp}->payload.Err.f0); }} `)
     hoist_to_prologue(e, start)
@@ -3657,19 +3672,19 @@ let emit_binary(e: *Emitter, op: ast.BinaryOp, lhs: ast.Expr, rhs: ast.Expr) = {
             }
         }
     }
-    // A value enum compares by tag. C rejects `==` on struct
-    // values, so the comparison reads the tag field of each side.
-    // Nullary value enums have no payload, so the tag is the whole
-    // value.
+    // A value enum compares through its generated structural
+    // equality. C rejects `==` on struct values, and a payload
+    // variant needs its fields compared, so the comparison calls
+    // qoz_eq_<Enum> rather than reading the tag alone.
     let lname = value_enum_name_of_ctype(e, lct)
     if !strings.eq_raw(lname, "") {
         match op {
         | BOpEq -> {
-            push(e, "(("); emit_expr(e, lhs); push(e, ").tag == ("); emit_expr(e, rhs); push(e, ").tag)")
+            push(e, `qoz_eq_{lname}(`); emit_expr(e, lhs); push(e, ", "); emit_expr(e, rhs); push(e, ")")
             return
         }
         | BOpNe -> {
-            push(e, "(("); emit_expr(e, lhs); push(e, ").tag != ("); emit_expr(e, rhs); push(e, ").tag)")
+            push(e, `!qoz_eq_{lname}(`); emit_expr(e, lhs); push(e, ", "); emit_expr(e, rhs); push(e, ")")
             return
         }
         // Only == and != compare value enums. Ordering and
@@ -4097,6 +4112,7 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
     register_variants(&e, f)
     register_generics(&e, f)
     collect_type_instantiations(&e, f)
+    classify_value_enums(&e, f)
     push(&e, "/* embedded runtime: gc.h */\n")
     push(&e, strip_runtime_includes(#load_string("runtime/gc.h")))
     push(&e, "\n/* embedded runtime: qoz_runtime.h */\n")
@@ -4346,6 +4362,75 @@ let emit_program(f: ast.File, expr_types: Map<i64, ast.TypeExpr>): string = {
     render(&e)
 }
 
+// A payload type that carries no managed pointer, so a value enum
+// containing only such payloads needs no GC tracing. Scalars
+// (numeric, bool, char), C-style enums, the unit type, nullary
+// value enums, and tuples of pointer-free types qualify. `string`
+// is excluded: it carries data and root pointers.
+let pointer_free_payload(e: *Emitter, te: ast.TypeExpr): bool = {
+    match te {
+    | TEUnit(_)      -> true
+    | TEPtr(_, _)    -> false
+    | TEFn(_, _, _)  -> false
+    | TETuple(_, elems) -> {
+        for x in elems { if !pointer_free_payload(e, x) { return false } }
+        true
+    }
+    | TENamed(_, path, _) -> {
+        if len(path) == 0 { return false }
+        let n = path[len(path) - 1]
+        if !strings.eq_raw(primitive_c_name(n), "") { return !strings.eq_raw(n, "string") }
+        if map.contains(&e.c_enum_decls, n) { return true }
+        // A nullary value enum is a bare tag with no pointers. It
+        // is already in value_enums when this runs, since nullary
+        // classification happens during register_variants.
+        if map.contains(&e.value_enums, n) { return true }
+        false
+    }
+    }
+}
+
+let variants_pointer_free(e: *Emitter, variants: Vec<ast.VariantDecl>): bool = {
+    for v in variants {
+        for pt in v.pos { if !pointer_free_payload(e, pt) { return false } }
+        for sf in v.named { if !pointer_free_payload(e, sf.ty) { return false } }
+    }
+    true
+}
+
+// Classify non-recursive enums with pointer-free payloads as value
+// types, beyond the nullary set already recorded in
+// register_variants. Generic instances are classified per
+// instantiation by their mangled name, since `Option<i64>` is a
+// value type while `Option<string>` is not.
+let classify_value_enums(e: *Emitter, f: ast.File) = {
+    let rec = recur.recursive_adts(f)
+    for d in f.decls {
+        if let DEnum(_, name, params, variants) = d {
+            if len(params) == 0 && !map.contains(&rec, name) {
+                if variants_pointer_free(e, variants) { e.value_enums[name] = true }
+            }
+        }
+    }
+    for inst in e.enum_insts {
+        if !map.contains(&rec, inst.name) {
+            if let Some(decl) = map.get(&e.generic_decls, inst.name) {
+                if let DEnum(_, _, params, variants) = decl {
+                    var subst: Vec<ast.VariantDecl> = vec.make()
+                    for v in variants {
+                        var np: Vec<ast.TypeExpr> = vec.make()
+                        for pt in v.pos { vec.push(&np, substitute_type(e, pt, params, inst.args)) }
+                        var nn: Vec<ast.StructField> = vec.make()
+                        for sf in v.named { vec.push(&nn, ast.StructField { name: sf.name, ty: substitute_type(e, sf.ty, params, inst.args) }) }
+                        vec.push(&subst, ast.VariantDecl { span: v.span, name: v.name, kind: v.kind, pos: np, named: nn })
+                    }
+                    if variants_pointer_free(e, subst) { e.value_enums[inst.mangled] = true }
+                }
+            }
+        }
+    }
+}
+
 let emit_enum(e: *Emitter, name: string, variants: Vec<ast.VariantDecl>) = {
     push(e, "typedef enum {\n")
     var i: i64 = 0
@@ -4386,6 +4471,58 @@ let emit_enum(e: *Emitter, name: string, variants: Vec<ast.VariantDecl>) = {
     }
     push(e, "};\n\n")
     emit_adt_desc(e, name, variants)
+    // A value enum is non-recursive by construction, so structural
+    // equality and hashing terminate. Boxed ADTs get neither and
+    // must register @operator. Emitting these for value enums keeps
+    // them usable with `==` and as map keys, like records.
+    if map.contains(&e.value_enums, name) {
+        emit_value_enum_eq(e, name, variants)
+        emit_value_enum_hash(e, name, variants)
+    }
+}
+
+let emit_value_enum_eq(e: *Emitter, name: string, variants: Vec<ast.VariantDecl>) = {
+    push(e, `static bool qoz_eq_{name}(qoz_{name} a, qoz_{name} b) {{\n`)
+    push(e, "    if (a.tag != b.tag) { return false; }\n")
+    push(e, "    switch (a.tag) {\n")
+    for v in variants {
+        if variant_has_positional(v) {
+            push(e, `    case qoz_{name}_{v.name}: return `)
+            var i: i64 = 0
+            for pt in v.pos {
+                if i > 0 { push(e, " && ") }
+                emit_field_eq_expr(e, pt, `payload.{v.name}.f{int_to_string(i)}`)
+                i += 1
+            }
+            push(e, ";\n")
+        }
+    }
+    // Nullary variants carry no payload, so a matching tag is
+    // already full equality.
+    push(e, "    default: return true;\n")
+    push(e, "    }\n}\n\n")
+}
+
+let emit_value_enum_hash(e: *Emitter, name: string, variants: Vec<ast.VariantDecl>) = {
+    push(e, `static uint64_t qoz_hash_{name}(qoz_{name} v) {{\n`)
+    push(e, "    uint64_t h = (uint64_t)v.tag;\n")
+    push(e, "    switch (v.tag) {\n")
+    for v in variants {
+        if variant_has_positional(v) {
+            push(e, `    case qoz_{name}_{v.name}: `)
+            var i: i64 = 0
+            for pt in v.pos {
+                push(e, "h = h * 31 + (uint64_t)(")
+                emit_field_hash_expr(e, pt, `payload.{v.name}.f{int_to_string(i)}`)
+                push(e, "); ")
+                i += 1
+            }
+            push(e, "break;\n")
+        }
+    }
+    // Nullary variants contribute only their tag, already folded in.
+    push(e, "    default: break;\n")
+    push(e, "    }\n    return h;\n}\n\n")
 }
 
 let variant_has_positional(v: ast.VariantDecl): bool = len(v.pos) > 0
@@ -4398,9 +4535,29 @@ let emit_variant_ctor(e: *Emitter, enum_name: string, v: ast.VariantDecl) = {
     // allocation. Boxed enums are heap-allocated and returned as a
     // pointer the garbage collector tracks.
     if map.contains(&e.value_enums, enum_name) {
-        push(e, `static qoz_{enum_name} qoz_make_{enum_name}_{vn}(void) {\n`)
+        push(e, `static qoz_{enum_name} qoz_make_{enum_name}_{vn}`)
+        if !variant_has_positional(v) {
+            push(e, "(void) {\n")
+        } else {
+            push(e, "(")
+            var k: i64 = 0
+            for pt in v.pos {
+                if k > 0 { push(e, ", ") }
+                push(e, `{c_type_for(e, pt)} f{int_to_string(k)}`)
+                k += 1
+            }
+            push(e, ") {\n")
+        }
         push(e, `    qoz_{enum_name} p;\n`)
         push(e, `    p.tag = qoz_{enum_name}_{vn};\n`)
+        if variant_has_positional(v) {
+            var j: i64 = 0
+            for _ in v.pos {
+                let js = int_to_string(j)
+                push(e, `    p.payload.{vn}.f{js} = f{js};\n`)
+                j += 1
+            }
+        }
         push(e, "    return p;\n}\n\n")
         return
     }
@@ -4659,10 +4816,13 @@ let emit_field_hash_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
                 push(e, `(uint64_t)(v.{fname})`)
                 return
             }
-            // A value enum field is an inline struct whose tag is
-            // the whole value for the nullary case.
-            if map.contains(&e.value_enums, n) {
-                push(e, `(uint64_t)(v.{fname}.tag)`)
+            // A value enum field hashes through its generated
+            // structural hash, so a payload variant folds in its
+            // fields. The key is the mangled name for a generic
+            // instance.
+            let vk_h = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+            if map.contains(&e.value_enums, vk_h) {
+                push(e, `qoz_hash_{vk_h}(v.{fname})`)
                 return
             }
             if strings.eq_raw(primitive_c_name(n), "") {
@@ -4693,8 +4853,9 @@ let emit_field_eq_expr(e: *Emitter, te: ast.TypeExpr, fname: string) = {
                 push(e, `a.{fname} == b.{fname}`)
                 return
             }
-            if map.contains(&e.value_enums, n) {
-                push(e, `a.{fname}.tag == b.{fname}.tag`)
+            let vk_e = if len(args) > 0 { mangle_inst(e, n, args) } else { n }
+            if map.contains(&e.value_enums, vk_e) {
+                push(e, `qoz_eq_{vk_e}(a.{fname}, b.{fname})`)
                 return
             }
             if strings.eq_raw(primitive_c_name(n), "") {
@@ -5599,12 +5760,15 @@ let emit_pat_match_cond(e: *Emitter, p: ast.Pattern, value_expr: string, value_t
             let _ = emit_die(sp, "nested variant pattern on a scrutinee whose type is not an enum")
             return
         }
-        push(e, ` && {value_expr}->tag == qoz_{inner_enum}_{vname}`)
+        // A nested value enum is accessed by value with `.`; a
+        // boxed one through its pointer with `->`.
+        let acc = if map.contains(&e.value_enums, inner_enum) { "." } else { "->" }
+        push(e, ` && {value_expr}{acc}tag == qoz_{inner_enum}_{vname}`)
         var i: i64 = 0
         for spat in sub_pats {
             let sub_te = variant_payload_typeexpr(e, inner_enum, vname, i)
             let is = int_to_string(i)
-            let sub_expr = `{value_expr}->payload.{vname}.f{is}`
+            let sub_expr = `{value_expr}{acc}payload.{vname}.f{is}`
             emit_pat_match_cond(e, spat, sub_expr, sub_te)
             i += 1
         }
@@ -5637,11 +5801,14 @@ let emit_pat_bindings(e: *Emitter, p: ast.Pattern, value_expr: string, value_te:
             let _ = emit_die(sp, "nested variant pattern on a scrutinee whose type is not an enum")
             return
         }
+        // A nested value enum is accessed by value with `.`; a
+        // boxed one through its pointer with `->`.
+        let acc = if map.contains(&e.value_enums, inner_enum) { "." } else { "->" }
         var i: i64 = 0
         for spat in sub_pats {
             let sub_te = variant_payload_typeexpr(e, inner_enum, vname, i)
             let is = int_to_string(i)
-            let sub_expr = `{value_expr}->payload.{vname}.f{is}`
+            let sub_expr = `{value_expr}{acc}payload.{vname}.f{is}`
             emit_pat_bindings(e, spat, sub_expr, sub_te)
             i += 1
         }
@@ -5668,13 +5835,23 @@ let emit_match_as_if_chain(e: *Emitter, span: ast.Span, scrut: ast.Expr, arms: V
     let res_ctype = match_result_ctype_with_hint(e, enum_name, arms)
     let is_void = strings.eq_raw(res_ctype, "void")
     let start = strings.sb_len(&e.out)
-    if is_enum_match {
-        push(e, `qoz_{enum_name}* {scrut_tmp} = `)
+    // A value enum scrutinee is materialized into a local whose
+    // address feeds the if-chain, so the `{scrut_tmp}->tag` and
+    // payload access in each arm work the same for value and boxed
+    // enums.
+    if is_enum_match && map.contains(&e.value_enums, enum_name) {
+        push(e, `qoz_{enum_name} {scrut_tmp}_v = `)
+        emit_expr(e, scrut)
+        push(e, `; qoz_{enum_name}* {scrut_tmp} = &{scrut_tmp}_v; `)
     } else {
-        push(e, `{scrut_ctype} {scrut_tmp} = `)
+        if is_enum_match {
+            push(e, `qoz_{enum_name}* {scrut_tmp} = `)
+        } else {
+            push(e, `{scrut_ctype} {scrut_tmp} = `)
+        }
+        emit_expr(e, scrut)
+        push(e, "; ")
     }
-    emit_expr(e, scrut)
-    push(e, "; ")
     if !is_void {
         let dv = default_value_for(res_ctype)
         push(e, `{res_ctype} {res_tmp} = {dv}; `)

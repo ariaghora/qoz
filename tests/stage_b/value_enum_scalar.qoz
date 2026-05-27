@@ -1,0 +1,36 @@
+// expect: 0
+// A non-recursive enum with pointer-free scalar payloads is
+// represented by value. Exercises construction, match with payload
+// binding, structural ==, interpolation, and a nested value-enum
+// pattern, all of which the by-value path must handle.
+
+import fmt
+
+type Shape =
+    | Circle(f64)
+    | Rect(f64, f64)
+    | Origin
+
+type Inner = | I(i64)
+
+let area(s: Shape): f64 =
+    match s {
+    | Circle(r)  -> r * r * 3.0
+    | Rect(w, h) -> w * h
+    | Origin     -> 0.0
+    }
+
+let main(): i64 = {
+    let a = Circle(2.0)
+    let b = Circle(2.0)
+    let c = Rect(2.0, 3.0)
+    let eq_same = a == b
+    let eq_diff = a == c
+    let eq_var  = a == Origin
+    let opt: Option<i64> = Some(7)
+    let got = match opt { | Some(v) -> v | None -> -1 }
+    let r: Result<Inner, i64> = Ok(I(5))
+    let nested = match r { | Ok(I(v)) -> v | Ok(_) -> -1 | Err(e) -> e }
+    fmt.println(`area={area(c)} same={eq_same} diff={eq_diff} var={eq_var} got={got} nested={nested} c={c}`)
+    if eq_same && !eq_diff && !eq_var && got == 7 && nested == 5 && area(c) == 6.0 { 0 } else { 1 }
+}
