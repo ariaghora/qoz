@@ -180,6 +180,11 @@ type CompileIfArm = {
 
 type Decl =
     | DImport(Span, Vec<string>, string)
+    // The trailing string is the operator symbol from an
+    // @operator("<sym>") attribute, or empty for a plain function. It
+    // is the only attribute a function declaration carries: the parser
+    // routes @link_* attributes to DExternal, so nothing else lands
+    // here. emit keys op_dispatch on this symbol.
     | DFn(Span, string, Vec<string>, Vec<FnParam>, TypeExpr, Expr, string)
     | DStruct(Span, string, Vec<string>, Vec<StructField>)
     | DEnum(Span, string, Vec<string>, Vec<VariantDecl>)

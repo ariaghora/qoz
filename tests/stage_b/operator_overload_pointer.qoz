@@ -1,0 +1,28 @@
+// expect: 0
+// A generic @operator on a pointer type. The operands are already
+// pointers (&a, &b), so the call lowers to a direct monomorphised call
+// on the operator function rather than going through the value-operand
+// forwarder. Exercises operator overloading combined with generics.
+
+import fmt
+
+type Tensor<T> = {
+    value: T,
+    deps:  Vec<*Tensor<T>>,
+}
+
+@operator("+")
+let tensor_add<T>(a: *Tensor<T>, b: *Tensor<T>): *Tensor<T> = {
+    let res: Tensor<T> = Tensor { value: a.value + b.value, deps: [] }
+    new_clone(res)
+}
+
+let main(): i64 = {
+    let a: Tensor<f32> = Tensor { value: 1.5, deps: [] }
+    let b: Tensor<f32> = Tensor { value: 2.5, deps: [] }
+    let c = &a + &b
+    var bad: i64 = 0
+    if c.value < 3.9 || c.value > 4.1 { bad += 1 }
+    fmt.println(`sum={c.value} bad={bad}`)
+    bad
+}

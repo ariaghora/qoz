@@ -3794,26 +3794,36 @@ let emit_binary(e: *Emitter, op: ast.BinaryOp, lhs: ast.Expr, rhs: ast.Expr) = {
             }
             }
             if !strings.eq_raw(fn_name, "") {
-                let ct = c_type_for(e, lhs_te)
-                let ret_te = match map.get(&e.fn_returns, fn_name) {
-                | Some(t) -> t
-                | None    -> {
-                    let _ = emit_die(span_of_expr(lhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
-                    TEUnit(span_of_expr(lhs))
-                }
-                }
-                let ret_ct = c_type_for(e, ret_te)
-                ensure_byval_dispatch_helper(e, fn_name, ct, ret_ct)
-                // The user wrote `lhs OP rhs`. The operator is defined as
-                // a `let` taking `*T` parameters. Call the by-value
-                // forwarder so each argument lands in a stable local of
-                // the helper whose address can be passed through.
                 if negate { push(e, "!") }
-                push(e, `_qoz_byval_{fn_name}(`)
-                emit_expr(e, lhs)
-                push(e, ", ")
-                emit_expr(e, rhs)
-                push(e, ")")
+                // An operand that is already a pointer matches the
+                // operator's `*T` parameter directly, so call the
+                // operator without the address-taking forwarder. The
+                // forwarder exists only to give a value operand a stable
+                // local whose address can be passed.
+                let ptr_operand = match lhs_te { | TEPtr(_, _) -> true | _ -> false }
+                if ptr_operand {
+                    push(e, `{user_fn_c_name(fn_name)}(`)
+                    emit_expr(e, lhs)
+                    push(e, ", ")
+                    emit_expr(e, rhs)
+                    push(e, ")")
+                } else {
+                    let ct = c_type_for(e, lhs_te)
+                    let ret_te = match map.get(&e.fn_returns, fn_name) {
+                    | Some(t) -> t
+                    | None    -> {
+                        let _ = emit_die(span_of_expr(lhs), `operator '{op_text}' for '{tname}' has no recorded return type`)
+                        TEUnit(span_of_expr(lhs))
+                    }
+                    }
+                    let ret_ct = c_type_for(e, ret_te)
+                    ensure_byval_dispatch_helper(e, fn_name, ct, ret_ct)
+                    push(e, `_qoz_byval_{fn_name}(`)
+                    emit_expr(e, lhs)
+                    push(e, ", ")
+                    emit_expr(e, rhs)
+                    push(e, ")")
+                }
                 return
             }
         }

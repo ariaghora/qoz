@@ -1013,8 +1013,9 @@ let print_const(p: *Printer, name: string, te: ast.TypeExpr, val: ast.Expr) = {
 
 let print_fn(p: *Printer, name: string, tparams: Vec<string>, params: Vec<ast.FnParam>, ret: ast.TypeExpr, body: ast.Expr, attr: string) = {
     if !strings.eq_raw(attr, "") {
-        p_emit(p, "#")
-        p_emit(p, attr)
+        // A function's only attribute is the operator symbol from
+        // @operator("<sym>"); see ast.DFn. Render it back in that form.
+        p_emit(p, `@operator("{attr}")`)
         p_newline(p)
     }
     p_emit(p, "let ")

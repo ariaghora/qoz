@@ -66,6 +66,13 @@ type TyContext = {
     // the callee's TypeExprs again.
     fn_param_tys:  Map<string, Vec<ty.Ty>>,
     fn_ret_ty:     Map<string, ty.Ty>,
+    // @operator overloads, keyed "<op-symbol>::<TypeName>" -> fn name,
+    // where TypeName is the head name of the operator's first parameter
+    // type. synth_binary consults this so an overloaded operator on a
+    // non-numeric type (a record or a pointer to one) type-checks
+    // instead of being rejected by the built-in numeric rule. Mirrors
+    // emit's op_dispatch.
+    op_overloads:  Map<string, string>,
     // Maps each source file path to the package the file belongs
     // to. resolve_named reads this through the TypeExpr's span so a
     // bare reference is judged against the file the reference was
@@ -106,6 +113,7 @@ let make_ctx(): TyContext = TyContext {
     file_pkgs:    [:],
     errors:      [],
     type_params: [:],
+    op_overloads: [:],
     expected_hints: [],
     current_ret_ty: ty.ty_error_(),
 }
@@ -2051,10 +2059,97 @@ let fn_decl_value_type(tc: *TyContext, d: ast.Decl): ty.Ty = {
 // span pointing at the operator's expression. A propagated `TyError`
 // on either side short-circuits without raising a new diagnostic so
 // downstream noise stays low.
+// Head name of an operator's first parameter type, used to key the
+// overload registry. A pointer parameter (the common form, since an
+// operator takes *T) reduces to the pointee's name. Mirrors emit's
+// operator_first_param_type_name.
+let operator_first_param_type_name(te: ast.TypeExpr): string = {
+    match te {
+    | TEPtr(_, inner) -> {
+        match *inner {
+        | TENamed(_, path, _) -> if len(path) > 0 { path[len(path) - 1] } else { "" }
+        | _                   -> ""
+        }
+    }
+    | TENamed(_, path, _) -> if len(path) > 0 { path[len(path) - 1] } else { "" }
+    | _                   -> ""
+    }
+}
+
+// Head name of an operand's resolved type, matching the keying used at
+// registration. A pointer reduces to its pointee's name.
+let ty_head_name(t: ty.Ty): string = {
+    match t {
+    | TyPtr(inner)          -> ty_head_name(*inner)
+    | TyRecord(_, n, _)     -> n
+    | TyAdt(_, n, _)        -> n
+    | TyCEnum(_, n, _)      -> n
+    | _                     -> ""
+    }
+}
+
+// Source symbol for an overloadable binary operator. Empty for the
+// operators that cannot be overloaded (logical, range).
+let binop_symbol(op: ast.BinaryOp): string = {
+    match op {
+    | BOpAdd -> "+"  | BOpSub -> "-"  | BOpMul -> "*"  | BOpDiv -> "/"  | BOpMod -> "%"
+    | BOpEq  -> "==" | BOpNe  -> "!=" | BOpLt  -> "<"  | BOpGt  -> ">"  | BOpLe  -> "<=" | BOpGe -> ">="
+    // Logical, bitwise, shift, and range operators are not overloadable.
+    | _      -> ""
+    }
+}
+
+// Result type of an @operator overload for `op` on operand `lt`, when
+// one is registered for the operand's type. The overload is checked
+// like a call so a generic operator's return type is instantiated for
+// the operands.
+let operator_binary_result(tc: *TyContext, sp: ast.Span, op: ast.BinaryOp, lt: ty.Ty, rt: ty.Ty): Option<ty.Ty> = {
+    let sym = binop_symbol(op)
+    if strings.eq_raw(sym, "") { return None }
+    let tn = ty_head_name(lt)
+    if strings.eq_raw(tn, "") { return None }
+    if let Some(fn) = map.get(&tc.op_overloads, strings.cat(strings.cat(sym, "::"), tn)) {
+        if let Some(d) = map.get(&tc.fns, fn) {
+            // The operator takes its operands by reference. A value
+            // operand is addressed to match a pointer parameter (what
+            // emit's by-value forwarder does); an operand that is
+            // already a pointer matches directly.
+            let params = match map.get(&tc.fn_param_tys, fn) {
+            | Some(ps) -> ps
+            | None     -> []
+            }
+            var arg_tys: Vec<ty.Ty> = []
+            vec.push(&arg_tys, coerce_operand_to_param(lt, params, 0))
+            vec.push(&arg_tys, coerce_operand_to_param(rt, params, 1))
+            return Some(synth_call_with_decl(tc, sp, d, [], arg_tys))
+        }
+    }
+    None
+}
+
+// Address a value operand when the operator parameter at `idx` is a
+// pointer, leaving an already-pointer operand unchanged.
+let coerce_operand_to_param(operand: ty.Ty, params: Vec<ty.Ty>, idx: i64): ty.Ty = {
+    if idx >= len(params) { return operand }
+    match params[idx] {
+    | TyPtr(_) -> {
+        match operand {
+        | TyPtr(_) -> operand
+        | _        -> ty.ty_ptr_(operand)
+        }
+    }
+    | _ -> operand
+    }
+}
+
 let synth_binary(tc: *TyContext, env: *Env, sp: ast.Span, op: ast.BinaryOp, l: ast.Expr, r: ast.Expr): ty.Ty = {
     let lt = synth(tc, env, l)
     let rt = synth(tc, env, r)
     if ty.ty_is_error(lt) || ty.ty_is_error(rt) { return binary_result_default(op) }
+    // An @operator overload on the operand type takes precedence over
+    // the built-in lowering, so an operator on a record or a pointer
+    // type-checks instead of hitting the numeric / ordering rules.
+    if let Some(res) = operator_binary_result(tc, sp, op, lt, rt) { return res }
     match op {
     | BOpEq | BOpNe -> {
         if !ty.ty_assignable(lt, rt) && !ty.ty_assignable(rt, lt) {
@@ -2564,7 +2659,30 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): a
     }
     | EPath(_, _)             -> e
     | EUnary(sp, op, rhs)     -> EUnary(sp, op, new_clone(infer_calls_expr(tc, env, *rhs, ty.ty_error_())))
-    | EBinary(sp, op, l, r)   -> EBinary(sp, op, new_clone(infer_calls_expr(tc, env, *l, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *r, ty.ty_error_())))
+    | EBinary(sp, op, l, r)   -> {
+        let new_l = infer_calls_expr(tc, env, *l, ty.ty_error_())
+        let new_r = infer_calls_expr(tc, env, *r, ty.ty_error_())
+        // An overloaded operator whose operands are already pointers
+        // lowers to a direct call on the operator function, so a generic
+        // operator goes through the normal monomorphisation path. Value
+        // operands keep the EBinary form, where emit's by-value
+        // forwarder takes their address.
+        let sym = binop_symbol(op)
+        if !strings.eq_raw(sym, "") {
+            if let TyPtr(_) = synth(tc, env, new_l) {
+                let tn = ty_head_name(synth(tc, env, new_l))
+                if !strings.eq_raw(tn, "") {
+                    if let Some(fnname) = map.get(&tc.op_overloads, strings.cat(strings.cat(sym, "::"), tn)) {
+                        var cargs: Vec<ast.Expr> = []
+                        vec.push(&cargs, new_l)
+                        vec.push(&cargs, new_r)
+                        return rewrite_call(tc, env, sp, EIdent(sp, fnname), [], cargs, expected)
+                    }
+                }
+            }
+        }
+        EBinary(sp, op, new_clone(new_l), new_clone(new_r))
+    }
     | EAssign(sp, op, l, r)   -> {
         let new_l = infer_calls_expr(tc, env, *l, ty.ty_error_())
         let lhs_ty = synth(tc, env, *l)
@@ -2595,7 +2713,16 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): a
         let inferred_te = inferred_record_te(tc, env, sp, effective_te, nf)
         ERecord(sp, inferred_te, nf)
     }
-    | EClosure(sp, cps, ret, body) -> EClosure(sp, cps, ret, new_clone(infer_calls_expr(tc, env, *body, ty.ty_error_())))
+    | EClosure(sp, cps, ret, body) -> {
+        // Bind the closure parameters while rewriting the body so a synth
+        // inside the rewrite (operator-overload lowering) can resolve
+        // them. Restore the env afterwards.
+        let saved_len = len(env.bindings)
+        for cp in cps { env_define(env, cp.name, resolve_type(tc, cp.ty)) }
+        let new_body = infer_calls_expr(tc, env, *body, resolve_type(tc, ret))
+        env_truncate(env, saved_len)
+        EClosure(sp, cps, ret, new_clone(new_body))
+    }
     | EBlock(sp, stmts, tail) -> {
         var ns: Vec<ast.Stmt> = []
         for s in stmts { vec.push(&ns, infer_calls_stmt(tc, env, s)) }
@@ -3340,7 +3467,7 @@ let clear_type_params(tc: *TyContext) = {
 let validate_signatures(tc: *TyContext, f: ast.File) = {
     for d in f.decls {
         match d {
-        | DFn(_, name, tparams, params, ret, _, _) -> {
+        | DFn(_, name, tparams, params, ret, _, attr) -> {
             set_type_params(tc, tparams)
             var p_tys: Vec<ty.Ty> = []
             for pp in params {
@@ -3350,6 +3477,16 @@ let validate_signatures(tc: *TyContext, f: ast.File) = {
             map.set(&tc.fn_param_tys, name, p_tys)
             map.set(&tc.fn_ret_ty, name, r_ty)
             clear_type_params(tc)
+            // Register an @operator overload by its symbol and the head
+            // name of its first parameter type, mirroring emit.
+            if !strings.eq_raw(attr, "") {
+                if len(params) > 0 {
+                    let tn = operator_first_param_type_name(params[0].ty)
+                    if !strings.eq_raw(tn, "") {
+                        map.set(&tc.op_overloads, strings.cat(strings.cat(attr, "::"), tn), name)
+                    }
+                }
+            }
         }
         | DExternal(_, name, _, params, ret) -> {
             var p_tys: Vec<ty.Ty> = []
