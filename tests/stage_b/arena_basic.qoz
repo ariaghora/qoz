@@ -1,0 +1,51 @@
+// expect: 0
+// std/mem/arena: bump-allocate into a scoped buffer. The arena's
+// backing chunks are GC-managed, so arena allocations may hold GC
+// pointers; `reset` drops every allocation at once without paying the
+// GC walk; allocations made after a reset reuse the same chunks.
+
+import mem/arena
+import fmt
+
+type Point = { x: i64, y: i64 }
+
+let main(): i64 = {
+    var bad: i64 = 0
+    var a = arena.make()
+    defer arena.free(&a)
+
+    // 1000 allocations from one arena, then reset and 500 more.
+    var sum1: i64 = 0
+    var i: i64 = 0
+    while i < 1000 {
+        let p = arena.clone(&a, Point { x: i, y: i * 2 })
+        sum1 = sum1 + p.x + p.y
+        i += 1
+    }
+    // expected: sum(i for i in 0..1000) + sum(2i for i in 0..1000)
+    //         = 499500 + 999000 = 1498500
+    if sum1 != 1498500 { bad += 1 }
+
+    arena.reset(&a)
+    var sum2: i64 = 0
+    var j: i64 = 0
+    while j < 500 {
+        let p = arena.clone(&a, Point { x: j, y: 1 })
+        sum2 = sum2 + p.x + p.y
+        j += 1
+    }
+    // sum(j for j in 0..500) + 500 = 124750 + 500 = 125250
+    if sum2 != 125250 { bad += 1 }
+
+    // A second-arena scenario: allocations in `a` must not be disturbed
+    // by allocations into `b` made in parallel.
+    var b = arena.make()
+    defer arena.free(&b)
+    let p_a = arena.clone(&a, Point { x: 7, y: 8 })
+    let p_b = arena.clone(&b, Point { x: 70, y: 80 })
+    if p_a.x != 7 || p_a.y != 8 { bad += 1 }
+    if p_b.x != 70 || p_b.y != 80 { bad += 1 }
+
+    fmt.println(`sum1={sum1} sum2={sum2} bad={bad}`)
+    bad
+}

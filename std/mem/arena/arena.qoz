@@ -1,0 +1,121 @@
+// std/mem/arena: a scoped bump allocator on top of the GC heap.
+//
+// An arena gives O(1) allocation from a contiguous buffer and an O(1)
+// `reset` that drops every prior allocation at once. The backing
+// chunks are GC-managed, so an arena allocation may safely hold
+// pointers into GC memory: the collector traces the chunks
+// conservatively. The arena's memory itself is not freed
+// deterministically; `arena.free(&a)` drops the chunk references and
+// the GC reclaims them on its next collection. Use the arena when
+// you want batched per-frame or per-scope release that does not pay
+// the GC mark walk for the per-frame churn.
+//
+// Caveats:
+// - Pointers from arena memory outlive the arena only as long as the
+//   arena value itself is live. After `arena.free` or scope exit,
+//   prior arena pointers are dangling.
+// - `reset` does not zero recycled bytes. Use `new_clone` when the
+//   value matters; bytes from a previous bump cycle are visible
+//   otherwise.
+// - Containers (`Vec`, `Map`) still allocate through the GC. The
+//   arena is for plain records, primitives, and small ADT values
+//   allocated through `arena.new_clone`.
+
+import mem
+import vec
+
+let DEFAULT_CHUNK_BYTES: i64 = 65536    // 64 KiB
+
+type Arena = {
+    // Parallel vectors: chunk[i] points to a buffer of capacity sizes[i].
+    chunks: Vec<*u8>,
+    sizes:  Vec<i64>,
+    // Index of the chunk currently feeding allocations.
+    cur:    i64,
+    // Bytes consumed in chunks[cur].
+    used:   i64,
+}
+
+/// Create a new arena with one default-sized backing chunk.
+let make(): Arena = {
+    var a: Arena = Arena {}
+    grow(&a, DEFAULT_CHUNK_BYTES)
+    a
+}
+
+/// Drop every prior allocation. Backing chunks are kept for reuse,
+/// so the next round of allocations does no fresh `mem.calloc`.
+let reset(a: *Arena) = {
+    a.cur = 0
+    a.used = 0
+}
+
+/// Drop the arena's backing chunks. The GC reclaims them on its next
+/// collection. Any pointer obtained from this arena is dangling after
+/// this call.
+let free(a: *Arena) = {
+    a.chunks = []
+    a.sizes = []
+    a.cur = 0
+    a.used = 0
+}
+
+/// Allocate `size` bytes aligned to `align` (which must be a power of
+/// two) and return a `*u8` to the start of the allocation. Bytes are
+/// not zeroed; the caller writes a value.
+let raw_alloc(a: *Arena, size: i64, align: i64): *u8 = {
+    let aligned = align_up(a.used, align)
+    if aligned + size <= a.sizes[a.cur] {
+        let chunk = a.chunks[a.cur]
+        a.used = aligned + size
+        ptr_at(chunk, aligned)
+    } else {
+        advance_chunk(a, size)
+        let chunk = a.chunks[a.cur]
+        a.used = size
+        chunk
+    }
+}
+
+/// Heap-clone `v` into the arena and return a `*T`. The arena
+/// counterpart to the global `new_clone(value)`. The short name is
+/// mandated by `new_clone` being a reserved keyword.
+let clone<T>(a: *Arena, v: T): *T = {
+    let p = raw_alloc(a, size_of(T), 8) as *T
+    *p = v
+    p
+}
+
+// --- internals -----------------------------------------------------
+
+let grow(a: *Arena, cap: i64) = {
+    let buf = mem.calloc(cap) as *u8
+    vec.push(&a.chunks, buf)
+    vec.push(&a.sizes, cap)
+}
+
+let advance_chunk(a: *Arena, need: i64) = {
+    a.cur = a.cur + 1
+    let want = if need > DEFAULT_CHUNK_BYTES { need } else { DEFAULT_CHUNK_BYTES }
+    if a.cur >= len(a.chunks) {
+        grow(a, want)
+    } elif a.sizes[a.cur] < need {
+        // A recycled chunk too small for this request. Replace it in
+        // place; the prior buffer becomes GC-reclaimable.
+        let buf = mem.calloc(want) as *u8
+        a.chunks[a.cur] = buf
+        a.sizes[a.cur] = want
+    }
+}
+
+// `align` must be positive. Works for any positive value, not just a
+// power of two; Qoz has no bitwise NOT so the bit-trick form is out.
+let align_up(n: i64, align: i64): i64 = ((n + align - 1) / align) * align
+
+// Compute `chunk + off` as a `*u8`. The pattern matches strbuf and
+// std/strings: cast to i64, add, cast back. Qoz pointer arithmetic
+// is not a first-class operator.
+let ptr_at(chunk: *u8, off: i64): *u8 = {
+    let i = (chunk as *void) as i64 + off
+    i as *void as *u8
+}

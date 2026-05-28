@@ -449,6 +449,26 @@ let assign_op_text(op: ast.AssignOp): string = {
 
 // --- Patterns ---
 
+// Print the else branch of an EIf. A nested EIf collapses to `elif`
+// rather than `else if`, since Qoz rejects `else if` (the legacy form).
+let print_else_chain(p: *Printer, e: ast.Expr) = {
+    match e {
+    | EIf(_, c, t, f) -> {
+        p_emit(p, " elif ")
+        print_expr(p, *c)
+        p_emit(p, " ")
+        print_expr(p, *t)
+        print_else_chain(p, *f)
+    }
+    | _ -> {
+        if !is_unit_block(e) {
+            p_emit(p, " else ")
+            print_expr(p, e)
+        }
+    }
+    }
+}
+
 // True when `pat` is a plain binding of `name`, so a named-payload
 // field can print in its short form `{ name }` rather than `{ name: name }`.
 let pat_binds_name(pat: ast.Pattern, name: string): bool = {
@@ -689,10 +709,7 @@ let print_expr(p: *Printer, e: ast.Expr) = {
         print_expr(p, *c)
         p_emit(p, " ")
         print_expr(p, *t)
-        if !is_unit_block(*f) {
-            p_emit(p, " else ")
-            print_expr(p, *f)
-        }
+        print_else_chain(p, *f)
     }
     | EMatch(_, scrut, arms) -> print_match(p, *scrut, arms)
     | EWhile(_, c, body) -> {

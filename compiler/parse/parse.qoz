@@ -63,6 +63,13 @@ let is_ident(t: tokenize.Token): bool =
     | _        -> false
     }
 
+// True when the token is a reserved keyword, regardless of which one.
+let is_kw_token(t: tokenize.Token): bool =
+    match t.kind {
+    | TokKeyword -> true
+    | _          -> false
+    }
+
 let is_int_lit(t: tokenize.Token): bool =
     match t.kind {
     | TokInt -> true
@@ -610,7 +617,11 @@ let parse_postfix(p: *Parser): ast.Expr = {
         } elif is_punct(tok, ".") {
             advance(p)
             let name_tok = peek(p)
-            if is_ident(name_tok) {
+            // After a dot the next token names a field or a qualified
+            // function. A reserved keyword (e.g. `new_clone`) is a
+            // valid name here, since the keyword classification only
+            // applies in expression-start position.
+            if is_ident(name_tok) || is_kw_token(name_tok) {
                 advance(p)
                 e = EField(span, new_clone(e), name_tok.text)
             } else {
