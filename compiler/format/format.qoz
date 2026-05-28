@@ -431,7 +431,7 @@ let binary_op_text(op: ast.BinaryOp): string = {
     | BOpBitXor         -> "^"
     | BOpShl            -> "<<"
     | BOpShr            -> ">>"
-    | BOpRange          -> ".."
+    | BOpRange          -> "..<"
     | BOpRangeInclusive -> "..="
     }
 }
