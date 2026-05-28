@@ -1092,7 +1092,7 @@ let parse_atom(p: *Parser): ast.Expr = {
             record_error(p, `#load_string: cannot read '{raw_path}'`)
             return ENil(span)
         }
-        return EString(span, c_escape_bytes(bytes))
+        return ELoadString(span, raw_path, c_escape_bytes(bytes))
     }
     if is_int_lit(t) {
         advance(p)

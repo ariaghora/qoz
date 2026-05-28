@@ -182,9 +182,9 @@ let print_link(p: *Printer, kind: ast.LinkKind, target: string) = {
     | LinkFramework -> p_emit(p, "framework")
     | LinkPath      -> p_emit(p, "path")
     }
-    p_emit(p, " \"")
+    p_emit(p, "(\"")
     p_emit(p, target)
-    p_emit(p, "\"")
+    p_emit(p, "\")")
 }
 
 let print_type_alias(p: *Printer, name: string, tparams: Vec<string>, target: ast.TypeExpr) = {
@@ -781,6 +781,12 @@ let print_expr(p: *Printer, e: ast.Expr) = {
         p_emit(p, "new(")
         print_te(p, t)
         p_emit(p, ")")
+    }
+    | ELoadString(_, path, _) -> {
+        // Reprint the directive form, never the inlined file body.
+        p_emit(p, "#load_string(\"")
+        p_emit(p, path)
+        p_emit(p, "\")")
     }
     }
 }

@@ -140,6 +140,11 @@ type Expr =
     // type T on the heap and yields a `*T`. The counterpart to
     // new_clone, which clones an existing value.
     | ENewType(Span, TypeExpr)
+    // `#load_string("path")` inlined at parse time. `path` is the
+    // source-form argument (for the formatter to reprint the
+    // directive); `contents` is the file body as a C-escaped string
+    // literal, used by check and emit.
+    | ELoadString(Span, string, string)
 
 type Stmt =
     | SLet(Span, string, TypeExpr, Expr)
@@ -218,7 +223,7 @@ let span_of_expr(e: Expr): Span = {
     | ENil(sp)
     | EInt(sp, _) | EFloat(sp, _) | EString(sp, _) | EChar(sp, _) | EBool(sp, _)
     | EIdent(sp, _) | EPath(sp, _) | EReturn(sp, _) | EDefer(sp, _) | ESizeOf(sp, _)
-    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ENewType(sp, _) | ETry(sp, _) | ETuple(sp, _)
+    | EArrayLit(sp, _, _) | EMapLit(sp, _, _, _) | ENew(sp, _) | ENewType(sp, _) | ELoadString(sp, _, _) | ETry(sp, _) | ETuple(sp, _)
     | EUnary(sp, _, _) | EField(sp, _, _) | EIndex(sp, _, _) | ECast(sp, _, _)
     | ERecord(sp, _, _) | EBlock(sp, _, _) | EWhile(sp, _, _) | EMatch(sp, _, _)
     | EBinary(sp, _, _, _) | EAssign(sp, _, _, _) | ECall(sp, _, _, _)
