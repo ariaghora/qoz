@@ -404,6 +404,20 @@ let same_constructor_assignable(param: Ty, arg: Ty): bool = {
     | TyPtr(pi) -> {
         match arg { | TyPtr(ai) -> ty_assignable(*pi, *ai) | _ -> false }
     }
+    | TyTuple(pe) -> {
+        match arg {
+        | TyTuple(ae) -> {
+            if len(pe) != len(ae) { return false }
+            var i: i64 = 0
+            while i < len(pe) {
+                if !ty_assignable(pe[i], ae[i]) { return false }
+                i += 1
+            }
+            true
+        }
+        | _ -> false
+        }
+    }
     | _ -> false
     }
 }

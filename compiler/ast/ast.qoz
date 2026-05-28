@@ -150,6 +150,10 @@ type Stmt =
     | SLet(Span, string, TypeExpr, Expr)
     | SVar(Span, string, TypeExpr, Expr)
     | SExpr(Span, Expr)
+    // `let (a, b, ...) = expr`. Names may include "_" for ignored
+    // positions. The checker's rewrite pass desugars this into a
+    // SLet sequence; the formatter prints the source form.
+    | SLetTuple(Span, Vec<string>, Expr)
 
 type FnParam = {
     name: string,

@@ -565,6 +565,17 @@ let print_stmt(p: *Printer, s: ast.Stmt) = {
         print_expr(p, val)
     }
     | SExpr(_, e) -> print_expr(p, e)
+    | SLetTuple(_, names, val) -> {
+        p_emit(p, "let (")
+        var i: i64 = 0
+        for n in names {
+            if i > 0 { p_emit(p, ", ") }
+            p_emit(p, n)
+            i += 1
+        }
+        p_emit(p, ") = ")
+        print_expr(p, val)
+    }
     }
 }
 
@@ -866,7 +877,8 @@ let print_block(p: *Printer, stmts: Vec<ast.Stmt>, tail: ast.Expr) = {
 let stmt_end_line(s: ast.Stmt): i64 = {
     match s {
     | SLet(sp, _, _, val)
-    | SVar(sp, _, _, val) -> {
+    | SVar(sp, _, _, val)
+    | SLetTuple(sp, _, val) -> {
         let ve = expr_end_line(val)
         if ve > sp.line { ve } else { sp.line }
     }
@@ -886,8 +898,9 @@ let expr_end_line(e: ast.Expr): i64 = {
 let stmt_span(s: ast.Stmt): ast.Span = {
     match s {
     | SLet(sp, _, _, _)
-    | SVar(sp, _, _, _) -> sp
-    | SExpr(_, e)       -> ast.span_of_expr(e)
+    | SVar(sp, _, _, _)
+    | SLetTuple(sp, _, _) -> sp
+    | SExpr(_, e)         -> ast.span_of_expr(e)
     }
 }
 

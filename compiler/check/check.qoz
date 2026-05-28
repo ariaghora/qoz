@@ -2374,6 +2374,7 @@ let synth_block(tc: *TyContext, env: *Env, stmts: Vec<ast.Stmt>, tail: ast.Expr)
             check_binding_compat(tc, sp, te, bound, vt)
             env_define_var(env, name, bound, true)
         }
+        | SLetTuple(_, _, _) -> { } // already desugared by infer_calls
         | SExpr(sp, ex)           -> {
             let t = synth(tc, env, ex)
             // A discarded Result<T, E> is almost always a bug because
@@ -2911,7 +2912,31 @@ let infer_calls_expr(tc: *TyContext, env: *Env, e: ast.Expr, expected: ty.Ty): a
     }
     | EBlock(sp, stmts, tail) -> {
         var ns: Vec<ast.Stmt> = []
-        for s in stmts { vec.push(&ns, infer_calls_stmt(tc, env, s)) }
+        for s in stmts {
+            // Desugar `let (a, b, ...) = expr` here so downstream
+            // phases only see the underlying SLet sequence.
+            match s {
+            | SLetTuple(ssp, names, value) -> {
+                let new_value = infer_calls_expr(tc, env, value, ty.ty_error_())
+                let tmp = `_qoz_tup_{len(ns)}`
+                let value_ty = synth(tc, env, new_value)
+                env_define(env, tmp, value_ty)
+                vec.push(&ns, SLet(ssp, tmp, TEUnit(ssp), new_value))
+                var bi: i64 = 0
+                for bname in names {
+                    if !strings.eq_raw(bname, "_") {
+                        let field = `_{bi}`
+                        let fld: ast.Expr = EField(ssp, new_clone(EIdent(ssp, tmp)), field)
+                        let bty = synth(tc, env, fld)
+                        env_define(env, bname, bty)
+                        vec.push(&ns, SLet(ssp, bname, TEUnit(ssp), fld))
+                    }
+                    bi += 1
+                }
+            }
+            | _ -> vec.push(&ns, infer_calls_stmt(tc, env, s))
+            }
+        }
         EBlock(sp, ns, new_clone(infer_calls_expr(tc, env, *tail, expected)))
     }
     | EIf(sp, c, t, f) -> EIf(sp, new_clone(infer_calls_expr(tc, env, *c, ty.ty_error_())), new_clone(infer_calls_expr(tc, env, *t, expected)), new_clone(infer_calls_expr(tc, env, *f, expected)))
@@ -3023,6 +3048,9 @@ let infer_calls_stmt(tc: *TyContext, env: *Env, s: ast.Stmt): ast.Stmt = {
         SVar(sp, name, te, new_val)
     }
     | SExpr(sp, x) -> SExpr(sp, infer_calls_expr(tc, env, x, ty.ty_error_()))
+    // EBlock catches SLetTuple inline; reaching here means a stray
+    // destructure outside a block, which is currently unsupported.
+    | SLetTuple(sp, names, val) -> SLetTuple(sp, names, infer_calls_expr(tc, env, val, ty.ty_error_()))
     }
 }
 
@@ -3588,7 +3616,7 @@ let expr_has_return(e: ast.Expr): bool = {
 
 let stmt_has_return(s: ast.Stmt): bool = {
     match s {
-    | SLet(_, _, _, v) | SVar(_, _, _, v) | SExpr(_, v) -> expr_has_return(v)
+    | SLet(_, _, _, v) | SVar(_, _, _, v) | SExpr(_, v) | SLetTuple(_, _, v) -> expr_has_return(v)
     }
 }
 

@@ -1531,18 +1531,9 @@ let parse_block(p: *Parser): ast.Expr = {
                 expect_punct(p, ")")
                 expect_punct(p, "=")
                 let value = parse_expr(p)
-                let n = len(stmts)
-                let tmp = `_qoz_tup_{n}`
-                vec.push(&stmts, SLet(stmt_span, tmp, TEUnit(stmt_span), value))
-                var bi: i64 = 0
-                for bname in binds {
-                    if !strings.eq_raw(bname, "_") {
-                        let field = `_{bi}`
-                        let fld_expr: ast.Expr = EField(stmt_span, new_clone(EIdent(stmt_span, tmp)), field)
-                        vec.push(&stmts, SLet(stmt_span, bname, TEUnit(stmt_span), fld_expr))
-                    }
-                    bi += 1
-                }
+                // Preserve the source-form binding list. The checker
+                // rewrites this to a SLet sequence before emit.
+                vec.push(&stmts, SLetTuple(stmt_span, binds, value))
             } else {
                 let name = expect_ident(p)
                 var ann: ast.TypeExpr = TEUnit(stmt_span)
