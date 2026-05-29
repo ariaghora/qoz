@@ -23,6 +23,7 @@ static int qoz_argc_val = 0;
 static char **qoz_argv_val = NULL;
 
 void qoz_set_argv(int argc, char **argv) {
+    fputs("DEBUG qoz_set_argv\n", stderr); fflush(stderr);
     qoz_argc_val = argc;
     qoz_argv_val = argv;
 }
@@ -133,9 +134,13 @@ void qoz_time_sleep_ms(int64_t ms) {
 #endif
 }
 
-int64_t qoz_os_argc(void) { return (int64_t)qoz_argc_val; }
+int64_t qoz_os_argc(void) {
+    fputs("DEBUG qoz_os_argc\n", stderr); fflush(stderr);
+    return (int64_t)qoz_argc_val;
+}
 
 qoz_string qoz_os_arg(int64_t i) {
+    fprintf(stderr, "DEBUG qoz_os_arg i=%lld\n", (long long)i); fflush(stderr);
     if (i < 0 || i >= (int64_t)qoz_argc_val) return (qoz_string){ NULL, 0 };
     const char *s = qoz_argv_val[i];
     return (qoz_string){ s, (int64_t)strlen(s) };
