@@ -4785,6 +4785,16 @@ let emit_program(f: ast.File): string = {
     push(&e, "\n/* embedded runtime: qoz_runtime.c */\n")
     push(&e, strip_runtime_includes(#load_string("runtime/qoz_runtime.c")))
     push(&e, "\n/* user code */\n")
+    // MinGW's <stdio.h> defines stdin, stdout, and stderr as
+    // function-call macros. A Qoz struct field named stdout (for
+    // example std/os/ProcessResult) collides with the macro at the
+    // text-substitution level. The runtime block above has already
+    // consumed those macros for its own writes; undefine them here
+    // so user code (which follows) sees the names as plain
+    // identifiers again.
+    push(&e, "#ifdef stdin\n#undef stdin\n#endif\n")
+    push(&e, "#ifdef stdout\n#undef stdout\n#endif\n")
+    push(&e, "#ifdef stderr\n#undef stderr\n#endif\n")
     e.pos_fn_typedefs    = strings.sb_len(&e.out)
     e.pos_tuple_typedefs = strings.sb_len(&e.out)
     // Forward declare monomorphized records and enums first, then emit

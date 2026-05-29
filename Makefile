@@ -43,11 +43,31 @@ WARN    := -Wno-unused-function -Wno-unused-variable \
            -Wno-unused-but-set-variable -Wno-unused-const-variable \
            -Wno-unused-value -Wno-overlength-strings
 
-# `-Wno-parentheses-equality` is clang-only. gcc does not warn on
-# `if (x == y)`, so the suppression is unnecessary there and would
-# trigger `unknown warning option`.
-ifneq ($(findstring clang,$(notdir $(CC))),)
+# Probe the compiler family by inspecting its --version banner.
+# `cc` on macOS is clang, so a name match on `$(CC)` alone is not
+# reliable. The probe runs once per make invocation and falls back
+# to "other" when neither family is recognised.
+CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
+ifneq ($(findstring clang,$(CC_VERSION)),)
+    COMPILER_FAMILY := clang
+else ifneq ($(findstring GCC,$(CC_VERSION))$(findstring gcc,$(CC_VERSION))$(findstring Free Software Foundation,$(CC_VERSION)),)
+    COMPILER_FAMILY := gcc
+else
+    COMPILER_FAMILY := other
+endif
+
+ifeq ($(COMPILER_FAMILY),clang)
+    # clang warns on `if (x == y)` in some configurations; the
+    # generated C uses that pattern. GCC does not warn.
     WARN += -Wno-parentheses-equality
+endif
+ifeq ($(COMPILER_FAMILY),gcc)
+    # GCC 12+ flags `qoz_gc_push_root(&local)` in the GC shadow
+    # stack as a dangling pointer. The pattern is correct: the GC
+    # pops the entry before the local goes out of scope. Silence
+    # the false positive. Unknown to GCC < 12, which silently
+    # accepts the `-Wno-` form.
+    WARN += -Wno-dangling-pointer
 endif
 
 QOZ       := qoz$(EXE)

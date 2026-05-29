@@ -9,6 +9,12 @@
  * crosses a growth threshold. Shutdown frees everything regardless.
  */
 
+/* glibc gates pthread_getattr_np behind _GNU_SOURCE. Define it
+ * before any system header is pulled in. Other libcs ignore it. */
+#if !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
+#endif
+
 #include "gc.h"
 
 #include <stdint.h>
@@ -324,15 +330,33 @@ int64_t qoz_gc_run(void) {
     return freed;
 }
 
+/* Resolve the high end of the calling thread's stack so the
+ * conservative scan in qoz_gc_collect knows where to stop. The
+ * APIs are not portable across darwin, glibc, and Windows, so each
+ * platform owns its own block. A platform with no resolver leaves
+ * g_stack_top_bound NULL and the scan falls back to the anchor
+ * passed at qoz_init. */
 void qoz_gc_set_stack_bottom(void *anchor) {
     g_stack_bottom = anchor;
+#if defined(__APPLE__)
     pthread_t self = pthread_self();
     void *addr = pthread_get_stackaddr_np(self);
-    size_t sz   = pthread_get_stacksize_np(self);
-    /* pthread_get_stackaddr_np returns the address one past the high end
-     * of the stack on darwin. Subtract one word to land inside. */
-    (void)sz;
+    /* pthread_get_stackaddr_np returns the address one past the high
+     * end of the stack on darwin. Subtract one word to land inside. */
     if (addr) g_stack_top_bound = (char *)addr - sizeof(void *);
+#elif defined(__linux__) && defined(__GLIBC__)
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+        void *base = NULL;
+        size_t sz = 0;
+        if (pthread_attr_getstack(&attr, &base, &sz) == 0 && base && sz > 0) {
+            /* On Linux pthread_attr_getstack returns the LOW address of
+             * the stack region; the high end is base+sz. */
+            g_stack_top_bound = (char *)base + sz - sizeof(void *);
+        }
+        pthread_attr_destroy(&attr);
+    }
+#endif
 }
 
 int64_t qoz_gc_alloc_size(const void *ptr) {
