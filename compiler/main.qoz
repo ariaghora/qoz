@@ -13,10 +13,13 @@ import compiler/check
 import compiler/format
 import compiler/emit
 
-#if target_os == "windows" {
-    let EXE_SUFFIX: string = ".exe"
-} #else {
-    let EXE_SUFFIX: string = ""
+// Resolved at runtime, not at the compiler's own build time.
+// A compile-time `#if target_os == ...` would bake the host's
+// suffix into the emitted bootstrap, which then differs between
+// macOS and Windows checkouts and breaks the self-host
+// fixed-point check.
+let exe_suffix(): string = {
+    if strings.eq_raw(target_os_raw(), "windows") { ".exe" } else { "" }
 }
 
 @link_name("qoz_target_os")
@@ -1143,11 +1146,11 @@ let cmd_build(path: string, qoz_root: string): BuildResult = {
 let bin_path_for(c_path: string): string = {
     if strings.has_suffix(c_path, ".qoz.c") {
         let n = len(c_path)
-        return strings.cat(strings.slice(c_path, 0, n - 6), EXE_SUFFIX)
+        return strings.cat(strings.slice(c_path, 0, n - 6), exe_suffix())
     }
     if strings.has_suffix(c_path, ".c") {
         let n = len(c_path)
-        return strings.cat(strings.slice(c_path, 0, n - 2), EXE_SUFFIX)
+        return strings.cat(strings.slice(c_path, 0, n - 2), exe_suffix())
     }
     os.panic(`bin_path_for: c_path '{c_path}' does not end in .c`)
     ""
@@ -1165,9 +1168,30 @@ let cc_command(): string = {
     if len(cc) > 0 { cc } else { "gcc" }
 }
 
+// Compiler family discovered by running `$CC --version`. `cc` and
+// `gcc` on macOS are both clang aliases, so the binary name alone
+// is unreliable. Probed each time a binary is built, which costs
+// one extra subprocess per `qoz build` invocation.
+type CcFamily = | CcClang | CcGcc | CcOther
+
+let cc_family(cc: string): CcFamily = {
+    var argv: Vec<string> = []
+    vec.push(&argv, cc)
+    vec.push(&argv, "--version")
+    let r = os.process_exec(argv)
+    if r.exit_code != 0 { return CcOther }
+    let banner = r.stdout
+    if strings.contains(banner, "clang") { return CcClang }
+    if strings.contains(banner, "GCC") || strings.contains(banner, "Free Software Foundation") { return CcGcc }
+    CcOther
+}
+
 let cc_is_clang(cc: string): bool = {
-    let base = path_basename(cc)
-    strings.eq_raw(base, "clang") || strings.has_suffix(base, "/clang")
+    match cc_family(cc) { | CcClang -> true | _ -> false }
+}
+
+let cc_is_gcc(cc: string): bool = {
+    match cc_family(cc) { | CcGcc -> true | _ -> false }
 }
 
 let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<string> = {
@@ -1190,6 +1214,15 @@ let clang_argv(c_path: string, bin_path: string, link_flags: Vec<string>): Vec<s
     // unrecognised there.
     if cc_is_clang(cc) {
         vec.push(&argv, "-Wno-parentheses-equality")
+    }
+    // GCC 12+ false positives on patterns the generated C uses:
+    // qoz_gc_push_root(&local) in the GC shadow stack, and
+    // match-arm dispatch where the binder is always assigned in
+    // every reached path. Silence both. clang does not understand
+    // these specific names and would error under `-Werror`.
+    if cc_is_gcc(cc) {
+        vec.push(&argv, "-Wno-dangling-pointer")
+        vec.push(&argv, "-Wno-maybe-uninitialized")
     }
     vec.push(&argv, c_path)
     vec.push(&argv, "-o")

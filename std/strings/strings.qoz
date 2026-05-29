@@ -128,6 +128,23 @@ let byte_at(s: string, i: i64): i64 = {
 
 /// Index of the first occurrence of `byte` in `s`. Returns -1
 /// when the byte does not appear.
+/// True when `needle` appears anywhere in `s`. Empty needle is
+/// considered present.
+let contains(s: string, needle: string): bool = {
+    let n = len(s)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    var i: i64 = 0
+    let sd = string_data(s) as *u8
+    let nd = string_data(needle) as *u8
+    while i + m <= n {
+        if bytes_eq(sd, i, nd, 0, m) { return true }
+        i += 1
+    }
+    false
+}
+
 let index_byte(s: string, byte: i64): i64 = {
     let n = len(s)
     if n == 0 { return 0 - 1 }
