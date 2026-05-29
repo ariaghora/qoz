@@ -61,25 +61,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Set up MSYS2 (for bash, make, rm, diffutils)
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            make
-            findutils
-            diffutils
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Install GNU make
+        shell: cmd
+        run: choco install make --no-progress --yes
       - name: Build and test
-        shell: msys2 {0}
+        # Git Bash on windows-latest inherits the full Windows PATH
+        # set up by ilammy/msvc-dev-cmd, so cl.exe is reachable
+        # directly. MSYS2's bash translates PATH through cygpath
+        # and drops the MSVC bin directory, which made cl invisible.
+        shell: bash
         run: |
-          # ilammy/msvc-dev-cmd exports cl.exe and the linker on PATH
-          # for the calling shell. msys2's bash inherits PATH from the
-          # job environment, so cl is reachable here.
           export CC=cl
           make
           make test

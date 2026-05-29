@@ -22,6 +22,12 @@
 #include <setjmp.h>
 
 #ifdef _WIN32
+/* GetCurrentThreadStackLimits is Windows 8+. MinGW's windows.h
+ * gates it behind _WIN32_WINNT. Pin the floor before the include. */
+#  if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
+#    undef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0602
+#  endif
 #  include <windows.h>
 #else
 #  include <pthread.h>
