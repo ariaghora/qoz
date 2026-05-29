@@ -137,6 +137,7 @@ if true; then
                         /wd4100 /wd4101 /wd4102 /wd4189 /wd4505 /wd4127 \
                         /wd4244 /wd4267 /wd4090 /wd4146 /wd4477 /wd4133 \
                         "${t}.c" "/Fe:${bin}.exe" "/Fo:.\\" \
+                        /link /STACK:8388608 \
                         >/tmp/qozb_clang.log 2>&1; then
                     FAIL=$((FAIL+1))
                     fails+=("$t (cl failed; see /tmp/qozb_clang.log)")

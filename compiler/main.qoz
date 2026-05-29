@@ -1286,10 +1286,12 @@ let msvc_argv(cc: string, c_path: string, bin_path: string, link_flags: Vec<stri
     // the source tree. `/Fo:` followed by a path with trailing
     // slash directs cl.exe to that directory.
     vec.push(&argv, "/Fo:.\\")
-    // Linker inputs come after `/link`. The link_flags vector
-    // already carries `.lib` paths in MSVC form when the binding
-    // emits them; gcc-style `-lfoo` is rewritten to `foo.lib`.
-    if len(link_flags) > 0 { vec.push(&argv, "/link") }
+    // Everything after `/link` goes to the linker. /STACK reserves
+    // 8 MB for the main thread; MSVC's 1 MB default overflows on
+    // the compiler's recursive descent parser and type checker.
+    // Library inputs follow.
+    vec.push(&argv, "/link")
+    vec.push(&argv, "/STACK:8388608")
     for f in link_flags { vec.push(&argv, f) }
     argv
 }

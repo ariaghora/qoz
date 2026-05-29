@@ -86,7 +86,10 @@ ifeq ($(COMPILER_FAMILY),msvc)
     CFLAGS := /nologo /std:c11 /O2 /W3 /WX /MD /D_CRT_SECURE_NO_WARNINGS
     WARN   := /wd4100 /wd4101 /wd4102 /wd4189 /wd4505 /wd4127 \
               /wd4244 /wd4267 /wd4090 /wd4146 /wd4477 /wd4133 /wd4090
-    OUTOPT = /Fe:$@ /Fo:.\\
+    # `/link /STACK:8388608` reserves 8 MB for the main thread stack.
+    # MSVC's default is 1 MB; the Qoz compiler's recursive descent
+    # parser and type checker overflow it on real inputs.
+    OUTOPT = /Fe:$@ /Fo:.\\ /link /STACK:8388608
 else
     OUTOPT = -o $@
 endif
