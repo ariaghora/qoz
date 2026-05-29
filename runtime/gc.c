@@ -17,14 +17,15 @@
 #include "gc.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <setjmp.h>
 
 #ifdef _WIN32
 /* GetCurrentThreadStackLimits is Windows 8+. MinGW's windows.h
- * gates it behind _WIN32_WINNT. Pin the floor before the include. */
+ * gates it behind _WIN32_WINNT. Pin the floor before the include
+ * even though the current Windows code path does not call it; the
+ * include sets up types the file otherwise pulls in via pthread.h. */
 #  if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
 #    undef _WIN32_WINNT
 #    define _WIN32_WINNT 0x0602
@@ -133,10 +134,7 @@ static void table_grow(void) {
 }
 
 void *qoz_gc_alloc(int64_t size, const qoz_type_desc *desc) {
-    static int n = 0;
-    n++;
     if (g_bytes_live >= g_bytes_threshold) {
-        fprintf(stderr, "DEBUG qoz_gc_alloc #%d: triggering qoz_gc_run\n", n); fflush(stderr);
         qoz_gc_run();
     }
     void *p = calloc(1, (size_t)size);

@@ -43,22 +43,17 @@ WARN    := -Wno-unused-function -Wno-unused-variable \
            -Wno-unused-but-set-variable -Wno-unused-const-variable \
            -Wno-unused-value -Wno-overlength-strings
 
-# Probe the compiler family. `cc` and `gcc` on macOS are both
-# clang aliases, so a name check alone is unreliable for those.
-# MSVC `cl.exe` rejects `--version` and only prints its banner
-# from a bare invocation, so identify MSVC by the binary name.
-# Everything else: parse the --version banner.
-ifneq ($(filter cl cl.exe,$(notdir $(CC))),)
-    COMPILER_FAMILY := msvc
+# Probe the compiler family by inspecting its --version banner.
+# `cc` on macOS is clang, so a name match on `$(CC)` alone is not
+# reliable. The probe runs once per make invocation and falls back
+# to "other" when neither family is recognised.
+CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
+ifneq ($(findstring clang,$(CC_VERSION)),)
+    COMPILER_FAMILY := clang
+else ifneq ($(findstring GCC,$(CC_VERSION))$(findstring gcc,$(CC_VERSION))$(findstring Free Software Foundation,$(CC_VERSION)),)
+    COMPILER_FAMILY := gcc
 else
-    CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
-    ifneq ($(findstring clang,$(CC_VERSION)),)
-        COMPILER_FAMILY := clang
-    else ifneq ($(findstring GCC,$(CC_VERSION))$(findstring gcc,$(CC_VERSION))$(findstring Free Software Foundation,$(CC_VERSION)),)
-        COMPILER_FAMILY := gcc
-    else
-        COMPILER_FAMILY := other
-    endif
+    COMPILER_FAMILY := other
 endif
 
 ifeq ($(COMPILER_FAMILY),clang)
@@ -79,20 +74,6 @@ ifeq ($(COMPILER_FAMILY),gcc)
     # has stricter scoping rules and does not warn here.
     WARN += -Wno-maybe-uninitialized
 endif
-ifeq ($(COMPILER_FAMILY),msvc)
-    # cl.exe has its own flag dialect. Replace CFLAGS and WARN
-    # wholesale; the output-naming pattern changes from `-o $@`
-    # to `/Fe:$@`. Object files go to CWD via `/Fo:.\`.
-    CFLAGS := /nologo /std:c11 /Od /W3 /WX /MD /D_CRT_SECURE_NO_WARNINGS
-    WARN   := /wd4100 /wd4101 /wd4102 /wd4189 /wd4505 /wd4127 \
-              /wd4244 /wd4267 /wd4090 /wd4146 /wd4477 /wd4133 /wd4090
-    # `/link /STACK:8388608` reserves 8 MB for the main thread stack.
-    # MSVC's default is 1 MB; the Qoz compiler's recursive descent
-    # parser and type checker overflow it on real inputs.
-    OUTOPT = /Fe:$@ /Fo:.\\ /link /STACK:8388608
-else
-    OUTOPT = -o $@
-endif
 
 QOZ       := qoz$(EXE)
 STAGE0    := stage0$(EXE)
@@ -110,7 +91,7 @@ all: $(QOZ)
 # Stage 0: bootstrap C compiled to a working compiler. Only step that
 # needs no pre-existing Qoz binary.
 $(STAGE0): $(BOOTSTRAP) $(RUNTIME_SRCS)
-	$(CC) $(CFLAGS) $(WARN) $(BOOTSTRAP) $(OUTOPT)
+	$(CC) $(CFLAGS) $(WARN) $(BOOTSTRAP) -o $@
 
 # Stage 1: stage0 emits a fresh stage-1 source, clang turns it into a
 # binary. This is what a working compiler from the bootstrap can do.
@@ -119,7 +100,7 @@ stage1-emit.qoz.c: $(STAGE0) $(COMPILER_SRCS) $(STDLIB_SRCS) $(RUNTIME_SRCS)
 	mv compiler/main.qoz.c stage1-emit.qoz.c
 
 $(STAGE1): stage1-emit.qoz.c
-	$(CC) $(CFLAGS) $(WARN) stage1-emit.qoz.c $(OUTOPT)
+	$(CC) $(CFLAGS) $(WARN) stage1-emit.qoz.c -o $@
 
 # Self-host: stage1 emits its own source. The result is the final
 # qoz binary. If stage1 cannot reproduce its own input, the build
@@ -129,9 +110,8 @@ qoz-emit.qoz.c: $(STAGE1)
 	mv compiler/main.qoz.c qoz-emit.qoz.c
 
 $(QOZ): qoz-emit.qoz.c
-	$(CC) $(CFLAGS) $(WARN) qoz-emit.qoz.c $(OUTOPT)
+	$(CC) $(CFLAGS) $(WARN) qoz-emit.qoz.c -o $@
 	@rm -f $(STAGE0) $(STAGE1) stage1-emit.qoz.c qoz-emit.qoz.c
-	@rm -f stage1.obj stage1-emit.obj qoz-emit.obj
 
 # Fixed-point self-host check. Run qoz on its own source, compare the
 # output to the C source that qoz itself was compiled from. If they
