@@ -47,6 +47,7 @@ jobs:
             mingw-w64-x86_64-gcc
             make
             findutils
+            diffutils
       - name: Build and test
         shell: msys2 {0}
         run: |

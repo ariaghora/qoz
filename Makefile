@@ -68,6 +68,11 @@ ifeq ($(COMPILER_FAMILY),gcc)
     # the false positive. Unknown to GCC < 12, which silently
     # accepts the `-Wno-` form.
     WARN += -Wno-dangling-pointer
+    # GCC's flow analysis cannot see through the generated match
+    # dispatch and reports `may be used uninitialized` for locals
+    # the compiler proves are always written before read. Clang
+    # has stricter scoping rules and does not warn here.
+    WARN += -Wno-maybe-uninitialized
 endif
 
 QOZ       := qoz$(EXE)
