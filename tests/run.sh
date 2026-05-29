@@ -29,9 +29,33 @@ if [ ! -x "$QOZ_BIN" ]; then
 fi
 QOZ="$QOZ_BIN"
 
+# Host platform tag used by the `// platforms-only:` header marker.
+# Maps `uname -s` to one of: linux, darwin, windows. Anything else
+# resolves to the empty string, which matches no marker.
+PLATFORM=""
+case "$(uname -s 2>/dev/null)" in
+    Linux*)               PLATFORM=linux ;;
+    Darwin*)              PLATFORM=darwin ;;
+    MINGW*|MSYS*|CYGWIN*) PLATFORM=windows ;;
+esac
+
 PASS=0
 FAIL=0
 fails=()
+
+# Return 0 when the test should run on this platform. A test with no
+# `// platforms-only:` header runs everywhere. A header like
+# `// platforms-only: linux,darwin` skips on any platform not listed.
+should_run_on_platform() {
+    local t="$1"
+    local marker
+    marker=$(awk 'NR<=3 && /\/\/ platforms-only:/{sub(/.*platforms-only:[ \t]*/,""); print; exit}' "$t")
+    if [ -z "$marker" ]; then return 0; fi
+    case ",$marker," in
+        *",$PLATFORM,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # Positive: Stage B compiles, links, and runs. The binary must exit 0.
 # Some tests (e.g. let_else) exercise features Stage B does not yet
@@ -40,6 +64,9 @@ fails=()
 run_pos() {
     local t="$1"
     if head -1 "$t" | grep -q 'stage-b-skip'; then
+        return 0
+    fi
+    if ! should_run_on_platform "$t"; then
         return 0
     fi
     out=$(QOZ_ROOT="$PWD" "$QOZ" run "$t" 2>&1)
@@ -127,7 +154,14 @@ if true; then
         fi
         rc=$?
         rm -f "$bin" "${t}.c"
+        # On Windows a process that calls abort() exits with status 3
+        # (the MSVC convention); on POSIX it exits with 128+SIGABRT
+        # (134). Accept either when the test asks for the POSIX form.
         if [ "$rc" != "$expect" ]; then
+            if [ "$PLATFORM" = "windows" ] && [ "$expect" = "134" ] && [ "$rc" = "3" ]; then
+                PASS=$((PASS+1))
+                return 0
+            fi
             FAIL=$((FAIL+1))
             fails+=("$t (exit $rc, expected $expect)")
             return 1

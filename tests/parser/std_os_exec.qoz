@@ -1,3 +1,8 @@
+// platforms-only: linux,darwin
+// Exercises os.process_exec against /bin/echo and /bin/sh. Both
+// paths are POSIX-specific; on Windows the runtime invokes
+// CreateProcess which does not resolve unix absolute paths.
+
 import os
 import strings
 import vec
